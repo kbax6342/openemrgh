@@ -20,6 +20,20 @@
 
 [OpenEMR](https://open-emr.org) is a Free and Open Source electronic health records and medical practice management application. It features fully integrated electronic health records, practice management, scheduling, electronic billing, internationalization, free support, a vibrant community, and a whole lot more. It runs on Windows, Linux, Mac OS X, and many other platforms.
 
+## Clinical Co-Pilot Submission Map
+
+This OpenEMR fork includes a Clinical Co-Pilot project organized around the Gauntlet AI AgentForge healthcare rubric.
+
+Key files:
+- audit.md — OpenEMR security, performance, architecture, data quality, and compliance audit.
+- architecture.md — AI integration plan, trust boundaries, verification strategy, role scope, and failure handling.
+- thesis.md — Project thesis and problem framing.
+- falseanalysis.md — Failure-mode analysis and safety considerations.
+- interface/ai_copilot/ — Clinical Co-Pilot implementation surface.
+- evals/ — Evaluation dataset and results for role safety, RAG grounding, prompt injection, missing data, and ambient encounter capture.
+
+The co-pilot is designed as a draft-only, clinician-reviewed assistant. It should not autonomously diagnose, prescribe, submit claims, update records, or perform clinical actions without human approval.
+
 ### Contributing
 
 OpenEMR is a leader in healthcare open source software and comprises a large and diverse community of software developers, medical providers and educators with a very healthy mix of both volunteers and professionals. [Join us and learn how to start contributing today!](https://open-emr.org/wiki/index.php/FAQ#How_do_I_begin_to_volunteer_for_the_OpenEMR_project.3F)
@@ -54,7 +68,7 @@ Check out [FHIR_README.md](FHIR_README.md)
 
 ### For Developers
 
-If using OpenEMR directly from the code repository, then the following commands will build OpenEMR (Node.js version 24.* is required) :
+If using OpenEMR directly from the code repository, then the following commands will build OpenEMR (Node.js version 24.\* is required) :
 
 ```shell
 composer install --no-dev
@@ -68,12 +82,43 @@ composer dump-autoload -o
 This project exists thanks to all the people who have contributed. [[Contribute]](CONTRIBUTING.md).
 <a href="https://github.com/openemr/openemr/graphs/contributors"><img src="https://opencollective.com/openemr/contributors.svg?width=890" /></a>
 
-
 ### Sponsors
 
 Thanks to our [ONC Certification Major Sponsors](https://www.open-emr.org/wiki/index.php/OpenEMR_Certification_Stage_III_Meaningful_Use#Major_sponsors)!
 
-
 ### License
 
 [GNU GPL](LICENSE)
+
+# AgentForge Clinical Co-Pilot for OpenEMR
+
+## Live Demo
+
+Deployed app: <your deployed URL>
+
+## Demo Video
+
+Video: <your YouTube/demo URL>
+
+## What I Built
+
+A role-scoped Clinical Co-Pilot embedded into OpenEMR that helps clinicians retrieve patient-specific chart context, draft responses, review ambient encounter capture output, and enforce safety guardrails before anything is used clinically.
+
+## Key Features
+
+- Role-based staff behavior: Doctor, Nurse, Billing Staff, Front Desk
+- RAG-style retrieval from synthetic patient chart context
+- Source-grounded responses with “Sources Used”
+- Guardrail checks for prompt injection, role scope, and unsafe clinical output
+- Browser-console observability/audit events
+- Like, dislike, and copy feedback actions
+- Ambient encounter capture consent flow and clinician review gate
+- Eval tests for guardrails and role-based behavior
+
+## Required Submission Files
+
+- AUDIT.md
+- USERS.md / USER.md
+- ARCHITECTURE.md
+- COST_ANALYSIS.md
+- evals/

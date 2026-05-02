@@ -70,6 +70,9 @@
     bottom: 0;
     width: min(500px, calc(100vw - 32px));
     height: 100vh;
+    height: 100dvh;
+    max-height: 100vh;
+    max-height: 100dvh;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -164,6 +167,9 @@
         bottom: 0;
         width: auto;
         height: 100vh;
+        height: 100dvh;
+        max-height: 100vh;
+        max-height: 100dvh;
         border-radius: 0;
         transform-origin: bottom center;
     }

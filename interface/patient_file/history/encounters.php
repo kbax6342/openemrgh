@@ -183,6 +183,11 @@ function generatePageElement($start, $pagesize, $billing, $issue, $text): void
     echo "<a href='" . $url . "' onclick='top.restoreSession()'>" . $text . "</a>";
 }
 
+$copilotVisitReviewJsPath = __DIR__ . '/../../ai_copilot/copilot_visit_review.js';
+$copilotVisitReviewCssPath = __DIR__ . '/../../ai_copilot/copilot_visit_review.css';
+$copilotVisitReviewJsVersion = file_exists($copilotVisitReviewJsPath) ? (string) filemtime($copilotVisitReviewJsPath) : OEGlobalsBag::getInstance()->get('v_js_includes');
+$copilotVisitReviewCssVersion = file_exists($copilotVisitReviewCssPath) ? (string) filemtime($copilotVisitReviewCssPath) : OEGlobalsBag::getInstance()->get('v_js_includes');
+
 ?>
 <!DOCTYPE html>
 <html>
@@ -193,6 +198,7 @@ function generatePageElement($start, $pagesize, $billing, $issue, $text): void
 <?php } else { ?>
   <link rel="stylesheet" href="<?php echo OEGlobalsBag::getInstance()->getKernel()->getThemesRelative(); ?>/misc/encounters.css?v=<?php echo OEGlobalsBag::getInstance()->get('v_js_includes'); ?>" />
 <?php } ?>
+  <link rel="stylesheet" href="<?php echo OEGlobalsBag::getInstance()->getWebRoot(); ?>/interface/ai_copilot/copilot_visit_review.css?v=<?php echo attr_url($copilotVisitReviewCssVersion); ?>" />
 <!-- Not sure why we don't want this ui to be B.S responsive. -->
 <?php Header::setupHeader(['no_textformat']); ?>
 
@@ -864,8 +870,18 @@ window.onload = function() {
         </table>
     </div>
 
+    <?php if ($attendant_type == 'pid') { ?>
+        <div
+            id="copilot-demo-visit-history-mount"
+            class="copilot-demo-history-mount"
+            data-patient-key="<?php echo attr($external_id); ?>"
+            data-patient-name="<?php echo attr($name); ?>"
+        ></div>
+    <?php } ?>
+
 </div> <!-- end 'encounters' large outer DIV -->
 
+<script src="<?php echo OEGlobalsBag::getInstance()->getWebRoot(); ?>/interface/ai_copilot/copilot_visit_review.js?v=<?php echo attr_url($copilotVisitReviewJsVersion); ?>"></script>
 <script>
 // jQuery stuff to make the page a little easier to use
 function createFollowUpEncounter(event, encId){
@@ -969,6 +985,280 @@ $(function () {
         });
     });
 });
+
+(function () {
+    const mount = document.getElementById('copilot-demo-visit-history-mount');
+    const ambientDemo = window.OpenEMRAIAmbientVisitDemo;
+    const encounterTable = document.querySelector('#encounters table.table');
+
+    if (!mount || !ambientDemo || !encounterTable) {
+        return;
+    }
+
+    const patientKey = mount.dataset.patientKey || '';
+    const patientName = mount.dataset.patientName || ambientDemo.patientName || '';
+    const billingView = <?php echo $billing_view ? 'true' : 'false'; ?>;
+    const showIssueColumn = <?php echo ($attendant_type == 'pid' && !$issue) ? 'true' : 'false'; ?>;
+    const showInsuranceColumn = <?php echo ($attendant_type == 'pid' && !OEGlobalsBag::getInstance()->get('ippf_specific')) ? 'true' : 'false'; ?>;
+    const showEncounterTypeColumn = <?php echo (OEGlobalsBag::getInstance()->getBoolean('enable_group_therapy') && !$billing_view && $therapy_group == 0) ? 'true' : 'false'; ?>;
+    const showFollowUpColumns = <?php echo OEGlobalsBag::getInstance()->getBoolean('enable_follow_up_encounters') ? 'true' : 'false'; ?>;
+
+    if (patientKey !== ambientDemo.patientKey) {
+        mount.innerHTML = '';
+        return;
+    }
+
+    function escapeHtml(value) {
+        return String(value || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function tableRowFields(record) {
+        return Object.assign({
+            date: record.approvedAtLabel || ambientDemo.formatLocalDateTime(record.approvedAt),
+            issue: 'Medication adherence / care coordination',
+            reason: 'AI-assisted follow-up visit review',
+            form: 'Ambient Encounter Capture',
+            provider: 'Dr. Demo Provider',
+            billing: 'Review needed',
+            insurance: 'Verification needed'
+        }, record.tableRow || {});
+    }
+
+    function renderRecord(record) {
+        const notes = (record.approvedNotes || []).map(function (note) {
+            return '<li>' + escapeHtml(note) + '</li>';
+        }).join('');
+
+        const badges = (record.badges || []).map(function (badge) {
+            return '<span class="copilot-demo-badge">' + escapeHtml(badge) + '</span>';
+        }).join('');
+
+        return [
+            '<article id="copilot-demo-visit-detail-' + escapeHtml(record.id) + '" class="copilot-demo-card copilot-demo-card-ambient" data-copilot-demo-visit-id="' + escapeHtml(record.id) + '">',
+            '  <div class="copilot-demo-card-header">',
+            '    <div>',
+            '      <p class="copilot-demo-card-subtitle">' + escapeHtml(record.visitType || 'Ambient Encounter Capture') + '</p>',
+            '      <h3 class="copilot-demo-card-title">AI-Assisted Visit Review / Ambient Encounter Capture</h3>',
+            '      <p class="copilot-demo-card-copy">Completed · Clinician Reviewed · Consent-Based AI Visit Capture</p>',
+            '    </div>',
+            '    <p class="copilot-demo-card-time">' + escapeHtml(record.approvedAtLabel || ambientDemo.formatLocalDateTime(record.approvedAt)) + '</p>',
+            '  </div>',
+            '  <div class="copilot-demo-badge-row">' + badges + '</div>',
+            '  <p class="copilot-demo-card-summary">' + escapeHtml(record.summary || '') + '</p>',
+            '  <details class="copilot-demo-details">',
+            '    <summary>View Notes</summary>',
+            '    <dl class="copilot-demo-detail-grid">',
+            '      <div><dt>Patient</dt><dd>' + escapeHtml(patientName) + '</dd></div>',
+            '      <div><dt>Status</dt><dd>' + escapeHtml(record.status || 'Completed') + '</dd></div>',
+            '      <div><dt>Review status</dt><dd>' + escapeHtml(record.reviewStatus || 'Clinician Reviewed') + '</dd></div>',
+            '      <div><dt>Source</dt><dd>' + escapeHtml(record.source || 'Consent-Based AI Visit Capture') + '</dd></div>',
+            '    </dl>',
+            '    <ul class="copilot-demo-note-list">' + notes + '</ul>',
+            '    <p class="copilot-demo-card-note">AI drafted this visit summary after consent-based ambient encounter capture. Consent was confirmed and a clinician reviewed and approved it before this demo entry was shown here.</p>',
+            '  </details>',
+            '</article>'
+        ].join('');
+    }
+
+    function renderTableRow(record) {
+        const fields = tableRowFields(record);
+        const cells = [];
+
+        if (billingView) {
+            cells.push('<td>' + escapeHtml(fields.date) + '</td>');
+            cells.push('<td><strong>' + escapeHtml(fields.reason) + '</strong><div class="copilot-demo-history-row-subtext">' + escapeHtml(fields.form) + '</div></td>');
+            cells.push('<td>' + escapeHtml(fields.billing) + '</td>');
+            cells.push('<td class="text-right">—</td>');
+            cells.push('<td class="text-right">—</td>');
+            cells.push('<td class="text-right">—</td>');
+            cells.push('<td class="text-right">—</td>');
+            if (showInsuranceColumn) {
+                cells.push('<td>' + escapeHtml(fields.insurance) + '</td>');
+            }
+        } else {
+            cells.push('<td>' + escapeHtml(fields.date) + '</td>');
+            if (showIssueColumn) {
+                cells.push('<td>' + escapeHtml(fields.issue) + '</td>');
+            }
+            cells.push(
+                '<td>' +
+                '<strong>' + escapeHtml(fields.reason) + '</strong>' +
+                '<div class="copilot-demo-history-row-subtext">' + escapeHtml(fields.form) + '</div>' +
+                '</td>'
+            );
+            cells.push('<td>' + escapeHtml(fields.provider) + '</td>');
+            cells.push('<td colspan="5">' + escapeHtml(fields.billing) + '</td>');
+            if (showInsuranceColumn) {
+                cells.push('<td>' + escapeHtml(fields.insurance) + '</td>');
+            }
+            if (showEncounterTypeColumn) {
+                cells.push('<td>' + escapeHtml(fields.form) + '</td>');
+            }
+            if (showFollowUpColumns) {
+                cells.push('<td>&nbsp;</td>');
+            }
+            if (showEncounterTypeColumn) {
+                cells.push('<td>&nbsp;</td>');
+            }
+            if (showFollowUpColumns) {
+                cells.push('<td><span class="copilot-demo-history-row-link">View Details</span></td>');
+            }
+        }
+
+        return [
+            '<tr class="copilot-demo-history-row text" data-copilot-demo-visit-row="' + escapeHtml(record.id) + '" data-copilot-demo-target="copilot-demo-visit-detail-' + escapeHtml(record.id) + '" tabindex="0">',
+            cells.join(''),
+            '</tr>'
+        ].join('');
+    }
+
+    function ensureDemoTableBody() {
+        let body = encounterTable.querySelector('tbody.copilot-demo-visit-history-body');
+        if (body) {
+            return body;
+        }
+
+        body = document.createElement('tbody');
+        body.className = 'copilot-demo-visit-history-body';
+
+        const existingBody = encounterTable.querySelector('tbody');
+        if (existingBody) {
+            encounterTable.insertBefore(body, existingBody);
+        } else {
+            encounterTable.appendChild(body);
+        }
+
+        return body;
+    }
+
+    function renderTableRows(records) {
+        const demoBody = ensureDemoTableBody();
+        demoBody.innerHTML = records.map(renderTableRow).join('');
+
+        if (!records.length) {
+            return;
+        }
+
+        ambientDemo.logEvent('copilot_demo_visit_history_row_rendered', {
+            requestId: records[0].requestId || null,
+            selectedPatientKey: patientKey,
+            draftId: records[0].draftId || null,
+            visitId: records[0].id || null,
+            visitCount: records.length,
+            consentConfirmed: true,
+            draftOnly: false,
+            reviewStatus: 'clinician_reviewed'
+        });
+    }
+
+    function openDetailsForVisitId(visitId) {
+        const detailCard = document.getElementById('copilot-demo-visit-detail-' + visitId);
+        if (!detailCard) {
+            return;
+        }
+
+        const details = detailCard.querySelector('details');
+        if (details) {
+            details.open = true;
+        }
+
+        detailCard.scrollIntoView({
+            behavior: 'smooth',
+            block: 'start'
+        });
+    }
+
+    function renderDemoVisitHistory() {
+        const records = ambientDemo.readApprovedVisits(patientKey);
+        if (!records.length) {
+            mount.innerHTML = '';
+            renderTableRows([]);
+            return;
+        }
+
+        renderTableRows(records);
+        mount.innerHTML = records.map(renderRecord).join('');
+
+        ambientDemo.logEvent('copilot_demo_visit_history_rendered', {
+            requestId: records[0].requestId || null,
+            selectedPatientKey: patientKey,
+            draftId: records[0].draftId || null,
+            visitId: records[0].id || null,
+            visitCount: records.length,
+            consentConfirmed: true,
+            draftOnly: false,
+            reviewStatus: 'clinician_reviewed'
+        });
+
+        ambientDemo.logEvent('copilot_ambient_capture_detail_rendered', {
+            requestId: records[0].requestId || null,
+            selectedPatientKey: patientKey,
+            draftId: records[0].draftId || null,
+            visitId: records[0].id || null,
+            visitCount: records.length,
+            consentConfirmed: true,
+            draftOnly: false,
+            reviewStatus: 'clinician_reviewed'
+        });
+    }
+
+    function maybeRefresh(detail) {
+        if (detail && detail.patientKey && detail.patientKey !== patientKey) {
+            return;
+        }
+
+        renderDemoVisitHistory();
+    }
+
+    window.addEventListener('storage', function (event) {
+        if (event.key === ambientDemo.storageKeyForPatient(patientKey)) {
+            renderDemoVisitHistory();
+        }
+    });
+
+    window.addEventListener('openemr:aiVisitApproved', function (event) {
+        maybeRefresh(event.detail || {});
+    });
+
+    try {
+        if (window.top && window.top !== window) {
+            window.top.addEventListener('openemr:aiVisitApproved', function (event) {
+                maybeRefresh(event.detail || {});
+            });
+        }
+    } catch (error) {
+    }
+
+    encounterTable.addEventListener('click', function (event) {
+        const row = event.target.closest('[data-copilot-demo-visit-row]');
+        if (!row) {
+            return;
+        }
+
+        openDetailsForVisitId(row.getAttribute('data-copilot-demo-visit-row'));
+    });
+
+    encounterTable.addEventListener('keydown', function (event) {
+        if (event.key !== 'Enter' && event.key !== ' ') {
+            return;
+        }
+
+        const row = event.target.closest('[data-copilot-demo-visit-row]');
+        if (!row) {
+            return;
+        }
+
+        event.preventDefault();
+        openDetailsForVisitId(row.getAttribute('data-copilot-demo-visit-row'));
+    });
+
+    renderDemoVisitHistory();
+}());
 </script>
 </body>
 </html>

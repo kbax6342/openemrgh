@@ -1,0 +1,208 @@
+.copilot-demo-history-mount,
+.copilot-demo-dashboard-mount {
+    margin: 0 0 1rem;
+}
+
+.copilot-demo-card {
+    border: 1px solid #d8ddff;
+    border-radius: 14px;
+    background: linear-gradient(180deg, #ffffff 0%, #f7f8ff 100%);
+    box-shadow: 0 18px 32px -28px rgba(57, 73, 171, 0.45);
+    padding: 1rem 1.1rem;
+}
+
+.copilot-demo-card-ambient {
+    border: 2px solid #2563eb;
+    border-radius: 12px;
+    background: linear-gradient(180deg, #f8fbff 0%, #eef5ff 100%);
+    box-shadow: 0 20px 36px -28px rgba(37, 99, 235, 0.4);
+}
+
+.copilot-demo-card + .copilot-demo-card {
+    margin-top: 0.85rem;
+}
+
+.copilot-demo-card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.9rem;
+    margin-bottom: 0.65rem;
+}
+
+.copilot-demo-card-title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 700;
+    color: #202754;
+}
+
+.copilot-demo-card-subtitle,
+.copilot-demo-card-time,
+.copilot-demo-card-copy,
+.copilot-demo-card-note,
+.copilot-demo-card-summary,
+.copilot-demo-card-source,
+.copilot-demo-card-empty {
+    margin: 0;
+    color: #52607d;
+    font-size: 0.88rem;
+    line-height: 1.45;
+}
+
+.copilot-demo-card-subtitle {
+    color: #6472c6;
+    font-size: 0.74rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.copilot-demo-card-time {
+    color: #6677b1;
+    font-size: 0.76rem;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.copilot-demo-card-summary {
+    margin-top: 0.7rem;
+}
+
+.copilot-demo-card-note {
+    margin-top: 0.7rem;
+    color: #5f6b93;
+    font-size: 0.8rem;
+}
+
+.copilot-demo-badge-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    margin: 0.7rem 0 0;
+}
+
+.copilot-demo-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.28rem 0.65rem;
+    border-radius: 999px;
+    border: 1px solid #cdd4ff;
+    background: #eef0ff;
+    color: #4a57bf;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+}
+
+.copilot-demo-note-list {
+    margin: 0.7rem 0 0;
+    padding-left: 1.15rem;
+    color: #2f3859;
+    font-size: 0.87rem;
+    line-height: 1.48;
+}
+
+.copilot-demo-note-list li + li {
+    margin-top: 0.35rem;
+}
+
+.copilot-demo-details {
+    margin-top: 0.8rem;
+    border-top: 1px solid #e3e7ff;
+    padding-top: 0.8rem;
+}
+
+.copilot-demo-history-row {
+    cursor: pointer;
+}
+
+.copilot-demo-history-row td {
+    background: #f8fbff;
+    border-top: 1px solid #d7e4ff;
+    border-bottom: 1px solid #d7e4ff;
+    vertical-align: top;
+}
+
+.copilot-demo-history-row:hover td,
+.copilot-demo-history-row:focus td,
+.copilot-demo-history-row:focus-visible td {
+    background: #eef5ff;
+}
+
+.copilot-demo-history-row-subtext {
+    margin-top: 0.15rem;
+    color: #5a6b9f;
+    font-size: 0.78rem;
+}
+
+.copilot-demo-history-row-link {
+    color: #2563eb;
+    font-size: 0.78rem;
+    font-weight: 700;
+}
+
+.copilot-demo-details summary {
+    cursor: pointer;
+    color: #4654ba;
+    font-size: 0.82rem;
+    font-weight: 700;
+    list-style: none;
+}
+
+.copilot-demo-details summary::-webkit-details-marker {
+    display: none;
+}
+
+.copilot-demo-details summary::after {
+    content: "▾";
+    margin-left: 0.35rem;
+    font-size: 0.72rem;
+}
+
+.copilot-demo-details[open] summary::after {
+    content: "▴";
+}
+
+.copilot-demo-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.65rem 1rem;
+    margin-top: 0.7rem;
+}
+
+.copilot-demo-detail-grid div {
+    min-width: 0;
+}
+
+.copilot-demo-detail-grid dt {
+    margin: 0 0 0.2rem;
+    color: #61709a;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.copilot-demo-detail-grid dd {
+    margin: 0;
+    color: #25314f;
+    font-size: 0.84rem;
+    line-height: 1.4;
+}
+
+@media (max-width: 700px) {
+    .copilot-demo-card {
+        padding: 0.9rem 0.95rem;
+    }
+
+    .copilot-demo-card-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .copilot-demo-card-time {
+        text-align: left;
+    }
+}

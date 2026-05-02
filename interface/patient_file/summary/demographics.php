@@ -382,6 +382,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
     Header::setupHeader(['common', 'utility']);
     require_once("$srcdir/options.js.php");
     ?>
+    <link rel="stylesheet" href="<?php echo OEGlobalsBag::getInstance()->getWebRoot(); ?>/interface/ai_copilot/copilot_visit_review.css?v=<?php echo attr_url(file_exists(__DIR__ . '/../../ai_copilot/copilot_visit_review.css') ? (string) filemtime(__DIR__ . '/../../ai_copilot/copilot_visit_review.css') : OEGlobalsBag::getInstance()->get('v_js_includes')); ?>">
     <script>
         // Process click on diagnosis for referential cds popup.
         function referentialCdsClick(codetype, codevalue) {
@@ -1325,6 +1326,12 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                 }
                 ?>
                 <div class="col-md-8 px-2">
+                    <div
+                        id="copilot-demo-dashboard-updates"
+                        class="copilot-demo-dashboard-mount"
+                        data-patient-key="<?php echo attr($result['pubpid'] ?? ''); ?>"
+                        data-patient-name="<?php echo attr(trim(($result['fname'] ?? '') . ' ' . ($result['lname'] ?? ''))); ?>"
+                    ></div>
                     <?php
                     if ($deceased > 0) :
                         echo $twig->getTwig()->render('patient/partials/deceased.html.twig', [
@@ -2049,6 +2056,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
         </div> <!-- end main content div -->
     </div><!-- end container div -->
     <?php $oemr_ui->oeBelowContainerDiv(); ?>
+    <script src="<?php echo OEGlobalsBag::getInstance()->getWebRoot(); ?>/interface/ai_copilot/copilot_visit_review.js?v=<?php echo attr_url(file_exists(__DIR__ . '/../../ai_copilot/copilot_visit_review.js') ? (string) filemtime(__DIR__ . '/../../ai_copilot/copilot_visit_review.js') : OEGlobalsBag::getInstance()->get('v_js_includes')); ?>"></script>
     <script>
         // Array of skip conditions for the checkSkipConditions() function.
         var skipArray = [
@@ -2066,6 +2074,107 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                 $("#eligibility").get(0).scrollIntoView();
             }
         });
+
+        (function () {
+            const mount = document.getElementById('copilot-demo-dashboard-updates');
+            const ambientDemo = window.OpenEMRAIAmbientVisitDemo;
+
+            if (!mount || !ambientDemo) {
+                return;
+            }
+
+            const patientKey = mount.dataset.patientKey || '';
+            const patientName = mount.dataset.patientName || ambientDemo.patientName || '';
+
+            if (patientKey !== ambientDemo.patientKey) {
+                mount.innerHTML = '';
+                return;
+            }
+
+            function escapeHtml(value) {
+                return String(value || '')
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+            }
+
+            function renderDashboardCard() {
+                const records = ambientDemo.readApprovedVisits(patientKey);
+                const latestRecord = records[0] || null;
+
+                if (!latestRecord) {
+                    mount.innerHTML = '';
+                    return;
+                }
+
+                const badges = (latestRecord.badges || []).map(function (badge) {
+                    return '<span class="copilot-demo-badge">' + escapeHtml(badge) + '</span>';
+                }).join('');
+
+                const notes = (latestRecord.approvedNotes || []).map(function (note) {
+                    return '<li>' + escapeHtml(note) + '</li>';
+                }).join('');
+
+                mount.innerHTML = [
+                    '<article class="copilot-demo-card" data-copilot-demo-dashboard-visit-id="' + escapeHtml(latestRecord.id) + '">',
+                    '  <div class="copilot-demo-card-header">',
+                    '    <div>',
+                    '      <p class="copilot-demo-card-subtitle">Ambient Encounter Capture</p>',
+                    '      <h3 class="copilot-demo-card-title">AI Reviewed Visit Updates</h3>',
+                    '      <p class="copilot-demo-card-copy">Approved by clinician after consent-based visit capture.</p>',
+                    '    </div>',
+                    '    <p class="copilot-demo-card-time">' + escapeHtml(latestRecord.approvedAtLabel || ambientDemo.formatLocalDateTime(latestRecord.approvedAt)) + '</p>',
+                    '  </div>',
+                    '  <div class="copilot-demo-badge-row">' + badges + '</div>',
+                    '  <p class="copilot-demo-card-summary">' + escapeHtml(latestRecord.summary || ('Latest approved AI-assisted visit update for ' + patientName + '.')) + '</p>',
+                    '  <ul class="copilot-demo-note-list">' + notes + '</ul>',
+                    '  <p class="copilot-demo-card-note">AI drafted these updates after consent-based ambient encounter capture. A clinician reviewed and approved them before they were shown on this dashboard.</p>',
+                    '</article>'
+                ].join('');
+
+                ambientDemo.logEvent('copilot_demo_dashboard_updates_rendered', {
+                    requestId: latestRecord.requestId || null,
+                    selectedPatientKey: patientKey,
+                    draftId: latestRecord.draftId || null,
+                    visitId: latestRecord.id || null,
+                    visitCount: records.length,
+                    consentConfirmed: true,
+                    draftOnly: false,
+                    reviewStatus: 'clinician_reviewed'
+                });
+            }
+
+            function maybeRefresh(detail) {
+                if (detail && detail.patientKey && detail.patientKey !== patientKey) {
+                    return;
+                }
+
+                renderDashboardCard();
+            }
+
+            window.addEventListener('storage', function (event) {
+                if (event.key === ambientDemo.storageKeyForPatient(patientKey)) {
+                    renderDashboardCard();
+                }
+            });
+
+            window.addEventListener('openemr:aiVisitApproved', function (event) {
+                maybeRefresh(event.detail || {});
+            });
+
+            try {
+                if (window.top && window.top !== window) {
+                    window.top.addEventListener('openemr:aiVisitApproved', function (event) {
+                        maybeRefresh(event.detail || {});
+                    });
+                }
+            } catch (error) {
+            }
+
+            renderDashboardCard();
+        }());
     </script>
 </body>
 <?php $ed->dispatch(new RenderEvent($pid), RenderEvent::EVENT_RENDER_POST_PAGELOAD); ?>

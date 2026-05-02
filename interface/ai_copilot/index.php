@@ -79,6 +79,13 @@ $quickActions = [
         'prompt' => xl('Create a follow-up plan for the selected patient, including timeframe, monitoring items, patient instructions, and escalation precautions.'),
     ],
     [
+        'mode' => 'rag_chart_context',
+        'title' => xl('RAG: Review Marcus\'s Chart Context'),
+        'summary' => xl('Retrieve grounded chart context before drafting a response.'),
+        'prompt' => xl('Retrieve Marcus Johnson\'s doctor-role chart context before drafting. Include the latest approved Ambient Encounter Capture visit when available, plus medications, labs, vitals, insurance note, immunization review, care preferences, care team, and problem list.'),
+        'patient_keys' => ['DEMO-PCP-1001'],
+    ],
+    [
         'mode' => 'visit_summary',
         'title' => xl('Visit Summary'),
         'summary' => xl('Concise summary of concerns, plan, and follow-up.'),
@@ -120,8 +127,8 @@ $roleCatalog = [
     'doctor' => [
         'title' => xl('Doctor'),
         'note' => xl('Clinical support only. No autonomous diagnosis, orders, prescribing, or chart writes.'),
-        'quick_actions' => ['differential_diagnosis', 'medication_info', 'clinical_notes', 'treatment_plan', 'billing', 'follow_up'],
-        'allowed_modes' => ['general_assistant', 'differential_diagnosis', 'medication_info', 'clinical_notes', 'treatment_plan', 'billing', 'billing_review', 'follow_up', 'visit_summary', 'patient_education'],
+        'quick_actions' => ['differential_diagnosis', 'medication_info', 'clinical_notes', 'treatment_plan', 'billing', 'follow_up', 'rag_chart_context'],
+        'allowed_modes' => ['general_assistant', 'differential_diagnosis', 'medication_info', 'clinical_notes', 'treatment_plan', 'billing', 'billing_review', 'follow_up', 'rag_chart_context', 'visit_summary', 'patient_education'],
     ],
     'nurse' => [
         'title' => xl('Nurse'),
@@ -153,7 +160,7 @@ $appConfig = [
     'emptyPromptMessage' => xla('Enter a prompt before sending.'),
     'apiFailureMessage' => xla('I ran into a temporary problem while drafting that response. Please retry. Draft only. Human review required.'),
     'generalModeTitle' => xla('General clinical support'),
-    'inputPlaceholder' => xla('Ask a chart question or enter a general clinical support prompt...'),
+    'inputPlaceholder' => xla('Ask about the chart or enter a clinical support prompt...'),
     'visitSummaryPrompt' => xla('Create a draft summary of this visit for the selected patient. Include key concerns addressed, plan discussed, follow-up instructions, and a patient-friendly explanation.'),
     'visitSummaryButtonLabel' => xla('View Summary of Visit'),
     'sendReminderEmailButtonLabel' => xla('Send Reminder Email'),
@@ -175,6 +182,8 @@ $appConfig = [
 
 $cssVersion = file_exists(__DIR__ . '/copilot.css') ? (string) filemtime(__DIR__ . '/copilot.css') : '1';
 $guardrailsVersion = file_exists(__DIR__ . '/copilot_guardrails.js') ? (string) filemtime(__DIR__ . '/copilot_guardrails.js') : '1';
+$ragDemoVersion = file_exists(__DIR__ . '/copilot_rag_demo_data.js') ? (string) filemtime(__DIR__ . '/copilot_rag_demo_data.js') : '1';
+$visitReviewVersion = file_exists(__DIR__ . '/copilot_visit_review.js') ? (string) filemtime(__DIR__ . '/copilot_visit_review.js') : '1';
 ?>
 <!doctype html>
 <html lang="en">
@@ -183,7 +192,7 @@ $guardrailsVersion = file_exists(__DIR__ . '/copilot_guardrails.js') ? (string) 
     <?php Header::setupHeader(); ?>
     <link rel="stylesheet" href="copilot.css?v=<?php echo attr_url($cssVersion); ?>">
 </head>
-<body class="body_top<?php echo $isEmbedded ? ' copilot-embedded' : ''; ?>">
+<body class="body_top medical-copilot--compact<?php echo $isEmbedded ? ' copilot-embedded' : ''; ?>">
 <main class="copilot-shell<?php echo $isEmbedded ? ' copilot-shell-embedded' : ''; ?>">
     <?php if (!$isEmbedded) { ?>
         <section class="copilot-page-hero">
@@ -212,74 +221,116 @@ $guardrailsVersion = file_exists(__DIR__ . '/copilot_guardrails.js') ? (string) 
             <?php } ?>
 
             <section class="copilot-controls" aria-label="<?php echo attr(xl('Demo controls')); ?>">
-                <div class="copilot-control-bar">
-                    <div class="copilot-control">
-                        <label class="copilot-control-label" for="copilot-patient-select"><?php echo xlt('Demo patient'); ?></label>
-                        <select id="copilot-patient-select" class="form-control copilot-select copilot-control-select">
-                            <option value=""><?php echo xlt('No demo patient selected (general prompts only)'); ?></option>
-                            <?php foreach ($demoPatients as $patient) { ?>
-                                <?php
-                                $label = trim(
-                                    $patient['lname'] . ', ' . $patient['fname'] .
-                                    (!empty($patient['DOB']) ? ' (' . $patient['DOB'] . ')' : '') .
-                                    (!empty($patient['pubpid']) ? ' - ' . $patient['pubpid'] : '')
-                                );
-                                ?>
-                                <option
-                                    value="<?php echo attr((string) $patient['pid']); ?>"
-                                    data-fname="<?php echo attr((string) $patient['fname']); ?>"
-                                    data-lname="<?php echo attr((string) $patient['lname']); ?>"
-                                    data-pubpid="<?php echo attr((string) $patient['pubpid']); ?>"
-                                >
-                                    <?php echo text($label); ?>
-                                </option>
-                            <?php } ?>
-                        </select>
-                    </div>
-
-                    <div class="copilot-control">
-                        <label class="copilot-control-label" for="copilot-role-select"><?php echo xlt('Staff role'); ?></label>
-                        <select id="copilot-role-select" class="form-control copilot-select copilot-control-select">
-                            <?php foreach ($roleCatalog as $roleKey => $roleConfig) { ?>
-                                <option value="<?php echo attr($roleKey); ?>"<?php echo $roleKey === 'doctor' ? ' selected' : ''; ?>>
-                                    <?php echo text($roleConfig['title']); ?>
-                                </option>
-                            <?php } ?>
-                        </select>
-                    </div>
-
-                    <div class="copilot-control">
-                        <label class="copilot-control-label" for="copilot-mode-select"><?php echo xlt('Focus mode'); ?></label>
-                        <select id="copilot-mode-select" class="form-control copilot-select copilot-control-select" aria-label="<?php echo attr(xl('Focus mode')); ?>"></select>
-                    </div>
-
-                    <div class="copilot-control">
-                        <label class="copilot-control-label" for="copilot-quick-action-select"><?php echo xlt('Quick Actions'); ?></label>
-                        <select
-                            id="copilot-quick-action-select"
-                            class="form-control copilot-select copilot-control-select copilot-quick-actions-select"
-                            aria-label="<?php echo attr(xl('Quick actions')); ?>"
-                        ></select>
-                    </div>
-                </div>
-
-                <p id="copilot-role-note" class="copilot-role-note"><?php echo text($roleCatalog['doctor']['note']); ?></p>
-                <section class="copilot-guardrails-panel" aria-label="<?php echo attr(xl('Guardrails status')); ?>">
-                    <div class="copilot-guardrails-header">
-                        <span class="copilot-guardrails-title"><?php echo xlt('Guardrails active'); ?></span>
-                    </div>
-                    <div class="copilot-guardrails-items">
-                        <span class="copilot-guardrails-chip copilot-guardrails-chip-strong">
-                            <?php echo xlt('Role scope:'); ?> <span id="copilot-guardrails-role-scope"><?php echo text($roleCatalog['doctor']['title']); ?></span>
+                <section class="copilot-collapse-section" id="copilot-controls-section">
+                    <button
+                        type="button"
+                        id="copilot-controls-toggle"
+                        class="copilot-collapse-toggle"
+                        aria-expanded="false"
+                        aria-controls="copilot-controls-panel"
+                    >
+                        <span class="copilot-collapse-copy">
+                            <span class="copilot-collapse-title"><?php echo xlt('Controls:'); ?></span>
+                            <span id="copilot-controls-summary" class="copilot-collapse-summary">
+                                <?php echo xlt('No demo patient selected'); ?> · <?php echo text($roleCatalog['doctor']['title']); ?> · <?php echo text($appConfig['generalModeTitle']); ?> · <?php echo xlt('Quick Actions'); ?>
+                            </span>
                         </span>
-                        <span class="copilot-guardrails-chip"><?php echo xlt('Prompt injection filter: On'); ?></span>
-                        <span class="copilot-guardrails-chip"><?php echo xlt('Draft-only enforcement: On'); ?></span>
-                        <span class="copilot-guardrails-chip"><?php echo xlt('PHI minimum necessary: On'); ?></span>
+                        <span class="copilot-collapse-icon" aria-hidden="true"></span>
+                    </button>
+
+                    <div id="copilot-controls-panel" class="copilot-collapse-panel" hidden>
+                        <div class="copilot-control-bar">
+                            <div class="copilot-control">
+                                <label class="copilot-control-label" for="copilot-patient-select"><?php echo xlt('Demo patient'); ?></label>
+                                <select id="copilot-patient-select" class="form-control copilot-select copilot-control-select">
+                                    <option value=""><?php echo xlt('No demo patient selected (general prompts only)'); ?></option>
+                                    <?php foreach ($demoPatients as $patient) { ?>
+                                        <?php
+                                        $label = trim(
+                                            $patient['lname'] . ', ' . $patient['fname'] .
+                                            (!empty($patient['DOB']) ? ' (' . $patient['DOB'] . ')' : '') .
+                                            (!empty($patient['pubpid']) ? ' - ' . $patient['pubpid'] : '')
+                                        );
+                                        ?>
+                                        <option
+                                            value="<?php echo attr((string) $patient['pid']); ?>"
+                                            data-fname="<?php echo attr((string) $patient['fname']); ?>"
+                                            data-lname="<?php echo attr((string) $patient['lname']); ?>"
+                                            data-pubpid="<?php echo attr((string) $patient['pubpid']); ?>"
+                                        >
+                                            <?php echo text($label); ?>
+                                        </option>
+                                    <?php } ?>
+                                </select>
+                            </div>
+
+                            <div class="copilot-control">
+                                <label class="copilot-control-label" for="copilot-role-select"><?php echo xlt('Staff role'); ?></label>
+                                <select id="copilot-role-select" class="form-control copilot-select copilot-control-select">
+                                    <?php foreach ($roleCatalog as $roleKey => $roleConfig) { ?>
+                                        <option value="<?php echo attr($roleKey); ?>"<?php echo $roleKey === 'doctor' ? ' selected' : ''; ?>>
+                                            <?php echo text($roleConfig['title']); ?>
+                                        </option>
+                                    <?php } ?>
+                                </select>
+                            </div>
+
+                            <div class="copilot-control">
+                                <label class="copilot-control-label" for="copilot-mode-select"><?php echo xlt('Focus mode'); ?></label>
+                                <select id="copilot-mode-select" class="form-control copilot-select copilot-control-select" aria-label="<?php echo attr(xl('Focus mode')); ?>"></select>
+                            </div>
+
+                            <div class="copilot-control">
+                                <label class="copilot-control-label" for="copilot-quick-action-select"><?php echo xlt('Quick Actions'); ?></label>
+                                <select
+                                    id="copilot-quick-action-select"
+                                    class="form-control copilot-select copilot-control-select copilot-quick-actions-select"
+                                    aria-label="<?php echo attr(xl('Quick actions')); ?>"
+                                ></select>
+                            </div>
+                        </div>
+
+                        <p id="copilot-role-note" class="copilot-role-note"><?php echo text($roleCatalog['doctor']['note']); ?></p>
                     </div>
                 </section>
+
+                <section class="copilot-collapse-section" id="copilot-guardrails-section">
+                    <button
+                        type="button"
+                        id="copilot-guardrails-toggle"
+                        class="copilot-collapse-toggle"
+                        aria-expanded="false"
+                        aria-controls="copilot-guardrails-panel"
+                    >
+                        <span class="copilot-collapse-copy">
+                            <span class="copilot-collapse-title"><?php echo xlt('Guardrails:'); ?></span>
+                            <span class="copilot-collapse-summary"><?php echo xlt('Active'); ?></span>
+                        </span>
+                        <span class="copilot-collapse-icon" aria-hidden="true"></span>
+                    </button>
+
+                    <section id="copilot-guardrails-panel" class="copilot-collapse-panel copilot-guardrails-panel" aria-label="<?php echo attr(xl('Guardrails status')); ?>" hidden>
+                        <div class="copilot-guardrails-items">
+                            <span class="copilot-guardrails-chip copilot-guardrails-chip-strong">
+                                <?php echo xlt('Role scope:'); ?> <span id="copilot-guardrails-role-scope"><?php echo text($roleCatalog['doctor']['title']); ?></span>
+                            </span>
+                            <span class="copilot-guardrails-chip"><?php echo xlt('Prompt injection filter: On'); ?></span>
+                            <span class="copilot-guardrails-chip"><?php echo xlt('Draft-only enforcement: On'); ?></span>
+                            <span class="copilot-guardrails-chip"><?php echo xlt('PHI minimum necessary: On'); ?></span>
+                        </div>
+                    </section>
+                </section>
+
             </section>
 
-            <section id="copilot-thread" class="copilot-thread" aria-live="polite"></section>
+            <section id="copilot-scroll-region" class="copilot-scroll-region">
+                <section id="copilot-thread" class="copilot-thread" aria-live="polite"></section>
+            </section>
+
+            <section id="copilot-ambient-results" class="copilot-ambient-results" aria-label="<?php echo attr(xl('Ambient encounter capture workflow')); ?>" hidden>
+                <section id="copilot-ambient-status" class="copilot-ambient-status" aria-live="polite" hidden></section>
+                <section id="copilot-visit-review-demo" class="copilot-visit-review-demo" aria-live="polite" aria-label="<?php echo attr(xl('AI Visit Review demo')); ?>" hidden></section>
+            </section>
 
             <form id="copilot-form" class="copilot-composer">
                 <div class="copilot-composer-shell">
@@ -288,11 +339,22 @@ $guardrailsVersion = file_exists(__DIR__ . '/copilot_guardrails.js') ? (string) 
                         id="copilot-input"
                         class="copilot-input"
                         rows="1"
-                        placeholder="<?php echo attr(xl('Ask a chart question or enter a general clinical support prompt...')); ?>"
+                        placeholder="<?php echo attr(xl('Ask about the chart or enter a clinical support prompt...')); ?>"
                     ></textarea>
-                    <button type="submit" id="copilot-send" class="copilot-send-button">
-                        <?php echo xlt('Send'); ?>
-                    </button>
+                    <div class="copilot-composer-actions">
+                        <button type="submit" id="copilot-send" class="copilot-send-button">
+                            <?php echo xlt('Send'); ?>
+                        </button>
+                        <button
+                            type="button"
+                            id="copilot-ambient-mic"
+                            class="copilot-mic-button"
+                            aria-label="<?php echo attr(xl('Start ambient encounter capture')); ?>"
+                            title="<?php echo attr(xl('Start ambient encounter capture')); ?>"
+                        >
+                            <span class="copilot-mic-icon" aria-hidden="true"></span>
+                        </button>
+                    </div>
                 </div>
 
                 <div class="copilot-composer-footer">
@@ -305,6 +367,7 @@ $guardrailsVersion = file_exists(__DIR__ . '/copilot_guardrails.js') ? (string) 
 </main>
 
 <script src="copilot_guardrails.js?v=<?php echo attr_url($guardrailsVersion); ?>"></script>
+<script src="copilot_rag_demo_data.js?v=<?php echo attr_url($ragDemoVersion); ?>"></script>
 <script>
 const copilotConfig = <?php echo json_encode($appConfig, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
 
@@ -313,12 +376,20 @@ const roleSelect = document.getElementById('copilot-role-select');
 const roleNote = document.getElementById('copilot-role-note');
 const modeSelect = document.getElementById('copilot-mode-select');
 const quickActionSelect = document.getElementById('copilot-quick-action-select');
+const scrollRegion = document.getElementById('copilot-scroll-region');
 const thread = document.getElementById('copilot-thread');
 const form = document.getElementById('copilot-form');
 const input = document.getElementById('copilot-input');
 const sendButton = document.getElementById('copilot-send');
 const contextText = document.getElementById('copilot-context-text');
 const guardrailsRoleScope = document.getElementById('copilot-guardrails-role-scope');
+const controlsSection = document.getElementById('copilot-controls-section');
+const controlsToggle = document.getElementById('copilot-controls-toggle');
+const controlsPanel = document.getElementById('copilot-controls-panel');
+const controlsSummary = document.getElementById('copilot-controls-summary');
+const guardrailsSection = document.getElementById('copilot-guardrails-section');
+const guardrailsToggle = document.getElementById('copilot-guardrails-toggle');
+const guardrailsPanel = document.getElementById('copilot-guardrails-panel');
 
 const actionCatalog = Object.fromEntries(
     (copilotConfig.quickActions || []).map((action) => [action.mode, action])
@@ -378,19 +449,26 @@ function ensureTelemetryHost(targetWindow) {
         'requestId',
         'responseId',
         'role',
+        'selectedRole',
         'previousRole',
         'newRole',
         'mode',
+        'selectedMode',
         'selectedPatientKey',
         'visibleQuickActions',
         'messageLength',
         'responseLength',
+        'responseCharacterCount',
         'latencyMs',
         'success',
         'fallbackUsed',
         'fallbackReason',
         'restrictedByRole',
         'restrictionType',
+        'allowed',
+        'blockedReason',
+        'riskLevel',
+        'policyTags',
         'copied',
         'feedback',
         'errorCategory',
@@ -398,13 +476,17 @@ function ensureTelemetryHost(targetWindow) {
         'hasChatHistory',
         'startedAt',
         'actionType',
-        'selectedRole',
-        'selectedMode',
-        'allowed',
-        'blockedReason',
-        'riskLevel',
-        'policyTags',
-        'responseCharacterCount'
+        'reviewStatus',
+        'approvedItemCount',
+        'draftId',
+        'visitId',
+        'visitCount',
+        'draftOnly',
+        'consentConfirmed',
+        'sourceCount',
+        'sourceTitles',
+        'sourceCategories',
+        'latestAmbientVisitFound'
     ]);
 
     const metrics = targetWindow.CopilotMetrics || {
@@ -570,7 +652,7 @@ function currentSelectedPatientKey() {
 }
 
 function currentVisibleQuickActions() {
-    return (currentRoleConfig().quick_actions || []).slice();
+    return availableQuickActions().map((action) => action.mode);
 }
 
 function contextScopeFor(role, patientId) {
@@ -641,9 +723,110 @@ function currentRoleConfig() {
     return roleCatalog[state.activeRole] || roleCatalog[copilotConfig.defaultRole] || { quick_actions: [], allowed_modes: [] };
 }
 
+function actionMatchesCurrentContext(action, role = state.activeRole, patientKey = currentSelectedPatientKey()) {
+    if (!action || typeof action !== 'object') {
+        return false;
+    }
+
+    if (Array.isArray(action.roles) && action.roles.length > 0 && !action.roles.includes(role)) {
+        return false;
+    }
+
+    if (Array.isArray(action.patient_keys) && action.patient_keys.length > 0) {
+        return Boolean(patientKey) && action.patient_keys.includes(patientKey);
+    }
+
+    return true;
+}
+
 function availableModesForRole(role = state.activeRole) {
     const allowedModes = roleCatalog[role]?.allowed_modes || [];
-    return ['general_assistant'].concat(allowedModes).filter((mode, index, items) => items.indexOf(mode) === index);
+    return ['general_assistant']
+        .concat(allowedModes)
+        .filter((mode, index, items) => items.indexOf(mode) === index)
+        .filter((mode) => {
+            if (mode === 'general_assistant') {
+                return true;
+            }
+
+            const action = actionCatalog[mode] || null;
+            return !action || actionMatchesCurrentContext(action, role, currentSelectedPatientKey());
+        });
+}
+
+function selectedOptionText(select, fallback = '') {
+    const option = select?.options?.[select.selectedIndex];
+    return option ? option.textContent.trim() : fallback;
+}
+
+function friendlySelectedPatientLabel() {
+    if (!patientSelect || !patientSelect.value) {
+        return 'No demo patient selected';
+    }
+
+    const option = patientSelect.options[patientSelect.selectedIndex];
+    if (!option) {
+        return 'No demo patient selected';
+    }
+
+    const fullName = [option.dataset.fname || '', option.dataset.lname || ''].filter(Boolean).join(' ').trim();
+    if (fullName) {
+        return fullName;
+    }
+
+    return option.textContent.trim().split(' - ')[0].split(' (')[0];
+}
+
+function updateControlsSummary() {
+    if (!controlsSummary) {
+        return;
+    }
+
+    const roleTitle = selectedOptionText(roleSelect, roleCatalog[state.activeRole]?.title || 'Doctor');
+    const modeTitle = selectedOptionText(modeSelect, copilotConfig.generalModeTitle || 'General clinical support');
+    controlsSummary.textContent = [
+        friendlySelectedPatientLabel(),
+        roleTitle,
+        modeTitle,
+        'Quick Actions'
+    ].join(' · ');
+}
+
+function setDisclosureState(sectionName, expanded, options = {}) {
+    const config = sectionName === 'guardrails'
+        ? {
+            container: guardrailsSection,
+            toggle: guardrailsToggle,
+            panel: guardrailsPanel,
+            expandedEvent: 'copilot_guardrails_expanded',
+            collapsedEvent: 'copilot_guardrails_collapsed'
+        }
+        : {
+            container: controlsSection,
+            toggle: controlsToggle,
+            panel: controlsPanel,
+            expandedEvent: 'copilot_controls_expanded',
+            collapsedEvent: 'copilot_controls_collapsed'
+        };
+
+    if (!config.container || !config.toggle || !config.panel) {
+        return;
+    }
+
+    const nextExpanded = Boolean(expanded);
+    const previousExpanded = config.toggle.getAttribute('aria-expanded') === 'true';
+    config.toggle.setAttribute('aria-expanded', nextExpanded ? 'true' : 'false');
+    config.panel.hidden = !nextExpanded;
+    config.container.classList.toggle('is-expanded', nextExpanded);
+
+    if (options.emitTelemetry && previousExpanded !== nextExpanded && CopilotTelemetry) {
+        CopilotTelemetry.log(nextExpanded ? config.expandedEvent : config.collapsedEvent, {
+            role: state.activeRole,
+            mode: state.activeMode,
+            selectedPatientKey: currentSelectedPatientKey(),
+            actionType: nextExpanded ? 'expand' : 'collapse'
+        });
+    }
 }
 
 function syncControlState() {
@@ -654,6 +837,8 @@ function syncControlState() {
     if (guardrailsRoleScope) {
         guardrailsRoleScope.textContent = roleCatalog[state.activeRole]?.title || 'Doctor';
     }
+
+    updateControlsSummary();
 }
 
 const defaultGuardrailSafetyNote = 'Draft only. Human review required. This does not replace clinical judgment or a final medical decision.';
@@ -756,7 +941,7 @@ function updatePatientSelectionFromPrompt(prompt) {
 function availableQuickActions() {
     return (currentRoleConfig().quick_actions || [])
         .map((mode) => actionCatalog[mode] || null)
-        .filter(Boolean);
+        .filter((action) => actionMatchesCurrentContext(action));
 }
 
 function renderModeOptions() {
@@ -838,11 +1023,13 @@ function updateContextText() {
     if (!selectedOption || !patientSelect.value) {
         contextText.textContent = [copilotConfig.noPatientSelectedText, roleTitle].filter(Boolean).join(' • ');
         syncTopLevelCopilotState();
+        updateControlsSummary();
         return;
     }
 
     contextText.textContent = `${copilotConfig.selectedPatientPrefix} ${selectedOption.textContent}${roleTitle ? ` • ${roleTitle}` : ''}`;
     syncTopLevelCopilotState();
+    updateControlsSummary();
 }
 
 function resizeInput() {
@@ -857,7 +1044,8 @@ function updateSendState() {
 }
 
 function scrollThreadToBottom() {
-    thread.scrollTop = thread.scrollHeight;
+    const target = scrollRegion || thread;
+    target.scrollTop = target.scrollHeight;
 }
 
 const svgNamespace = 'http://www.w3.org/2000/svg';
@@ -1821,6 +2009,347 @@ async function requestReminderEmail(role, patientId) {
     }
 }
 
+function buildMarcusRagResponse(retrieval) {
+    const patientName = retrieval?.patientName || 'Marcus Johnson';
+    const latestVisit = retrieval?.latestAmbientVisit || null;
+    const chartContext = retrieval?.context || {};
+    const recommendedPoints = [
+        'Confirm current medication adherence and whether evening reminders are helping.',
+        'Verify A1C and lipid panel follow-up status.',
+        'Confirm whether insurance verification has been completed.',
+        'Review immunization status before updating the record.',
+        'Confirm care preferences and whether the daughter should be added as a care support contact.'
+    ];
+    const sections = [
+        {
+            title: 'Retrieved chart context',
+            items: [
+                `Active Medications: ${(chartContext.activeMedications || []).join(', ') || 'No active medication list retrieved.'}`,
+                `Lab Follow-up: ${(chartContext.labFollowUp || []).join(' ') || 'No current lab follow-up note retrieved.'}`,
+                `Recent Vitals: ${(chartContext.recentVitals || []).join(' ') || 'No recent vitals note retrieved.'}`,
+                `Insurance Note: ${(chartContext.insuranceNote || []).join(' ') || 'No insurance note retrieved.'}`,
+                `Immunization Review: ${(chartContext.immunizationReview || []).join(' ') || 'No immunization review note retrieved.'}`,
+                `Care Preferences: ${(chartContext.carePreferences || []).join(' ') || 'No care preference note retrieved.'}`,
+                `Care Team: ${(chartContext.careTeam || []).join(' ') || 'No care team update retrieved.'}`,
+                `Issues / Problem List: ${(chartContext.issues || []).join(', ') || 'No problem list summary retrieved.'}`
+            ]
+        },
+        {
+            title: 'Draft Clinical Summary',
+            items: [
+                `${patientName}'s recent chart context indicates a routine follow-up pattern centered on medication adherence, lab follow-up, vitals review, insurance verification, immunization review, and care support.`,
+                latestVisit
+                    ? 'The most recent AI-assisted visit was clinician-reviewed and consent-confirmed before being added to the demo visit history.'
+                    : 'No approved Ambient Encounter Capture visit-history record was found yet. Complete the consent-based listening workflow and approve the visit draft to make that context available for retrieval.'
+            ]
+        }
+    ];
+
+    if (latestVisit && Array.isArray(latestVisit.approvedNotes) && latestVisit.approvedNotes.length > 0) {
+        sections.push({
+            title: 'Latest Approved Ambient Encounter Capture',
+            items: latestVisit.approvedNotes.slice(0, 4)
+        });
+        recommendedPoints.push('Review the latest Ambient Encounter Capture visit note in Visit History.');
+    }
+
+    sections.push(
+        {
+            title: 'Recommended clinician review points',
+            items: recommendedPoints
+        },
+        {
+            title: 'Sources Used',
+            items: Array.isArray(retrieval?.sourceTitles) ? retrieval.sourceTitles : []
+        }
+    );
+
+    const intro = latestVisit
+        ? `Using Doctor-role chart retrieval, I found relevant context from ${patientName}'s medication history, lab follow-up, visit history, insurance note, immunization review, and care preferences. The latest approved Ambient Encounter Capture visit suggests the next clinical review should focus on medication adherence support, A1C/lipid follow-up, insurance verification, immunization status verification, and care coordination preferences.`
+        : `Using Doctor-role chart retrieval, I found relevant context from ${patientName}'s medication history, lab follow-up, insurance note, immunization review, and care preferences. No approved Ambient Encounter Capture visit-history record is available yet, so visit-history retrieval is currently limited to the seeded demo chart context.`;
+
+    return {
+        content: `RAG Chart Context Review for ${patientName}\n\n${intro}`,
+        sections,
+        tags: ['RAG', 'Chart context', 'Review needed'],
+        safety: 'Draft only. Clinician review required. This is not an autonomous diagnosis or treatment decision.'
+    };
+}
+
+async function requestRagChartContextReview(action) {
+    const resolvedRole = state.activeRole;
+    const resolvedMode = action?.mode || 'rag_chart_context';
+    const resolvedPatientId = patientSelect.value || null;
+    const selectedPatientKey = selectedPatientKeyForValue(resolvedPatientId || '');
+    const requestId = createId('request');
+    const startedAt = new Date().toISOString();
+    const startedPerf = window.performance && typeof window.performance.now === 'function'
+        ? window.performance.now()
+        : Date.now();
+    const prompt = action?.prompt || '';
+    const contextScope = contextScopeFor(resolvedRole, resolvedPatientId);
+
+    if (window.top && typeof window.top.restoreSession === 'function') {
+        window.top.restoreSession();
+    }
+
+    if (CopilotTelemetry) {
+        CopilotTelemetry.log('copilot_rag_quick_action_selected', {
+            requestId,
+            role: resolvedRole,
+            mode: resolvedMode,
+            selectedPatientKey
+        });
+    }
+
+    if (resolvedRole !== 'doctor' || selectedPatientKey !== 'DEMO-PCP-1001') {
+        const blockedPrompt = prompt || 'Retrieve Marcus Johnson chart context for review.';
+        const preflightGuardrails = evaluateGuardrails({
+            role: resolvedRole,
+            mode: resolvedMode,
+            prompt: blockedPrompt,
+            draftResponse: '',
+            sections: [],
+            safetyText: '',
+            metadata: {
+                selectedPatientKey,
+                contextScope
+            }
+        });
+
+        logGuardrailsEvaluation(preflightGuardrails, {
+            requestId,
+            role: resolvedRole,
+            mode: resolvedMode,
+            selectedPatientKey
+        });
+
+        if (CopilotTelemetry) {
+            CopilotTelemetry.log('copilot_restricted_action', {
+                requestId,
+                role: resolvedRole,
+                mode: resolvedMode,
+                selectedPatientKey,
+                restrictedByRole: true,
+                restrictionType: preflightGuardrails.blockedReason || 'rag_role_scope'
+            });
+        }
+
+        addAssistantMessage(preflightGuardrails.finalResponse || 'This RAG quick action is available only for the Doctor role while Marcus Johnson is selected.', {
+            mode: resolvedMode,
+            staffRole: resolvedRole,
+            patientId: resolvedPatientId,
+            selectedPatientKey,
+            tags: preflightGuardrails.policyTags || [],
+            safety: preflightGuardrails.finalSafety || defaultGuardrailSafetyNote,
+            guardrails: preflightGuardrails,
+            traceId: requestId,
+            requestId,
+            meta: {
+                context_scope: contextScope,
+                restricted_by_role: true,
+                restriction_type: preflightGuardrails.blockedReason || 'rag_role_scope'
+            }
+        });
+        return;
+    }
+
+    if (!window.OpenEMRCopilotRagDemo || typeof window.OpenEMRCopilotRagDemo.retrieveDoctorChartContext !== 'function') {
+        addAssistantMessage('The demo retrieval layer is not available right now. Try reloading the Co-Pilot and rerunning the chart review.', {
+            mode: resolvedMode,
+            staffRole: resolvedRole,
+            patientId: resolvedPatientId,
+            selectedPatientKey,
+            safety: 'Draft only. Clinician review required.',
+            traceId: requestId,
+            requestId
+        });
+        return;
+    }
+
+    updateModeSelection(resolvedMode, { emitTelemetry: true });
+    state.loading = true;
+    state.messages.push(
+        createMessage('user', action.title || 'RAG chart context review', {
+            mode: resolvedMode,
+            staffRole: resolvedRole,
+            patientId: resolvedPatientId,
+            selectedPatientKey,
+            requestId
+        }),
+        createMessage('assistant', 'Retrieving Marcus Johnson chart context before drafting...', {
+            isLoading: true,
+            mode: resolvedMode,
+            staffRole: resolvedRole,
+            patientId: resolvedPatientId,
+            selectedPatientKey,
+            traceId: requestId,
+            requestId
+        })
+    );
+    updateSendState();
+    renderMessages(true);
+
+    if (CopilotTelemetry) {
+        CopilotTelemetry.log('copilot_rag_retrieval_started', {
+            requestId,
+            role: resolvedRole,
+            mode: resolvedMode,
+            selectedPatientKey
+        });
+        CopilotTelemetry.log('copilot_context_loaded', {
+            requestId,
+            role: resolvedRole,
+            mode: resolvedMode,
+            selectedPatientKey,
+            contextScope
+        });
+        CopilotTelemetry.log('copilot_generation_started', {
+            requestId,
+            role: resolvedRole,
+            mode: resolvedMode,
+            selectedPatientKey,
+            contextScope,
+            messageLength: prompt.length,
+            hasChatHistory: buildHistoryPayload().length > 0,
+            startedAt
+        });
+    }
+
+    try {
+        const retrieval = window.OpenEMRCopilotRagDemo.retrieveDoctorChartContext({
+            patientKey: selectedPatientKey,
+            role: resolvedRole,
+            prompt,
+            requestId
+        });
+
+        if (CopilotTelemetry) {
+            CopilotTelemetry.log('copilot_rag_context_retrieved', {
+                requestId,
+                role: resolvedRole,
+                mode: resolvedMode,
+                selectedPatientKey,
+                sourceCount: Array.isArray(retrieval.sources) ? retrieval.sources.length : 0,
+                sourceTitles: retrieval.sourceTitles || [],
+                sourceCategories: retrieval.sourceCategories || [],
+                latestAmbientVisitFound: Boolean(retrieval.latestAmbientVisitFound)
+            });
+            CopilotTelemetry.log('copilot_rag_visit_history_context_loaded', {
+                requestId,
+                role: resolvedRole,
+                mode: resolvedMode,
+                selectedPatientKey,
+                sourceCount: retrieval.latestAmbientVisitFound ? 1 : 0,
+                sourceTitles: retrieval.latestAmbientVisitFound ? ['Visit History: AI-Assisted Visit Review / Ambient Encounter Capture'] : [],
+                sourceCategories: retrieval.latestAmbientVisitFound ? ['visit_history'] : [],
+                latestAmbientVisitFound: Boolean(retrieval.latestAmbientVisitFound)
+            });
+        }
+
+        clearLoadingMessage();
+        const ragDraft = buildMarcusRagResponse(retrieval);
+        const guardrailsResult = evaluateGuardrails({
+            role: resolvedRole,
+            mode: resolvedMode,
+            prompt,
+            draftResponse: ragDraft.content,
+            sections: ragDraft.sections,
+            safetyText: ragDraft.safety,
+            metadata: {
+                selectedPatientKey,
+                contextScope,
+                patientId: resolvedPatientId
+            }
+        });
+
+        logGuardrailsEvaluation(guardrailsResult, {
+            requestId,
+            role: resolvedRole,
+            mode: resolvedMode,
+            selectedPatientKey
+        });
+
+        const assistantMessage = addAssistantMessage(guardrailsResult.finalResponse || ragDraft.content, {
+            mode: resolvedMode,
+            staffRole: resolvedRole,
+            patientId: resolvedPatientId,
+            selectedPatientKey,
+            sections: guardrailsResult.finalSections || [],
+            tags: Array.from(new Set([...(ragDraft.tags || []), ...(guardrailsResult.policyTags || [])])).slice(0, 6),
+            sources: retrieval.sources || [],
+            safety: guardrailsResult.finalSafety || ragDraft.safety,
+            guardrails: guardrailsResult,
+            traceId: requestId,
+            requestId,
+            meta: {
+                context_scope: contextScope,
+                restricted_by_role: !guardrailsResult.allowed,
+                restriction_type: guardrailsResult.blockedReason || '',
+                source_count: Array.isArray(retrieval.sources) ? retrieval.sources.length : 0,
+                latest_ambient_visit_found: Boolean(retrieval.latestAmbientVisitFound)
+            }
+        });
+
+        if (CopilotTelemetry) {
+            const responseLength = getAssistantMessagePlainText(assistantMessage).length;
+            const latencyMs = Math.round((window.performance && typeof window.performance.now === 'function'
+                ? window.performance.now()
+                : Date.now()) - startedPerf);
+            CopilotTelemetry.log('copilot_generation_succeeded', {
+                requestId,
+                responseId: assistantMessage.responseId || null,
+                role: resolvedRole,
+                mode: resolvedMode,
+                selectedPatientKey,
+                latencyMs,
+                responseLength,
+                fallbackUsed: false,
+                restrictedByRole: !guardrailsResult.allowed
+            });
+            CopilotTelemetry.log('copilot_rag_sources_rendered', {
+                requestId,
+                role: resolvedRole,
+                mode: resolvedMode,
+                selectedPatientKey,
+                sourceCount: Array.isArray(retrieval.sources) ? retrieval.sources.length : 0,
+                sourceTitles: retrieval.sourceTitles || [],
+                sourceCategories: retrieval.sourceCategories || [],
+                latestAmbientVisitFound: Boolean(retrieval.latestAmbientVisitFound)
+            });
+        }
+    } catch (error) {
+        clearLoadingMessage();
+        addAssistantMessage('I ran into a problem while retrieving Marcus Johnson\'s chart context. Please retry the RAG chart review.', {
+            mode: resolvedMode,
+            staffRole: resolvedRole,
+            patientId: resolvedPatientId,
+            selectedPatientKey,
+            safety: 'Draft only. Clinician review required.',
+            traceId: requestId,
+            requestId
+        });
+
+        if (CopilotTelemetry) {
+            const endedPerf = window.performance && typeof window.performance.now === 'function'
+                ? window.performance.now()
+                : Date.now();
+            CopilotTelemetry.log('copilot_generation_failed', {
+                requestId,
+                role: resolvedRole,
+                mode: resolvedMode,
+                selectedPatientKey,
+                latencyMs: Math.round(endedPerf - startedPerf),
+                errorCategory: 'rag_retrieval_failed',
+                fallbackUsed: false
+            });
+        }
+    } finally {
+        state.loading = false;
+        updateSendState();
+    }
+}
+
 async function submitPrompt() {
     const prompt = input.value.trim();
     if (!prompt || state.loading) {
@@ -1834,6 +2363,9 @@ async function submitPrompt() {
 }
 
 patientSelect.addEventListener('change', () => {
+    renderModeOptions();
+    renderQuickActions();
+    updateModeSelection(state.activeMode);
     updateContextText();
     if (CopilotTelemetry) {
         CopilotTelemetry.log('copilot_patient_selected', {
@@ -1857,6 +2389,13 @@ quickActionSelect.addEventListener('change', (event) => {
         return;
     }
 
+    if (selectedMode === 'rag_chart_context') {
+        quickActionSelect.value = '';
+        requestRagChartContextReview(action);
+        updateControlsSummary();
+        return;
+    }
+
     updateModeSelection(action.mode, { emitTelemetry: true });
     input.value = action.prompt || '';
     resizeInput();
@@ -1864,6 +2403,7 @@ quickActionSelect.addEventListener('change', (event) => {
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
     quickActionSelect.value = '';
+    updateControlsSummary();
 });
 
 input.addEventListener('input', () => {
@@ -1885,7 +2425,21 @@ form.addEventListener('submit', (event) => {
     submitPrompt();
 });
 
+if (controlsToggle) {
+    controlsToggle.addEventListener('click', () => {
+        setDisclosureState('controls', controlsToggle.getAttribute('aria-expanded') !== 'true', { emitTelemetry: true });
+    });
+}
+
+if (guardrailsToggle) {
+    guardrailsToggle.addEventListener('click', () => {
+        setDisclosureState('guardrails', guardrailsToggle.getAttribute('aria-expanded') !== 'true', { emitTelemetry: true });
+    });
+}
+
 updateRoleSelection(copilotConfig.defaultRole || 'doctor');
+setDisclosureState('controls', false);
+setDisclosureState('guardrails', false);
 resizeInput();
 updateSendState();
 state.messages.push(createMessage('assistant', copilotConfig.greeting, {
@@ -1907,5 +2461,6 @@ if (patientSelect.options.length <= 1) {
 
 renderMessages(true);
 </script>
+<script src="copilot_visit_review.js?v=<?php echo attr_url($visitReviewVersion); ?>"></script>
 </body>
 </html>

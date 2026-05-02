@@ -19,6 +19,7 @@
         'billing',
         'billing_review',
         'follow_up',
+        'rag_chart_context',
         'visit_summary',
         'patient_education',
         'appointment_info',
