@@ -1892,6 +1892,55 @@ body.copilot-embedded.body_top {
     line-height: 1.5;
 }
 
+.copilot-runtime-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px;
+    border: 1px solid rgba(207, 213, 244, 0.88);
+    border-radius: 12px;
+    background: rgba(248, 250, 255, 0.96);
+}
+
+.copilot-runtime-meta-status {
+    color: var(--copilot-text);
+    font-size: 0.76rem;
+    line-height: 1.45;
+    font-weight: 700;
+}
+
+.copilot-runtime-meta-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 6px 10px;
+    margin: 0;
+}
+
+.copilot-runtime-meta-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.copilot-runtime-meta-row dt {
+    margin: 0;
+    color: var(--copilot-muted);
+    font-size: 0.68rem;
+    font-weight: 700;
+    line-height: 1.2;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+.copilot-runtime-meta-row dd {
+    margin: 0;
+    color: var(--copilot-text);
+    font-size: 0.76rem;
+    line-height: 1.35;
+    word-break: break-word;
+}
+
 .copilot-guardrail-status {
     display: inline-flex;
     align-items: center;
@@ -2664,6 +2713,22 @@ body.copilot-embedded.body_top {
 .medical-copilot--compact .copilot-message-time {
     font-size: var(--copilot-font-xs);
     line-height: 1.35;
+}
+
+.medical-copilot--compact .copilot-runtime-meta {
+    gap: 5px;
+    padding: 6px 8px;
+    border-radius: var(--copilot-radius);
+}
+
+.medical-copilot--compact .copilot-runtime-meta-status,
+.medical-copilot--compact .copilot-runtime-meta-row dd {
+    font-size: var(--copilot-font-xs);
+    line-height: 1.35;
+}
+
+.medical-copilot--compact .copilot-runtime-meta-row dt {
+    font-size: 0.6rem;
 }
 
 .medical-copilot--compact .copilot-composer {

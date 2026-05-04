@@ -46,3 +46,7 @@ docker/development-easy-redis/docker-compose.override.yml
 sites/default/sqlconf.php
 sites/default/sqlconf.php.*
 !sites/default/sqlconf.php.example
+
+.env
+.env.local
+docker/development-easy/.env

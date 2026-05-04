@@ -371,7 +371,7 @@ WHERE @pid_pcp IS NOT NULL
 INSERT INTO pnotes
 (`date`, `body`, `pid`, `user`, `groupname`, `activity`, `authorized`, `title`, `assigned_to`, `message_status`)
 SELECT
- NOW(),
+NOW(),
  'DEMO AI PHYSICIAN SUMMARY SOURCE. Chronic conditions: Type 2 diabetes mellitus and hypertension. Recent labs: A1C increased from 7.4 to 8.2; LDL 116; creatinine stable. Medications: metformin 1000 mg twice daily and lisinopril 10 mg daily. Open follow-ups: overdue diabetic eye exam, repeat A1C needed, review home glucose readings. Appointment reason: diabetes follow-up. AI safety: draft summary only; physician must review chart sources.',
  @pid_pcp, @provider_username, 'Default', 1, 1,
  'DEMO AI - Physician Summary Source', @provider_username, 'New'
@@ -387,6 +387,52 @@ INSERT INTO pnotes
 (`date`, `body`, `pid`, `user`, `groupname`, `activity`, `authorized`, `title`, `assigned_to`, `message_status`)
 SELECT
  NOW(),
+ CONCAT_WS('\n',
+ 'DEMO AI BILLING PAYMENT SOURCE.',
+ 'Patient: Marcus Johnson.',
+ 'Patient balance due: $42.50.',
+ 'Insurance balance due: $183.00.',
+ 'Total balance due: $225.50.',
+ 'Next patient payment due date: 2026-05-20.',
+ 'Payer: Detroit Demo Health Plan.',
+ 'Plan: Detroit Demo Silver PPO.',
+ 'Billing provider: OpenEMR Demo Clinic.',
+ 'Payment note: Patient portion due after insurance estimate; verify in billing ledger before collection.',
+ 'Insurance note: Detroit Demo Health Plan estimated insurance balance pending review.',
+ 'AI safety: billing draft only; human billing review required.'
+ ),
+ @pid_pcp, @provider_username, 'Default', 1, 1,
+ 'DEMO AI - Marcus Billing Payment Source', @provider_username, 'New'
+WHERE @pid_pcp IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM pnotes
+    WHERE pid = @pid_pcp
+      AND title = 'DEMO AI - Marcus Billing Payment Source'
+    LIMIT 1
+  );
+
+UPDATE pnotes
+SET body = CONCAT_WS('\n',
+  'DEMO AI BILLING PAYMENT SOURCE.',
+  'Patient: Marcus Johnson.',
+  'Patient balance due: $42.50.',
+  'Insurance balance due: $183.00.',
+  'Total balance due: $225.50.',
+  'Next patient payment due date: 2026-05-20.',
+  'Payer: Detroit Demo Health Plan.',
+  'Plan: Detroit Demo Silver PPO.',
+  'Billing provider: OpenEMR Demo Clinic.',
+  'Payment note: Patient portion due after insurance estimate; verify in billing ledger before collection.',
+  'Insurance note: Detroit Demo Health Plan estimated insurance balance pending review.',
+  'AI safety: billing draft only; human billing review required.'
+)
+WHERE pid = @pid_pcp
+  AND title = 'DEMO AI - Marcus Billing Payment Source';
+
+INSERT INTO pnotes
+(`date`, `body`, `pid`, `user`, `groupname`, `activity`, `authorized`, `title`, `assigned_to`, `message_status`)
+SELECT
+NOW(),
  'DEMO AI MEDICAL ASSISTANT ROOMING SOURCE. Visit reason: annual physical. Rooming checklist items: medication list not confirmed, pharmacy not updated, flu vaccine status unknown, allergies need confirmation, last recorded BP was elevated at 148/92. Suggested MA action: confirm only; do not change medications or diagnoses. AI safety: draft checklist only; stay within assistant permissions.',
  @pid_ma, @provider_username, 'Default', 1, 1,
  'DEMO AI - MA Rooming Source', @provider_username, 'New'
@@ -418,6 +464,52 @@ WHERE @pid_bill IS NOT NULL
 -- ---------------------------------------------------------------------
 
 SET @demo_insurance_seed_id := COALESCE((SELECT MAX(id) FROM insurance_companies), 0) + 1000;
+SET @demo_marcus_insurance_seed_id := @demo_insurance_seed_id + 1;
+
+INSERT INTO insurance_companies
+(`id`, `name`, `cms_id`, `ins_type_code`, `inactive`)
+SELECT
+ @demo_marcus_insurance_seed_id, 'Detroit Demo Health Plan', 'DEMO1001', 0, 0
+WHERE NOT EXISTS (
+  SELECT 1 FROM insurance_companies
+  WHERE name = 'Detroit Demo Health Plan'
+  LIMIT 1
+);
+
+SET @demo_marcus_insurance_id := (
+  SELECT id
+  FROM insurance_companies
+  WHERE name = 'Detroit Demo Health Plan'
+  LIMIT 1
+);
+
+INSERT INTO insurance_data
+(`type`, `provider`, `plan_name`, `policy_number`, `subscriber_lname`, `subscriber_fname`,
+ `subscriber_relationship`, `date`, `pid`, `accept_assignment`, `policy_type`)
+SELECT
+ 'primary', CAST(@demo_marcus_insurance_id AS CHAR), 'Detroit Demo Silver PPO', 'DEMO-MJ-2026',
+ 'Johnson', 'Marcus', 'self', '2026-05-01', @pid_pcp, 'TRUE', 'demo'
+WHERE @pid_pcp IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM insurance_data
+    WHERE pid = @pid_pcp
+      AND type = 'primary'
+      AND policy_number = 'DEMO-MJ-2026'
+    LIMIT 1
+  );
+
+UPDATE insurance_data
+SET provider = CAST(@demo_marcus_insurance_id AS CHAR),
+    plan_name = 'Detroit Demo Silver PPO',
+    subscriber_lname = 'Johnson',
+    subscriber_fname = 'Marcus',
+    subscriber_relationship = 'self',
+    `date` = '2026-05-01',
+    accept_assignment = 'TRUE',
+    policy_type = 'demo'
+WHERE pid = @pid_pcp
+  AND type = 'primary'
+  AND policy_number = 'DEMO-MJ-2026';
 
 INSERT INTO insurance_companies
 (`id`, `name`, `cms_id`, `ins_type_code`, `inactive`)
@@ -1347,6 +1439,25 @@ FROM pnotes AS n
 JOIN patient_data AS p ON p.pid = n.pid
 WHERE p.pubpid IN ('DEMO-PCP-1001', 'DEMO-MA-1002', 'DEMO-BILL-1003')
 ORDER BY p.pubpid, n.date DESC;
+
+SELECT
+  p.pubpid,
+  ic.name AS payer,
+  i.plan_name,
+  i.policy_number,
+  LEFT(n.body, 220) AS payment_note_preview
+FROM patient_data AS p
+LEFT JOIN insurance_data AS i
+  ON i.pid = p.pid
+ AND i.type = 'primary'
+ AND i.policy_number IN ('DEMO-MJ-2026', 'DEMO-CLM-1003')
+LEFT JOIN insurance_companies AS ic
+  ON ic.id = i.provider
+LEFT JOIN pnotes AS n
+  ON n.pid = p.pid
+ AND n.title = 'DEMO AI - Marcus Billing Payment Source'
+WHERE p.pubpid IN ('DEMO-PCP-1001', 'DEMO-BILL-1003')
+ORDER BY p.pubpid;
 
 SELECT
   p.pubpid,

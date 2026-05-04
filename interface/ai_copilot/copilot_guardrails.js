@@ -20,6 +20,7 @@
         'billing_review',
         'follow_up',
         'rag_chart_context',
+        'latest_ambient_summary',
         'visit_summary',
         'patient_education',
         'appointment_info',
@@ -35,6 +36,7 @@
             'medication_info',
             'clinical_notes',
             'follow_up',
+            'latest_ambient_summary',
             'visit_summary',
             'patient_education',
             'appointment_info',
@@ -45,6 +47,7 @@
             'general_assistant',
             'billing',
             'billing_review',
+            'latest_ambient_summary',
             'visit_summary',
             'appointment_info',
             'patient_contact',
@@ -55,12 +58,14 @@
             'appointment_info',
             'patient_contact',
             'send_reminder',
+            'latest_ambient_summary',
             'front_desk_summary'
         ])
     };
 
     const PROMPT_INJECTION_PATTERNS = [
         /\bignore (all|any|previous|prior) instructions\b/i,
+        /\bignore (your|the) rules\b/i,
         /\bbypass (role|guardrail|restriction|policy|safety)/i,
         /\bshow (me )?(the )?full chart\b/i,
         /\breveal (the )?(hidden|restricted|internal) (context|notes|data)\b/i,
@@ -75,6 +80,7 @@
         treatment_plan: /\b(treatment plan|plan for treatment|care plan|start treatment|stop treatment|change treatment|therap(y|ies)|dose change|prescribe)\b/i,
         follow_up: /\b(follow[- ]?up|monitor(ing)?|recheck|return visit|care coordination|next visit|escalation precaution)\b/i,
         billing: /\b(billing|claim|claim status|insurance|payer|payment|payment due|coverage|cpt|icd|coding|balance|invoice)\b/i,
+        latest_ambient_summary: /\b(latest ambient encounter|ambient encounter only|latest ai-assisted visit review|latest approved ambient encounter)\b/i,
         appointment_info: /\b(appointment|schedule|scheduled|provider|location|check[- ]?in)\b/i,
         patient_contact: /\b(contact|phone|email|preferred outreach|reach the patient|contact information)\b/i,
         send_reminder: /\b(reminder|notify|notification|outreach message|send reminder)\b/i,
@@ -87,6 +93,7 @@
     const URGENT_DIRECTIVE_PATTERN = /\b(call 911|go to the er|go to the emergency room|seek emergency care immediately|hospitalize immediately|admit immediately)\b/i;
     const ESCALATION_LANGUAGE_PATTERN = /\b(licensed clinician|supervising clinician|clinical protocol|emergency services|urgent evaluation|escalate)\b/i;
     const CLINICAL_DISCLOSURE_PATTERN = /\b(a1c|troponin|glucose|wbc|ldl|creatinine|medication|metformin|insulin|lisinopril|atorvastatin|albuterol|gabapentin|diagnosis|differential|treatment plan|clinical note|soap|lab|labs)\b/i;
+    const DOCTOR_DIAGNOSIS_PROMPT_PATTERN = /\b(diagnose|final diagnosis|definitive diagnosis|certain diagnosis)\b/i;
 
     function normalizeRole(role) {
         return ROLE_ALLOWED_MODES[String(role || '').toLowerCase()] ? String(role || '').toLowerCase() : 'doctor';
@@ -239,13 +246,20 @@
     }
 
     function buildUiPayload(role, allowed, blockedReason, riskLevel, policyTags) {
+        const doctorAllowed = allowed && role === 'doctor';
         return {
             blocked: !allowed,
             title: allowed ? 'Guardrails checked' : 'Guardrail blocked this request',
-            statusLabel: allowed
-                ? 'Guardrails checked · Role-safe · Draft-only'
+            statusLabel: doctorAllowed
+                ? 'Guardrails checked · Doctor clinical role · Draft-only'
+                : allowed
+                    ? 'Guardrails checked · Role-safe · Draft-only'
                 : 'Guardrails blocked · Safer alternative shown',
-            displayReason: allowed ? 'Role scope, prompt safety, and draft-only rules passed.' : displayReasonFor(blockedReason, role),
+            displayReason: doctorAllowed
+                ? 'Doctor clinical role enabled. Draft-only and human-review rules still apply.'
+                : allowed
+                    ? 'Role scope, prompt safety, and draft-only rules passed.'
+                    : displayReasonFor(blockedReason, role),
             alternative: allowed ? '' : alternativeFor(role, blockedReason),
             roleLabel: displayRoleLabel(role),
             checks: ['Role scope', 'Prompt injection filter', 'Draft-only enforcement', 'PHI minimum necessary'],
@@ -266,19 +280,10 @@
             };
         }
 
-        if (role === 'doctor' && /\bdiagnose\b/i.test(prompt || '')) {
+        if (role === 'nurse' && (topic === 'differential_diagnosis' || topic === 'treatment_plan' || /\b(change|start|stop|increase|decrease|prescribe|diagnose)\b/i.test(prompt || '') || /\bmedication plan\b/i.test(prompt || ''))) {
             return {
                 allowed: false,
-                blockedReason: 'doctor_autonomous_diagnosis_block',
-                riskLevel: 'high',
-                policyTags: ['guardrails', 'doctor', 'diagnosis_review_only']
-            };
-        }
-
-        if (role === 'nurse' && (topic === 'differential_diagnosis' || topic === 'treatment_plan' || /\b(start|stop|increase|decrease|prescribe|diagnose)\b/i.test(prompt || ''))) {
-            return {
-                allowed: false,
-                blockedReason: /\b(start|stop|increase|decrease|prescribe)\b/i.test(prompt || '')
+                blockedReason: /\b(change|start|stop|increase|decrease|prescribe)\b/i.test(prompt || '') || /\bmedication plan\b/i.test(prompt || '')
                     ? 'nurse_medication_change_block'
                     : 'nurse_clinical_scope_block',
                 riskLevel: 'high',
@@ -301,6 +306,7 @@
         }
 
         if (role === 'front_desk' && (
+            /\b(tell me everything|show me everything|all chart data|entire chart|full history)\b/i.test(prompt || '') ||
             topic === 'differential_diagnosis' ||
             topic === 'medication_info' ||
             topic === 'clinical_notes' ||
@@ -337,19 +343,72 @@
         return null;
     }
 
-    function evaluateResponsePolicy(role, topic, responseText) {
+    function isDoctorDiagnosisPrompt(prompt, topic) {
+        if (topic === 'differential_diagnosis') {
+            return true;
+        }
+
+        return DOCTOR_DIAGNOSIS_PROMPT_PATTERN.test(String(prompt || ''));
+    }
+
+    function sanitizeDoctorDiagnosisLine(text) {
+        let value = String(text || '').trim();
+        if (!value) {
+            return '';
+        }
+
+        value = value
+            .replace(/\bthe diagnosis is\b/gi, 'A differential review should consider')
+            .replace(/\bdefinitive diagnosis\b/gi, 'differential diagnosis review')
+            .replace(/\bfinal diagnosis\b/gi, 'working differential assessment')
+            .replace(/\bi diagnose\b/gi, 'I would frame the differential as')
+            .replace(/\bthis patient definitely has\b/gi, 'The chart context may be consistent with')
+            .replace(/\bthis is clearly\b/gi, 'This could represent');
+
+        return value;
+    }
+
+    function sanitizeDoctorDiagnosisLanguage(text) {
+        const lines = String(text || '')
+            .split('\n')
+            .map((line) => sanitizeDoctorDiagnosisLine(line))
+            .filter(Boolean);
+
+        const intro = [
+            'I can\'t provide a definitive diagnosis, but I can draft a differential diagnosis review for clinician review.'
+        ];
+
+        return unique([...intro, ...lines]).join('\n\n').trim();
+    }
+
+    function sanitizeDoctorSections(sections, sanitizer) {
+        return cloneSections(sections).map((section) => ({
+            ...section,
+            items: Array.isArray(section.items) ? section.items.map((item) => sanitizer(String(item || ''))).filter(Boolean) : []
+        }));
+    }
+
+    function evaluateResponsePolicy(role, topic, responseText, prompt) {
         const text = String(responseText || '');
         if (!text) {
             return {
                 riskLevel: 'low',
                 blockedReason: '',
-                policyTags: ['guardrails', role, topic]
+                policyTags: ['guardrails', role, topic],
+                rewriteTypes: []
             };
         }
 
         let riskLevel = 'low';
         let blockedReason = '';
         const policyTags = ['guardrails', role, topic];
+        const rewriteTypes = [];
+
+        if (role === 'doctor' && isDoctorDiagnosisPrompt(prompt, topic)) {
+            riskLevel = maxRisk(riskLevel, 'high');
+            policyTags.push('doctor', 'diagnosis_review_only', 'draft_only');
+            rewriteTypes.push('doctor_diagnosis_review');
+        }
 
         if (role === 'front_desk' && CLINICAL_DISCLOSURE_PATTERN.test(text)) {
             blockedReason = 'front_desk_phi_limit';
@@ -360,13 +419,24 @@
             riskLevel = 'high';
             policyTags.push('billing_scope');
         } else if (DEFINITIVE_DIAGNOSIS_PATTERN.test(text)) {
-            blockedReason = 'autonomous_diagnosis_language';
-            riskLevel = 'high';
-            policyTags.push('diagnosis_review_only');
+            if (role === 'doctor') {
+                riskLevel = 'high';
+                policyTags.push('diagnosis_review_only', 'draft_only');
+                rewriteTypes.push('doctor_diagnosis_review');
+            } else {
+                blockedReason = 'autonomous_diagnosis_language';
+                riskLevel = 'high';
+                policyTags.push('diagnosis_review_only');
+            }
         } else if (MEDICATION_CHANGE_PATTERN.test(text)) {
-            blockedReason = 'medication_change_instruction';
-            riskLevel = 'high';
-            policyTags.push('medication_review_only');
+            if (role === 'doctor') {
+                riskLevel = 'high';
+                policyTags.push('doctor', 'medication_review_discussion', 'draft_only');
+            } else {
+                blockedReason = 'medication_change_instruction';
+                riskLevel = 'high';
+                policyTags.push('medication_review_only');
+            }
         } else if (URGENT_DIRECTIVE_PATTERN.test(text) && !ESCALATION_LANGUAGE_PATTERN.test(text)) {
             riskLevel = 'medium';
             policyTags.push('escalation_added');
@@ -375,7 +445,8 @@
         return {
             riskLevel,
             blockedReason,
-            policyTags: unique(policyTags)
+            policyTags: unique(policyTags),
+            rewriteTypes: unique(rewriteTypes)
         };
     }
 
@@ -421,7 +492,7 @@
             };
         }
 
-        const responsePolicy = evaluateResponsePolicy(role, topic, draftText);
+        const responsePolicy = evaluateResponsePolicy(role, topic, draftText, prompt);
         if (responsePolicy.blockedReason) {
             const finalResponse = buildBlockedMessage(role, responsePolicy.blockedReason);
             return {
@@ -445,8 +516,14 @@
         }
 
         let finalResponse = draftResponse;
+        let finalSections = sections;
+        if (role === 'doctor' && responsePolicy.rewriteTypes.includes('doctor_diagnosis_review')) {
+            finalResponse = sanitizeDoctorDiagnosisLanguage(finalResponse);
+            finalSections = sanitizeDoctorSections(finalSections, sanitizeDoctorDiagnosisLine);
+        }
+
         if (responsePolicy.riskLevel === 'medium' && URGENT_DIRECTIVE_PATTERN.test(draftText) && !ESCALATION_LANGUAGE_PATTERN.test(draftText)) {
-            finalResponse = `${draftResponse}\n\nIf symptoms are urgent or worsening, escalate immediately to the supervising clinician or emergency services per protocol.`.trim();
+            finalResponse = `${finalResponse}\n\nIf symptoms are urgent or worsening, escalate immediately to the supervising clinician or emergency services per protocol.`.trim();
         }
 
         return {
@@ -460,10 +537,10 @@
                 mode,
                 topic,
                 patientKey: metadata.selectedPatientKey || metadata.patientKey || null,
-                phase: draftText ? 'response' : 'prompt',
-                blockedReason: ''
-            },
-            finalSections: sections,
+                    phase: draftText ? 'response' : 'prompt',
+                    blockedReason: ''
+                },
+            finalSections,
             finalSafety: defaultSafetyFor(role, topic, input.safetyText || ''),
             ui: buildUiPayload(role, true, '', responsePolicy.riskLevel, responsePolicy.policyTags)
         };

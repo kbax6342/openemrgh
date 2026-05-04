@@ -86,6 +86,13 @@ $quickActions = [
         'patient_keys' => ['DEMO-PCP-1001'],
     ],
     [
+        'mode' => 'latest_ambient_summary',
+        'title' => xl('Latest Ambient Encounter Summary'),
+        'summary' => xl('Summarize only the latest approved ambient encounter capture.'),
+        'prompt' => xl('Summarize the latest approved ambient encounter capture only. Use role-appropriate retrieved context and do not expand older visits.'),
+        'patient_keys' => ['DEMO-PCP-1001'],
+    ],
+    [
         'mode' => 'visit_summary',
         'title' => xl('Visit Summary'),
         'summary' => xl('Concise summary of concerns, plan, and follow-up.'),
@@ -128,25 +135,25 @@ $roleCatalog = [
         'title' => xl('Doctor'),
         'note' => xl('Clinical support only. No autonomous diagnosis, orders, prescribing, or chart writes.'),
         'quick_actions' => ['differential_diagnosis', 'medication_info', 'clinical_notes', 'treatment_plan', 'billing', 'follow_up', 'rag_chart_context'],
-        'allowed_modes' => ['general_assistant', 'differential_diagnosis', 'medication_info', 'clinical_notes', 'treatment_plan', 'billing', 'billing_review', 'follow_up', 'rag_chart_context', 'visit_summary', 'patient_education'],
+        'allowed_modes' => ['general_assistant', 'differential_diagnosis', 'medication_info', 'clinical_notes', 'treatment_plan', 'billing', 'billing_review', 'follow_up', 'rag_chart_context', 'latest_ambient_summary', 'visit_summary', 'patient_education'],
     ],
     'nurse' => [
         'title' => xl('Nurse'),
         'note' => xl('Education and follow-up support only. Medication changes require clinician review.'),
         'quick_actions' => ['medication_info', 'clinical_notes', 'follow_up', 'visit_summary', 'patient_education'],
-        'allowed_modes' => ['general_assistant', 'medication_info', 'clinical_notes', 'follow_up', 'visit_summary', 'patient_education'],
+        'allowed_modes' => ['general_assistant', 'medication_info', 'clinical_notes', 'follow_up', 'latest_ambient_summary', 'visit_summary', 'patient_education'],
     ],
     'billing' => [
         'title' => xl('Billing Staff'),
         'note' => xl('Billing review only. No automatic claim submission or definitive coding.'),
         'quick_actions' => ['billing', 'billing_review', 'visit_summary'],
-        'allowed_modes' => ['general_assistant', 'billing', 'billing_review', 'visit_summary'],
+        'allowed_modes' => ['general_assistant', 'billing', 'billing_review', 'latest_ambient_summary', 'visit_summary'],
     ],
     'front_desk' => [
         'title' => xl('Front Desk'),
         'note' => xl('Minimum necessary PHI. Scheduling, contact, and reminder workflows only.'),
         'quick_actions' => ['appointment_info', 'patient_contact', 'send_reminder', 'front_desk_summary'],
-        'allowed_modes' => ['general_assistant', 'appointment_info', 'patient_contact', 'send_reminder', 'front_desk_summary'],
+        'allowed_modes' => ['general_assistant', 'appointment_info', 'patient_contact', 'send_reminder', 'front_desk_summary', 'latest_ambient_summary'],
     ],
 ];
 
@@ -483,6 +490,19 @@ function ensureTelemetryHost(targetWindow) {
         'visitCount',
         'draftOnly',
         'consentConfirmed',
+        'engine',
+        'provider',
+        'model',
+        'openaiConfigured',
+        'promptTokens',
+        'completionTokens',
+        'totalTokens',
+        'estimatedCostUsd',
+        'costNote',
+        'openaiErrorCategory',
+        'openaiHttpStatus',
+        'openaiErrorMessageSafe',
+        'ragGrounded',
         'sourceCount',
         'sourceTitles',
         'sourceCategories',
@@ -887,7 +907,19 @@ function logGuardrailsEvaluation(result, context = {}) {
         blockedReason: result.blockedReason || '',
         riskLevel: result.riskLevel || 'low',
         policyTags: Array.isArray(result.policyTags) ? result.policyTags.slice(0, 6) : [],
-        responseCharacterCount: (result.finalResponse || '').length
+        responseCharacterCount: (result.finalResponse || '').length,
+        engine: context.engine || null,
+        provider: context.provider || null,
+        model: context.model || null,
+        promptTokens: context.promptTokens ?? null,
+        completionTokens: context.completionTokens ?? null,
+        totalTokens: context.totalTokens ?? null,
+        fallbackUsed: Boolean(context.fallbackUsed),
+        fallbackReason: context.fallbackReason || null,
+        latencyMs: context.latencyMs ?? null,
+        openaiErrorCategory: context.openaiErrorCategory || null,
+        openaiHttpStatus: context.openaiHttpStatus ?? null,
+        openaiErrorMessageSafe: context.openaiErrorMessageSafe || null
     });
 }
 
@@ -1096,13 +1128,29 @@ function logResponseMetadataIfNeeded(message) {
         return;
     }
 
-    const safeSources = Array.isArray(message.sources) ? message.sources.slice(0, 8) : [];
+    const sourcePayload = buildResponseSourcePayload(message.sources || [], {
+        role: message.staffRole || state.activeRole,
+        mode: message.mode || 'general_assistant',
+        patientKey: message.selectedPatientKey || currentSelectedPatientKey(),
+        ragGrounded: Boolean(message.meta?.rag_grounded)
+    });
+    const safeSources = sourcePayload.sources.map((source) => source.title).slice(0, 8);
     const safeContextTags = Array.isArray(message.tags) ? Array.from(new Set(message.tags)).slice(0, 5) : [];
     const safeSafetyLabels = message.safety ? [message.safety] : [];
     const safeRole = message.staffRole || state.activeRole;
     const safeMode = message.mode || 'general_assistant';
     const safePatientKey = message.selectedPatientKey || currentSelectedPatientKey() || null;
     const safeMeta = message.meta && typeof message.meta === 'object' ? {
+        engine: message.meta.engine || null,
+        provider: message.meta.provider || null,
+        model: message.meta.model || null,
+        openaiConfigured: Boolean(message.meta.openai_configured),
+        promptTokens: message.meta.token_usage?.prompt_tokens ?? null,
+        completionTokens: message.meta.token_usage?.completion_tokens ?? null,
+        totalTokens: message.meta.token_usage?.total_tokens ?? null,
+        estimatedCostUsd: message.meta.estimated_cost_usd ?? null,
+        costNote: message.meta.cost_note || null,
+        ragGrounded: Boolean(message.meta.rag_grounded),
         contextScope: message.meta.context_scope || null,
         fallbackUsed: Boolean(message.meta.fallback_used),
         restrictedByRole: Boolean(message.meta.restricted_by_role)
@@ -1116,6 +1164,10 @@ function logResponseMetadataIfNeeded(message) {
         console.info('role', safeRole);
         console.info('focusMode', safeMode);
         console.info('demoPatientKey', safePatientKey);
+        console.info('sourceCount', sourcePayload.sources.length);
+        console.info('sourceTitles', sourcePayload.sourceTitles);
+        console.info('sourceCategories', sourcePayload.sourceCategories);
+        console.info('latestAmbientVisitFound', sourcePayload.latestAmbientVisitFound);
         console.info('sources', safeSources);
         console.info('contextTags', safeContextTags);
         console.info('safetyLabels', safeSafetyLabels);
@@ -1129,6 +1181,10 @@ function logResponseMetadataIfNeeded(message) {
             role: safeRole,
             focusMode: safeMode,
             demoPatientKey: safePatientKey,
+            sourceCount: sourcePayload.sources.length,
+            sourceTitles: sourcePayload.sourceTitles,
+            sourceCategories: sourcePayload.sourceCategories,
+            latestAmbientVisitFound: sourcePayload.latestAmbientVisitFound,
             sources: safeSources,
             contextTags: safeContextTags,
             safetyLabels: safeSafetyLabels,
@@ -1144,6 +1200,295 @@ function createMessageTimeElement(message) {
     time.className = `copilot-message-time copilot-message-time-${message.role}`;
     time.textContent = message.timestamp;
     return time;
+}
+
+function normalizeSourceEntry(value) {
+    if (value && typeof value === 'object') {
+        const title = String(value.title || value.label || '').trim();
+        const category = String(value.category || '').trim();
+        if (!title) {
+            return null;
+        }
+
+        return {
+            title,
+            category: category || title.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
+        };
+    }
+
+    const rawValue = String(value || '').trim();
+    if (!rawValue) {
+        return null;
+    }
+
+    const normalized = rawValue.toLowerCase();
+    const mapping = {
+        'patient_data': ['Patient Chart Context', 'patient_chart_context'],
+        'patient chart context': ['Patient Chart Context', 'patient_chart_context'],
+        'general prompt context': ['General Prompt Context', 'general_prompt_context'],
+        'openemr_postcalendar_events': ['Visit History', 'visit_history'],
+        'form_encounter': ['Visit History', 'visit_history'],
+        'visit history': ['Visit History', 'visit_history'],
+        'pnotes': ['Patient Chart Context', 'patient_chart_context'],
+        'lists': ['Issues / Problem List', 'problem_list'],
+        'issues / problem list': ['Issues / Problem List', 'problem_list'],
+        'prescriptions': ['Medications', 'medications'],
+        'medications': ['Medications', 'medications'],
+        'form_vitals': ['Vitals / Labs', 'vitals_labs'],
+        'vitals / labs': ['Vitals / Labs', 'vitals_labs'],
+        'recent vitals': ['Vitals / Labs', 'vitals_labs'],
+        'lab follow-up': ['Vitals / Labs', 'vitals_labs'],
+        'billing/demo claim data': ['Billing / Claim Context', 'billing_claim_context'],
+        'billing / claim context': ['Billing / Claim Context', 'billing_claim_context'],
+        'insurance note': ['Insurance Note', 'insurance'],
+        'immunization review': ['Immunization Review', 'immunizations'],
+        'care preferences': ['Care Preferences', 'care_preferences'],
+        'care team': ['Care Team', 'care_team'],
+        'ai-assisted visit review': ['AI-Assisted Visit Review', 'ambient_encounter_capture'],
+        'ambient encounter capture': ['Ambient Encounter Capture', 'ambient_encounter_capture'],
+        'latest approved ambient encounter capture': ['Latest Approved Ambient Encounter Capture', 'ambient_encounter_capture'],
+        'visit history: ai-assisted visit review / ambient encounter capture': ['Latest Approved Ambient Encounter Capture', 'ambient_encounter_capture']
+    };
+
+    const mapped = mapping[normalized];
+    if (mapped) {
+        return {
+            title: mapped[0],
+            category: mapped[1]
+        };
+    }
+
+    return {
+        title: rawValue,
+        category: normalized.replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'source'
+    };
+}
+
+function uniqueSourceEntries(entries) {
+    const seen = new Set();
+    return entries.filter((entry) => {
+        if (!entry) {
+            return false;
+        }
+
+        const key = `${entry.category}::${entry.title}`;
+        if (seen.has(key)) {
+            return false;
+        }
+
+        seen.add(key);
+        return true;
+    });
+}
+
+function buildResponseSourcePayload(baseSources, options = {}) {
+    const role = options.role || state.activeRole;
+    const mode = options.mode || 'general_assistant';
+    const patientKey = options.patientKey || currentSelectedPatientKey();
+    const ragGrounded = Boolean(options.ragGrounded);
+    const entries = uniqueSourceEntries((Array.isArray(baseSources) ? baseSources : []).map(normalizeSourceEntry).filter(Boolean));
+    let latestAmbientVisitFound = false;
+
+    if (
+        patientKey === 'DEMO-PCP-1001' &&
+        (
+            ['medication_info', 'treatment_plan', 'clinical_notes', 'follow_up', 'visit_summary', 'patient_education', 'rag_chart_context', 'latest_ambient_summary'].includes(mode) ||
+            ragGrounded
+        ) &&
+        window.OpenEMRAIAmbientVisitDemo &&
+        typeof window.OpenEMRAIAmbientVisitDemo.latestApprovedVisit === 'function'
+    ) {
+        const latestVisit = window.OpenEMRAIAmbientVisitDemo.latestApprovedVisit(patientKey);
+        latestAmbientVisitFound = Boolean(latestVisit);
+        if (latestVisit) {
+            entries.push({
+                title: 'Latest Approved Ambient Encounter Capture',
+                category: 'ambient_encounter_capture'
+            });
+        }
+    }
+
+    const uniqueEntries = uniqueSourceEntries(entries);
+    return {
+        sources: uniqueEntries,
+        sourceTitles: uniqueEntries.map((entry) => entry.title),
+        sourceCategories: uniqueEntries.map((entry) => entry.category),
+        latestAmbientVisitFound
+    };
+}
+
+function messageHasSourcesSection(message) {
+    return Array.isArray(message.sections) && message.sections.some((section) => {
+        return section && typeof section === 'object' && String(section.title || '').trim().toLowerCase() === 'sources used';
+    });
+}
+
+function buildVisibleSourceEntries(message) {
+    return buildResponseSourcePayload(message.sources || [], {
+        role: message.staffRole || state.activeRole,
+        mode: message.mode || 'general_assistant',
+        patientKey: message.selectedPatientKey || currentSelectedPatientKey(),
+        ragGrounded: Boolean(message.meta?.rag_grounded)
+    }).sources;
+}
+
+function shouldShowRagGroundingNote(message) {
+    if (message.role !== 'assistant') {
+        return false;
+    }
+
+    if (message.meta?.rag_grounded) {
+        return buildVisibleSourceEntries(message).length > 0;
+    }
+
+    if (![
+        'medication_info',
+        'treatment_plan',
+        'clinical_notes',
+        'follow_up',
+        'visit_summary',
+        'patient_education',
+        'rag_chart_context'
+    ].includes(message.mode || '')) {
+        return false;
+    }
+
+    return buildVisibleSourceEntries(message).length > 0;
+}
+
+function formatEngineLabel(value) {
+    return {
+        openai: 'OpenAI',
+        fallback: 'Local fallback',
+        guardrail: 'Guardrail'
+    }[String(value || '').toLowerCase()] || 'Unknown';
+}
+
+function formatProviderLabel(value) {
+    return {
+        openai: 'OpenAI',
+        local_fallback: 'Local fallback',
+        guardrail: 'Guardrail'
+    }[String(value || '').toLowerCase()] || 'Unknown';
+}
+
+function formatTokenUsageFooterValue(meta) {
+    const engine = String(meta?.engine || '').trim().toLowerCase();
+    const usage = meta?.token_usage && typeof meta.token_usage === 'object'
+        ? meta.token_usage
+        : null;
+
+    if (usage && (usage.prompt_tokens !== null || usage.completion_tokens !== null || usage.total_tokens !== null)) {
+        return `${usage.prompt_tokens ?? '-'} / ${usage.completion_tokens ?? '-'} / ${usage.total_tokens ?? '-'}`;
+    }
+
+    if (engine === 'guardrail') {
+        return 'Not applicable — guardrail blocked before LLM call';
+    }
+
+    if (engine === 'fallback') {
+        return 'Not applicable — local fallback';
+    }
+
+    if (engine === 'openai') {
+        return 'Not returned by provider';
+    }
+
+    return 'Not available';
+}
+
+function buildAssistantRuntimeMeta(message) {
+    if (message.role !== 'assistant' || message.isLoading || !message.meta || typeof message.meta !== 'object') {
+        return null;
+    }
+
+    const engine = String(message.meta.engine || '').trim();
+    const provider = String(message.meta.provider || '').trim();
+    if (!engine && !provider) {
+        return null;
+    }
+
+    const wrapper = document.createElement('section');
+    wrapper.className = 'copilot-runtime-meta';
+
+    const status = document.createElement('div');
+    status.className = 'copilot-runtime-meta-status';
+    if (engine === 'openai') {
+        status.textContent = 'LLM status: OpenAI response generated with retrieved chart context.';
+    } else if (engine === 'fallback') {
+        if (String(message.meta.fallback_reason || '') === 'demo_mode') {
+            status.textContent = 'LLM status: Local fallback mode. This response was generated by the local demo retrieval/fallback engine.';
+        } else {
+            status.textContent = 'LLM status: Local fallback mode. OPENAI_API_KEY is missing or OpenAI was unavailable, so this response was generated by the local demo fallback engine.';
+        }
+    } else {
+        status.textContent = 'LLM status: Guardrail response generated before or instead of model output.';
+    }
+    wrapper.appendChild(status);
+
+    const items = [];
+    items.push(['Engine', formatEngineLabel(engine)]);
+    items.push(['Provider', formatProviderLabel(provider)]);
+
+    if (message.meta.model) {
+        items.push(['Model', String(message.meta.model)]);
+    }
+
+    items.push(['Tokens', formatTokenUsageFooterValue(message.meta)]);
+
+    if (message.meta.fallback_reason) {
+        items.push(['Fallback reason', String(message.meta.fallback_reason)]);
+    }
+
+    if (message.meta.openai_error_category) {
+        items.push(['OpenAI error', String(message.meta.openai_error_category)]);
+    }
+
+    if (message.meta.openai_http_status) {
+        items.push(['OpenAI HTTP', String(message.meta.openai_http_status)]);
+    }
+
+    if (message.meta.openai_error_message_safe) {
+        items.push(['OpenAI note', String(message.meta.openai_error_message_safe)]);
+    }
+
+    if (message.meta.rag_grounded !== undefined) {
+        items.push(['RAG-grounded', message.meta.rag_grounded ? 'yes' : 'no']);
+    }
+
+    if (message.meta.estimated_cost_usd !== null && message.meta.estimated_cost_usd !== undefined && message.meta.estimated_cost_usd !== '') {
+        items.push(['Estimated cost', `$${message.meta.estimated_cost_usd}`]);
+    } else if (message.meta.cost_note) {
+        items.push(['Cost note', String(message.meta.cost_note)]);
+    }
+
+    const list = document.createElement('dl');
+    list.className = 'copilot-runtime-meta-list';
+
+    items.forEach(([label, value]) => {
+        if (!value) {
+            return;
+        }
+
+        const row = document.createElement('div');
+        row.className = 'copilot-runtime-meta-row';
+
+        const dt = document.createElement('dt');
+        dt.textContent = label;
+        row.appendChild(dt);
+
+        const dd = document.createElement('dd');
+        dd.textContent = value;
+        row.appendChild(dd);
+
+        list.appendChild(row);
+    });
+
+    if (list.childElementCount > 0) {
+        wrapper.appendChild(list);
+    }
+
+    return wrapper;
 }
 
 function createIconActionButton(options) {
@@ -1240,7 +1585,13 @@ function itemToneClassName(tone) {
 function appendBubbleContent(bubble, message) {
     const hasStructuredSections = message.role === 'assistant' && Array.isArray(message.sections) && message.sections.length > 0;
     const guardrailBanner = message.role === 'assistant' ? buildGuardrailBanner(message.guardrails) : null;
-    if (!hasStructuredSections && !guardrailBanner) {
+    const sourceEntries = message.role === 'assistant' ? buildVisibleSourceEntries(message) : [];
+    const shouldShowSourcesSection = sourceEntries.length > 0 && !messageHasSourcesSection(message);
+    const ragGroundingNote = shouldShowRagGroundingNote(message)
+        ? 'RAG-grounded response: retrieved chart context was used before drafting this answer.'
+        : '';
+
+    if (!hasStructuredSections && !guardrailBanner && !shouldShowSourcesSection && !ragGroundingNote) {
         bubble.textContent = message.content;
         return;
     }
@@ -1257,6 +1608,13 @@ function appendBubbleContent(bubble, message) {
         intro.className = 'copilot-message-intro';
         intro.textContent = message.content;
         body.appendChild(intro);
+    }
+
+    if (ragGroundingNote) {
+        const note = document.createElement('p');
+        note.className = 'copilot-message-intro';
+        note.textContent = ragGroundingNote;
+        body.appendChild(note);
     }
 
     const sections = document.createElement('div');
@@ -1295,6 +1653,29 @@ function appendBubbleContent(bubble, message) {
 
     if (sections.childElementCount > 0) {
         body.appendChild(sections);
+    }
+
+    if (shouldShowSourcesSection) {
+        const sourceBlock = document.createElement('section');
+        sourceBlock.className = 'copilot-section-block';
+
+        const sourceTitle = document.createElement('h3');
+        sourceTitle.className = 'copilot-section-title';
+        sourceTitle.textContent = 'Sources Used';
+        sourceBlock.appendChild(sourceTitle);
+
+        const sourceList = document.createElement('ul');
+        sourceList.className = 'copilot-section-list';
+
+        sourceEntries.forEach((entry) => {
+            const listItem = document.createElement('li');
+            listItem.className = 'copilot-section-item';
+            listItem.textContent = entry.title;
+            sourceList.appendChild(listItem);
+        });
+
+        sourceBlock.appendChild(sourceList);
+        body.appendChild(sourceBlock);
     }
 
     bubble.appendChild(body);
@@ -1346,6 +1727,11 @@ function renderMessages(shouldScrollToBottom = false) {
         const guardrailStatus = buildGuardrailStatus(message);
         if (guardrailStatus) {
             stack.appendChild(guardrailStatus);
+        }
+
+        const runtimeMeta = buildAssistantRuntimeMeta(message);
+        if (runtimeMeta) {
+            stack.appendChild(runtimeMeta);
         }
 
         const assistantActions = buildAssistantActionRow(message);
@@ -1420,9 +1806,18 @@ function updateMessageState(messageId, patch) {
 
 function getAssistantMessagePlainText(message) {
     const lines = [];
+    const ragGroundingNote = shouldShowRagGroundingNote(message)
+        ? 'RAG-grounded response: retrieved chart context was used before drafting this answer.'
+        : '';
+    const sourceEntries = buildVisibleSourceEntries(message);
 
     if (message.content) {
         lines.push(message.content);
+    }
+
+    if (ragGroundingNote) {
+        lines.push('');
+        lines.push(ragGroundingNote);
     }
 
     if (Array.isArray(message.sections)) {
@@ -1436,6 +1831,14 @@ function getAssistantMessagePlainText(message) {
             section.items.forEach((item) => {
                 lines.push(`- ${item}`);
             });
+        });
+    }
+
+    if (sourceEntries.length > 0 && !messageHasSourcesSection(message)) {
+        lines.push('');
+        lines.push('Sources Used');
+        sourceEntries.forEach((entry) => {
+            lines.push(`- ${entry.title}`);
         });
     }
 
@@ -1603,6 +2006,9 @@ function buildAssistantActionRow(message) {
 
 function inferPromptMode(prompt) {
     const value = prompt.toLowerCase();
+    if (/(summarize latest ambient encounter only|latest ambient encounter only|latest ambient encounter|ambient encounter only|summarize the latest ai-assisted visit review|latest approved ambient encounter)/.test(value)) {
+        return 'latest_ambient_summary';
+    }
     if (/(appointment|scheduled|provider|check-in|check in|location)/.test(value)) {
         if (/(reminder|email)/.test(value)) {
             return 'send_reminder';
@@ -1626,6 +2032,9 @@ function inferPromptMode(prompt) {
     }
     if (/(billing|coding|cpt|icd|payer|documentation needed before billing|payment due|health insurance|insurance on file|insurance)/.test(value)) {
         return 'billing';
+    }
+    if (/(visit history|ai-assisted encounter|ambient encounter capture|what changed since|chart context|troponin|lab result|latest lab|what sources did you use|sources did you use)/.test(value)) {
+        return 'rag_chart_context';
     }
     if (/(visit summary|summary of visit)/.test(value)) {
         return 'visit_summary';
@@ -1669,6 +2078,34 @@ function resolveModeForPrompt(prompt, options = {}) {
     return 'general_assistant';
 }
 
+function buildAmbientVisitContextForRequest(patientKey, role) {
+    const latestVisit = window.OpenEMRAIAmbientVisitDemo && typeof window.OpenEMRAIAmbientVisitDemo.latestApprovedVisit === 'function'
+        ? window.OpenEMRAIAmbientVisitDemo.latestApprovedVisit(patientKey)
+        : (window.OpenEMRCopilotRagDemo && typeof window.OpenEMRCopilotRagDemo.latestApprovedAmbientVisit === 'function'
+            ? window.OpenEMRCopilotRagDemo.latestApprovedAmbientVisit(patientKey)
+            : null);
+    if (!latestVisit || typeof latestVisit !== 'object') {
+        return null;
+    }
+
+    return {
+        id: latestVisit.id || '',
+        draftId: latestVisit.draftId || '',
+        title: latestVisit.title || 'AI-Assisted Visit Review',
+        visitType: latestVisit.visitType || 'Ambient Encounter Capture',
+        approvedAt: latestVisit.approvedAt || '',
+        approvedAtLabel: latestVisit.approvedAtLabel || '',
+        summary: latestVisit.summary || '',
+        approvedNotes: Array.isArray(latestVisit.approvedNotes) ? latestVisit.approvedNotes.slice(0, 12) : [],
+        badges: Array.isArray(latestVisit.badges) ? latestVisit.badges.slice(0, 6) : [],
+        tableRow: latestVisit.tableRow && typeof latestVisit.tableRow === 'object' ? latestVisit.tableRow : {},
+        approvedItemCount: typeof latestVisit.approvedItemCount === 'number' ? latestVisit.approvedItemCount : 0,
+        reviewStatus: latestVisit.reviewStatus || 'Clinician Reviewed',
+        consentConfirmed: Boolean(latestVisit.consentConfirmed),
+        source: latestVisit.source || 'Consent-Based AI Visit Capture'
+    };
+}
+
 async function requestAssistantResponse(prompt, options = {}) {
     const trimmedPrompt = typeof prompt === 'string' ? prompt.trim() : '';
     if (!trimmedPrompt || state.loading) {
@@ -1685,6 +2122,7 @@ async function requestAssistantResponse(prompt, options = {}) {
     const requestId = createId('request');
     const selectedPatientKey = selectedPatientKeyForValue(resolvedPatientId || '');
     const contextScope = contextScopeFor(resolvedRole, resolvedPatientId);
+    const ambientVisitContext = buildAmbientVisitContextForRequest(selectedPatientKey, resolvedRole);
     const startedAt = new Date().toISOString();
     const startedPerf = window.performance && typeof window.performance.now === 'function'
         ? window.performance.now()
@@ -1718,7 +2156,16 @@ async function requestAssistantResponse(prompt, options = {}) {
             requestId,
             role: resolvedRole,
             mode: resolvedMode,
-            selectedPatientKey
+            selectedPatientKey,
+            engine: 'guardrail',
+            provider: 'guardrail',
+            model: null,
+            promptTokens: null,
+            completionTokens: null,
+            totalTokens: null,
+            fallbackUsed: false,
+            fallbackReason: null,
+            latencyMs: 0
         });
         if (CopilotTelemetry) {
             CopilotTelemetry.log('copilot_restricted_action', {
@@ -1742,9 +2189,19 @@ async function requestAssistantResponse(prompt, options = {}) {
             traceId: requestId,
             requestId,
             meta: {
+                engine: 'guardrail',
+                provider: 'guardrail',
+                model: null,
+                openai_configured: false,
+                token_usage: null,
+                estimated_cost_usd: null,
+                cost_note: null,
+                fallback_used: false,
+                fallback_reason: null,
                 context_scope: contextScope,
                 restricted_by_role: true,
-                restriction_type: preflightGuardrails.blockedReason || 'guardrails_block'
+                restriction_type: preflightGuardrails.blockedReason || 'guardrails_block',
+                rag_grounded: false
             }
         });
         return;
@@ -1780,7 +2237,8 @@ async function requestAssistantResponse(prompt, options = {}) {
             role: resolvedRole,
             mode: resolvedMode,
             selectedPatientKey,
-            contextScope
+            contextScope,
+            latestAmbientVisitFound: Boolean(ambientVisitContext)
         });
         CopilotTelemetry.log('copilot_generation_started', {
             requestId,
@@ -1808,6 +2266,10 @@ async function requestAssistantResponse(prompt, options = {}) {
                 mode: resolvedMode,
                 message: trimmedPrompt,
                 chat_history: historyPayload,
+                ambient_visit_context: ambientVisitContext,
+                ambient_context: ambientVisitContext ? {
+                    latestApprovedVisit: ambientVisitContext
+                } : null,
                 request_id: requestId,
                 csrf_token_form: copilotConfig.csrfToken
             })
@@ -1844,10 +2306,28 @@ async function requestAssistantResponse(prompt, options = {}) {
             requestId,
             role: data.role || resolvedRole,
             mode: data.mode || resolvedMode,
-            selectedPatientKey
+            selectedPatientKey,
+            engine: meta.engine || 'fallback',
+            provider: meta.provider || 'local_fallback',
+            model: meta.model || null,
+            promptTokens: meta.token_usage?.prompt_tokens ?? null,
+            completionTokens: meta.token_usage?.completion_tokens ?? null,
+            totalTokens: meta.token_usage?.total_tokens ?? null,
+            fallbackUsed: Boolean(meta.fallback_used),
+            fallbackReason: meta.fallback_reason || null,
+            latencyMs: meta.latency_ms ?? null,
+            openaiErrorCategory: meta.openai_error_category || null,
+            openaiHttpStatus: meta.openai_http_status ?? null,
+            openaiErrorMessageSafe: meta.openai_error_message_safe || null
         });
 
         const guardrailTags = Array.from(new Set([...(data.tags || []), ...(guardrailsResult.policyTags || [])])).slice(0, 6);
+        const sourcePayload = buildResponseSourcePayload(guardrailsResult.allowed ? (data.sources || []) : [], {
+            role: data.role || resolvedRole,
+            mode: data.mode || resolvedMode,
+            patientKey: selectedPatientKey,
+            ragGrounded: Boolean(meta.rag_grounded)
+        });
         const assistantMessage = addAssistantMessage(guardrailsResult.finalResponse || data.answer || copilotConfig.apiFailureMessage, {
             mode: data.mode || resolvedMode,
             staffRole: data.role || resolvedRole,
@@ -1855,7 +2335,7 @@ async function requestAssistantResponse(prompt, options = {}) {
             selectedPatientKey,
             sections: guardrailsResult.finalSections || [],
             tags: guardrailTags,
-            sources: guardrailsResult.allowed ? (data.sources || []) : [],
+            sources: sourcePayload.sources,
             safety: guardrailsResult.finalSafety || data.safety_note || defaultGuardrailSafetyNote,
             guardrails: guardrailsResult,
             traceId: requestId,
@@ -1864,7 +2344,8 @@ async function requestAssistantResponse(prompt, options = {}) {
                 ...meta,
                 restricted_by_role: Boolean(meta.restricted_by_role) || !guardrailsResult.allowed,
                 restriction_type: meta.restriction_type || guardrailsResult.blockedReason || '',
-                guardrails_risk_level: guardrailsResult.riskLevel || 'low'
+                guardrails_risk_level: guardrailsResult.riskLevel || 'low',
+                latest_ambient_visit_found: sourcePayload.latestAmbientVisitFound
             }
         });
 
@@ -1880,8 +2361,24 @@ async function requestAssistantResponse(prompt, options = {}) {
                     ? window.performance.now()
                     : Date.now()) - startedPerf),
                 responseLength,
+                engine: meta.engine || 'fallback',
+                provider: meta.provider || 'local_fallback',
+                model: meta.model || null,
+                openaiConfigured: Boolean(meta.openai_configured),
+                promptTokens: meta.token_usage?.prompt_tokens ?? null,
+                completionTokens: meta.token_usage?.completion_tokens ?? null,
+                totalTokens: meta.token_usage?.total_tokens ?? null,
+                estimatedCostUsd: meta.estimated_cost_usd ?? null,
+                ragGrounded: Boolean(meta.rag_grounded),
+                sourceCount: sourcePayload.sources.length,
+                sourceTitles: sourcePayload.sourceTitles,
+                sourceCategories: sourcePayload.sourceCategories,
+                latestAmbientVisitFound: sourcePayload.latestAmbientVisitFound,
                 fallbackUsed: Boolean(meta.fallback_used),
-                restrictedByRole: Boolean(meta.restricted_by_role) || !guardrailsResult.allowed
+                restrictedByRole: Boolean(meta.restricted_by_role) || !guardrailsResult.allowed,
+                openaiErrorCategory: meta.openai_error_category || null,
+                openaiHttpStatus: meta.openai_http_status ?? null,
+                openaiErrorMessageSafe: meta.openai_error_message_safe || null
             });
 
             if (meta.fallback_used) {
@@ -1890,8 +2387,19 @@ async function requestAssistantResponse(prompt, options = {}) {
                     role: data.role || resolvedRole,
                     mode: data.mode || resolvedMode,
                     selectedPatientKey,
+                    engine: meta.engine || 'fallback',
+                    provider: meta.provider || 'local_fallback',
+                    model: meta.model || null,
+                    openaiConfigured: Boolean(meta.openai_configured),
+                    promptTokens: meta.token_usage?.prompt_tokens ?? null,
+                    completionTokens: meta.token_usage?.completion_tokens ?? null,
+                    totalTokens: meta.token_usage?.total_tokens ?? null,
+                    estimatedCostUsd: meta.estimated_cost_usd ?? null,
                     fallbackUsed: true,
-                    fallbackReason: meta.fallback_reason || 'demo_mode'
+                    fallbackReason: meta.fallback_reason || 'demo_mode',
+                    openaiErrorCategory: meta.openai_error_category || null,
+                    openaiHttpStatus: meta.openai_http_status ?? null,
+                    openaiErrorMessageSafe: meta.openai_error_message_safe || null
                 });
             }
 
@@ -2121,7 +2629,16 @@ async function requestRagChartContextReview(action) {
             requestId,
             role: resolvedRole,
             mode: resolvedMode,
-            selectedPatientKey
+            selectedPatientKey,
+            engine: 'guardrail',
+            provider: 'guardrail',
+            model: null,
+            promptTokens: null,
+            completionTokens: null,
+            totalTokens: null,
+            fallbackUsed: false,
+            fallbackReason: null,
+            latencyMs: 0
         });
 
         if (CopilotTelemetry) {
@@ -2146,9 +2663,19 @@ async function requestRagChartContextReview(action) {
             traceId: requestId,
             requestId,
             meta: {
+                engine: 'guardrail',
+                provider: 'guardrail',
+                model: null,
+                openai_configured: false,
+                token_usage: null,
+                estimated_cost_usd: null,
+                cost_note: null,
+                fallback_used: false,
+                fallback_reason: null,
                 context_scope: contextScope,
                 restricted_by_role: true,
-                restriction_type: preflightGuardrails.blockedReason || 'rag_role_scope'
+                restriction_type: preflightGuardrails.blockedReason || 'rag_role_scope',
+                rag_grounded: false
             }
         });
         return;
@@ -2267,7 +2794,18 @@ async function requestRagChartContextReview(action) {
             requestId,
             role: resolvedRole,
             mode: resolvedMode,
-            selectedPatientKey
+            selectedPatientKey,
+            engine: 'fallback',
+            provider: 'local_fallback',
+            model: null,
+            promptTokens: null,
+            completionTokens: null,
+            totalTokens: null,
+            fallbackUsed: true,
+            fallbackReason: 'demo_mode',
+            latencyMs: Math.round((window.performance && typeof window.performance.now === 'function'
+                ? window.performance.now()
+                : Date.now()) - startedPerf)
         });
 
         const assistantMessage = addAssistantMessage(guardrailsResult.finalResponse || ragDraft.content, {
@@ -2283,11 +2821,21 @@ async function requestRagChartContextReview(action) {
             traceId: requestId,
             requestId,
             meta: {
+                engine: 'fallback',
+                provider: 'local_fallback',
+                model: null,
+                openai_configured: false,
+                token_usage: null,
+                estimated_cost_usd: null,
+                cost_note: null,
                 context_scope: contextScope,
                 restricted_by_role: !guardrailsResult.allowed,
                 restriction_type: guardrailsResult.blockedReason || '',
                 source_count: Array.isArray(retrieval.sources) ? retrieval.sources.length : 0,
-                latest_ambient_visit_found: Boolean(retrieval.latestAmbientVisitFound)
+                latest_ambient_visit_found: Boolean(retrieval.latestAmbientVisitFound),
+                rag_grounded: true,
+                fallback_used: true,
+                fallback_reason: 'demo_mode'
             }
         });
 
@@ -2304,7 +2852,17 @@ async function requestRagChartContextReview(action) {
                 selectedPatientKey,
                 latencyMs,
                 responseLength,
-                fallbackUsed: false,
+                engine: 'fallback',
+                provider: 'local_fallback',
+                model: null,
+                openaiConfigured: false,
+                promptTokens: null,
+                completionTokens: null,
+                totalTokens: null,
+                estimatedCostUsd: null,
+                ragGrounded: true,
+                fallbackUsed: true,
+                fallbackReason: 'demo_mode',
                 restrictedByRole: !guardrailsResult.allowed
             });
             CopilotTelemetry.log('copilot_rag_sources_rendered', {
@@ -2391,7 +2949,11 @@ quickActionSelect.addEventListener('change', (event) => {
 
     if (selectedMode === 'rag_chart_context') {
         quickActionSelect.value = '';
-        requestRagChartContextReview(action);
+        updateModeSelection(action.mode, { emitTelemetry: true });
+        requestAssistantResponse(action.prompt || '', {
+            includeUserMessage: true,
+            modeOverride: action.mode
+        });
         updateControlsSummary();
         return;
     }

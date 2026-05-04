@@ -89,3 +89,30 @@ Additional audit events:
 - `copilot_rag_sources_rendered`
 
 Audit logging stays metadata-only. No raw transcript text or full raw chart text is logged.
+
+### Lightweight Eval Runner
+
+The Clinical Co-Pilot also includes a lightweight deterministic eval package under:
+
+- `interface/ai_copilot/evals/clinical_copilot_golden_cases.json`
+- `interface/ai_copilot/evals/run-clinical-copilot-evals.js`
+- repo-root `EVALS.md`
+
+Purpose:
+- demonstrate golden-set coverage for role safety, RAG grounding, prompt injection, missing data, ambient encounter capture, and observability
+- keep the submission demo-ready without changing live OpenEMR behavior
+- provide a local pass/fail harness based on synthetic fixture responses
+
+Run locally from the repo root:
+
+```bash
+node interface/ai_copilot/evals/run-clinical-copilot-evals.js
+```
+
+Current scope:
+- doctor, nurse, billing, and front desk scenarios
+- Marcus Johnson medication info and treatment-plan drafts
+- RAG chart-context review and latest Ambient Encounter Capture retrieval
+- prompt-injection refusal
+- missing-data safe fallback
+- consent-gated ambient encounter capture and approval audit-chain checks

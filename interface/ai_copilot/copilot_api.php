@@ -78,6 +78,7 @@ if ($patientId !== false && $patientId !== null && $patientId > 0) {
 }
 
 $requestedMode = is_string($payload['mode'] ?? '') ? trim($payload['mode']) : '';
+$openAiConfigured = aiCopilotReadEnv('OPENAI_API_KEY') !== '';
 
 if ($action === 'send_reminder_email') {
     $fullContext = !empty($patient)
@@ -99,6 +100,10 @@ if ($action === 'send_reminder_email') {
             'restricted_by_role' => $role !== 'front_desk',
             'restriction_type' => $role !== 'front_desk' ? 'front_desk_reminder_permission_block' : null,
             'fallback_used' => false,
+            'engine' => 'fallback',
+            'provider' => 'local_fallback',
+            'model' => null,
+            'openai_configured' => $openAiConfigured,
         ],
         $requestStartedAt
     );
@@ -121,7 +126,9 @@ $fullContext = !empty($patient)
     ? aiCopilotBuildContext($patient, $mode)
     : aiCopilotBuildGeneralContext($mode, $message);
 $context = aiCopilotFilterContextForRole($fullContext, $role, $mode);
-$sources = aiCopilotBuildSources($context);
+$context = aiCopilotAttachClientAmbientVisitContext($context, $payload['ambient_visit_context'] ?? null, $role);
+$context = aiCopilotAttachClientAmbientVisitContext($context, $payload['ambient_context']['latestApprovedVisit'] ?? null, $role);
+$sources = aiCopilotBuildSources($context, $mode);
 $permissionResponse = aiCopilotMaybeBuildRolePermissionResponse($role, $mode, $message, $context);
 if ($permissionResponse !== []) {
     $meta = aiCopilotBuildResponseMeta(
@@ -134,6 +141,11 @@ if ($permissionResponse !== []) {
             'restricted_by_role' => true,
             'restriction_type' => $permissionResponse['restriction_type'] ?? 'role_guardrail',
             'fallback_used' => false,
+            'engine' => 'guardrail',
+            'provider' => 'guardrail',
+            'model' => null,
+            'openai_configured' => $openAiConfigured,
+            'rag_grounded' => aiCopilotShouldMarkRagGroundedForRequest($mode, $message, $context),
         ],
         $requestStartedAt
     );
@@ -148,12 +160,13 @@ if ($permissionResponse !== []) {
         'sources' => $sources,
         'safety_note' => aiCopilotRoleSafetyNote($role),
         'engine' => 'guardrail',
+        'provider' => 'guardrail',
         'meta' => $meta,
     ]);
     exit;
 }
 
-$draft = aiCopilotGenerateDraft($role, $mode, $message, $chatHistory, $context, $validModes[$mode]);
+$draft = aiCopilotGenerateDraft($requestId, $role, $mode, $message, $chatHistory, $context, $validModes[$mode]);
 $meta = aiCopilotBuildResponseMeta(
     $requestId,
     $role,
@@ -164,6 +177,15 @@ $meta = aiCopilotBuildResponseMeta(
         'restricted_by_role' => false,
         'fallback_used' => ($draft['engine'] ?? '') === 'fallback',
         'fallback_reason' => $draft['fallback_reason'] ?? null,
+        'engine' => $draft['engine'] ?? 'fallback',
+        'provider' => $draft['provider'] ?? (($draft['engine'] ?? '') === 'openai' ? 'openai' : 'local_fallback'),
+        'model' => $draft['model'] ?? null,
+        'openai_configured' => (bool) ($draft['openai_configured'] ?? $openAiConfigured),
+        'error_category' => $draft['error_category'] ?? null,
+        'openai_error_category' => $draft['openai_error_category'] ?? null,
+        'openai_http_status' => $draft['openai_http_status'] ?? null,
+        'openai_error_message_safe' => $draft['openai_error_message_safe'] ?? null,
+        'rag_grounded' => aiCopilotShouldMarkRagGroundedForRequest($mode, $message, $context),
     ],
     $requestStartedAt
 );
@@ -179,6 +201,7 @@ aiCopilotJsonResponse(200, [
     'sources' => $sources,
     'safety_note' => aiCopilotRoleSafetyNote($role),
     'engine' => $draft['engine'],
+    'provider' => $draft['provider'] ?? (($draft['engine'] ?? '') === 'openai' ? 'openai' : 'local_fallback'),
     'meta' => $meta,
 ]);
 
@@ -215,6 +238,9 @@ function aiCopilotErrorMeta(string $requestId, string $errorCategory): array
     return [
         'request_id' => $requestId,
         'error_category' => $errorCategory,
+        'openai_error_category' => null,
+        'openai_http_status' => null,
+        'openai_error_message_safe' => null,
         'fallback_used' => false,
     ];
 }
@@ -272,18 +298,104 @@ function aiCopilotBuildResponseMeta(
     array $overrides,
     float $requestStartedAt
 ): array {
+    $engine = (string) ($overrides['engine'] ?? $response['engine'] ?? 'fallback');
+    $provider = (string) ($overrides['provider'] ?? $response['provider'] ?? ($engine === 'openai' ? 'openai' : ($engine === 'guardrail' ? 'guardrail' : 'local_fallback')));
+    $model = $overrides['model'] ?? ($response['model'] ?? null);
+    $tokenUsage = aiCopilotNormalizeTokenUsage($response['token_usage'] ?? null);
+    $estimatedCostUsd = $response['estimated_cost_usd'] ?? null;
+    $costNote = $response['cost_note'] ?? null;
+    $ragGrounded = (bool) ($overrides['rag_grounded'] ?? aiCopilotIsRagGrounded($mode, $context));
+
+    $openAiErrorMessageSafe = aiCopilotCleanText((string) ($overrides['openai_error_message_safe'] ?? ($response['openai_error_message_safe'] ?? '')));
+
     return [
         'request_id' => $requestId,
         'mode' => $mode,
         'role' => $role,
+        'engine' => $engine,
+        'provider' => $provider,
+        'model' => is_string($model) && trim($model) !== '' ? trim($model) : null,
         'fallback_used' => (bool) ($overrides['fallback_used'] ?? false),
         'fallback_reason' => $overrides['fallback_reason'] ?? null,
+        'openai_configured' => (bool) ($overrides['openai_configured'] ?? ($response['openai_configured'] ?? false)),
+        'token_usage' => $tokenUsage,
+        'estimated_cost_usd' => is_numeric($estimatedCostUsd) ? (float) $estimatedCostUsd : null,
+        'cost_note' => is_string($costNote) && trim($costNote) !== '' ? trim($costNote) : null,
+        'error_category' => $overrides['error_category'] ?? ($response['error_category'] ?? null),
+        'openai_error_category' => $overrides['openai_error_category'] ?? ($response['openai_error_category'] ?? null),
+        'openai_http_status' => isset($overrides['openai_http_status']) && is_numeric($overrides['openai_http_status'])
+            ? (int) $overrides['openai_http_status']
+            : (isset($response['openai_http_status']) && is_numeric($response['openai_http_status']) ? (int) $response['openai_http_status'] : null),
+        'openai_error_message_safe' => $openAiErrorMessageSafe !== '' ? $openAiErrorMessageSafe : null,
+        'openai_response_format' => aiCopilotCleanText((string) ($overrides['openai_response_format'] ?? ($response['openai_response_format'] ?? ''))),
         'restricted_by_role' => (bool) ($overrides['restricted_by_role'] ?? false),
         'restriction_type' => $overrides['restriction_type'] ?? null,
         'context_scope' => aiCopilotContextScope($role, $context),
         'latency_ms' => (int) round((microtime(true) - $requestStartedAt) * 1000),
         'response_length' => aiCopilotResponseTextLength($response),
+        'rag_grounded' => $ragGrounded,
     ];
+}
+
+function aiCopilotNormalizeTokenUsage(mixed $usage): ?array
+{
+    if (!is_array($usage)) {
+        return null;
+    }
+
+    $promptTokens = isset($usage['prompt_tokens']) && is_numeric($usage['prompt_tokens']) ? (int) $usage['prompt_tokens'] : null;
+    $completionTokens = isset($usage['completion_tokens']) && is_numeric($usage['completion_tokens']) ? (int) $usage['completion_tokens'] : null;
+    $totalTokens = isset($usage['total_tokens']) && is_numeric($usage['total_tokens']) ? (int) $usage['total_tokens'] : null;
+
+    if ($promptTokens === null && $completionTokens === null && $totalTokens === null) {
+        return null;
+    }
+
+    return [
+        'prompt_tokens' => $promptTokens,
+        'completion_tokens' => $completionTokens,
+        'total_tokens' => $totalTokens,
+    ];
+}
+
+function aiCopilotPromptImpliesChartRetrieval(string $message): bool
+{
+    return preg_match('/\b(chart|chart context|visit history|ai-assisted encounter|ambient encounter capture|latest ambient encounter|troponin|a1c|glucose|wbc|ldl|creatinine|lab result|labs|medication history|medication information|insurance|immunization|care preference|payment due|balance due|payer|billing context|policy number)\b/i', $message) === 1;
+}
+
+function aiCopilotShouldMarkRagGroundedForRequest(string $mode, string $message, array $context): bool
+{
+    if (!aiCopilotContextHasPatient($context)) {
+        return false;
+    }
+
+    if (aiCopilotIsRagGrounded($mode, $context)) {
+        return true;
+    }
+
+    if (in_array($mode, ['appointment_info', 'patient_contact', 'send_reminder', 'front_desk_summary'], true)) {
+        return false;
+    }
+
+    return aiCopilotPromptImpliesChartRetrieval($message);
+}
+
+function aiCopilotIsRagGrounded(string $mode, array $context): bool
+{
+    if (!aiCopilotContextHasPatient($context)) {
+        return false;
+    }
+
+    return in_array($mode, [
+        'medication_info',
+        'treatment_plan',
+        'clinical_notes',
+        'follow_up',
+        'visit_summary',
+        'patient_education',
+        'rag_chart_context',
+        'latest_ambient_summary',
+    ], true);
 }
 
 function aiCopilotResolveAction(mixed $value): string
@@ -305,6 +417,8 @@ function aiCopilotRoleCatalog(): array
                 'clinical_notes',
                 'treatment_plan',
                 'follow_up',
+                'rag_chart_context',
+                'latest_ambient_summary',
                 'visit_summary',
                 'patient_education',
                 'billing',
@@ -321,6 +435,7 @@ function aiCopilotRoleCatalog(): array
                 'follow_up',
                 'visit_summary',
                 'patient_education',
+                'latest_ambient_summary',
             ],
         ],
         'billing' => [
@@ -331,6 +446,7 @@ function aiCopilotRoleCatalog(): array
                 'billing',
                 'billing_review',
                 'visit_summary',
+                'latest_ambient_summary',
             ],
         ],
         'front_desk' => [
@@ -342,6 +458,7 @@ function aiCopilotRoleCatalog(): array
                 'patient_contact',
                 'send_reminder',
                 'front_desk_summary',
+                'latest_ambient_summary',
             ],
         ],
     ];
@@ -384,6 +501,14 @@ function aiCopilotModeCatalog(): array
             'title' => 'Follow-Up',
             'style' => 'Draft follow-up timing, monitoring, patient instructions, escalation precautions, and care coordination. Do not place orders or finalize treatment.',
         ],
+        'rag_chart_context' => [
+            'title' => 'RAG: Review Marcus\'s Chart Context',
+            'style' => 'Retrieve relevant chart context first, summarize what changed, cite visit history and other chart sources, and stay draft-only. Do not answer from uncited memory.',
+        ],
+        'latest_ambient_summary' => [
+            'title' => 'Latest Ambient Encounter Summary',
+            'style' => 'Summarize only the latest approved ambient encounter capture or AI-assisted visit review. Keep the summary role-appropriate, draft-only, and grounded in the retrieved ambient encounter context.',
+        ],
         'visit_summary' => [
             'title' => 'Visit Summary',
             'style' => 'Draft a concise visit summary using the chart context and any prior treatment-plan discussion in chat history. Keep it patient-safe, beta-labeled, and read-only.',
@@ -425,13 +550,17 @@ function aiCopilotModeCatalog(): array
 
 function aiCopilotResolveMode(string $requestedMode, string $message, array $validModes): string
 {
-    if ($requestedMode !== '' && isset($validModes[$requestedMode])) {
+    if ($requestedMode !== '' && $requestedMode !== 'general_assistant' && isset($validModes[$requestedMode])) {
         return $requestedMode;
     }
 
     $inferredMode = aiCopilotInferModeFromMessage($message);
-    if (isset($validModes[$inferredMode])) {
+    if (isset($validModes[$inferredMode]) && $inferredMode !== 'general_assistant') {
         return $inferredMode;
+    }
+
+    if ($requestedMode !== '' && isset($validModes[$requestedMode])) {
+        return $requestedMode;
     }
 
     return 'general_assistant';
@@ -441,6 +570,9 @@ function aiCopilotInferModeFromMessage(string $message): string
 {
     $value = strtolower($message);
 
+    if (preg_match('/summarize latest ambient encounter only|latest ambient encounter only|latest ambient encounter|ambient encounter only|latest ai-assisted visit review|latest approved ambient encounter/', $value)) {
+        return 'latest_ambient_summary';
+    }
     if (preg_match('/appointment|scheduled|check[- ]?in|reminder email|reminder message|reminder/', $value)) {
         if (preg_match('/contact|email|phone|confirm/', $value)) {
             return 'patient_contact';
@@ -459,8 +591,11 @@ function aiCopilotInferModeFromMessage(string $message): string
     if (preg_match('/claim|cpt|icd|payer|rejection|denial|resubmi|missing diagnosis link/', $value)) {
         return 'billing_review';
     }
-    if (preg_match('/billing|coding|coder|documentation needed before billing|payment due|health insurance|insurance on file|insurance/', $value)) {
+    if (preg_match('/billing|coding|coder|documentation needed before billing|payment due|next payment due|balance due|patient balance|insurance balance|what does .* owe|health insurance|insurance on file|insurance/', $value)) {
         return 'billing';
+    }
+    if (preg_match('/visit history|ai-assisted encounter|ambient encounter capture|what changed since|chart context|troponin|lab result|latest lab|what sources did you use|sources did you use/', $value)) {
+        return 'rag_chart_context';
     }
     if (preg_match('/visit summary|summary of visit/', $value)) {
         return 'visit_summary';
@@ -544,7 +679,9 @@ function aiCopilotBuildGeneralContext(string $mode, string $message): array
             'encounter' => [],
             'rows' => [],
             'claim' => [],
+            'payment_summary' => [],
         ],
+        'approved_ambient_visit' => [],
     ];
 }
 
@@ -690,6 +827,10 @@ function aiCopilotBuildContext(array $patient, string $mode): array
         ) ?: [];
     }
 
+    $normalizedPrimaryInsurance = aiCopilotNormalizeInsurance($primaryInsurance);
+    $normalizedBillingEncounter = aiCopilotNormalizeEncounter($billingEncounter);
+    $billingPaymentSummary = aiCopilotBuildBillingPaymentSummary($notes, $normalizedPrimaryInsurance, $normalizedBillingEncounter);
+
     return [
         'role' => 'doctor',
         'mode' => $mode,
@@ -716,44 +857,440 @@ function aiCopilotBuildContext(array $patient, string $mode): array
         'allergies' => array_map('aiCopilotNormalizeProblem', $allergies),
         'medications' => array_map('aiCopilotNormalizeMedication', $medications),
         'latest_vitals' => aiCopilotNormalizeVitals($latestVitals),
-        'primary_insurance' => aiCopilotNormalizeInsurance($primaryInsurance),
+        'primary_insurance' => $normalizedPrimaryInsurance,
         'billing' => [
-            'encounter' => aiCopilotNormalizeEncounter($billingEncounter),
+            'encounter' => $normalizedBillingEncounter,
             'rows' => array_map('aiCopilotNormalizeBillingRow', $billingRows),
             'claim' => aiCopilotNormalizeClaim($claimRow),
+            'payment_summary' => $billingPaymentSummary,
         ],
+        'approved_ambient_visit' => [],
     ];
 }
 
-function aiCopilotGenerateDraft(string $role, string $mode, string $message, array $chatHistory, array $context, array $modeConfig): array
+function aiCopilotBuildLlmContext(string $role, string $mode, array $context, string $message): array
+{
+    if (!aiCopilotContextHasPatient($context)) {
+        return [
+            'patient_selected' => false,
+            'role' => $role,
+            'mode' => $mode,
+            'available_sources' => ['General Prompt Context'],
+            'instruction' => 'No patient is selected. Treat the answer as general support only.',
+        ];
+    }
+
+    $facts = aiCopilotExtractClinicalFacts($context);
+    $ambientVisit = is_array($context['latest_approved_ambient_encounter'] ?? null)
+        ? $context['latest_approved_ambient_encounter']
+        : (is_array($context['approved_ambient_visit'] ?? null) ? $context['approved_ambient_visit'] : []);
+    $messageLower = strtolower($message);
+    $billingSummary = is_array($context['billing']['payment_summary'] ?? null) ? $context['billing']['payment_summary'] : [];
+
+    $base = [
+        'patient' => [
+            'name' => aiCopilotCleanText($context['patient']['name'] ?? ''),
+            'pubpid' => aiCopilotCleanText($context['patient']['pubpid'] ?? ''),
+        ],
+        'role' => $role,
+        'mode' => $mode,
+        'available_sources' => aiCopilotBuildSources($context, $mode),
+        'latest_visit_summary' => aiCopilotSummarizeEncounterForLlm($context['encounters'][0] ?? []),
+        'prior_visit_summary' => aiCopilotSummarizeEncounterForLlm($context['encounters'][1] ?? []),
+        'recent_note_summary' => aiCopilotBuildRecentNoteSummaryForLlm($facts),
+        'medications' => aiCopilotBuildMedicationRowsForLlm($context),
+        'problem_list' => array_slice(array_values(array_filter(array_map(static function ($problem) {
+            return aiCopilotCleanText((string) ($problem['title'] ?? ''));
+        }, $context['problems'] ?? []))), 0, 6),
+        'allergies' => array_slice(array_values(array_filter(array_map(static function ($allergy) {
+            return aiCopilotCleanText((string) ($allergy['title'] ?? ''));
+        }, $context['allergies'] ?? []))), 0, 6),
+        'latest_vitals_summary' => aiCopilotCleanText($facts['vitals_line'] ?? ''),
+        'recent_labs_summary' => aiCopilotCleanText($facts['recent_labs'] ?? ''),
+        'follow_up_considerations' => aiCopilotCleanText($facts['follow_up_considerations'] ?? ''),
+        'care_preferences' => aiCopilotExtractCarePreferencesForLlm($context),
+        'immunization_review_note' => aiCopilotBuildImmunizationReviewForLlm($context),
+        'latest_approved_ambient_encounter' => aiCopilotBuildAmbientVisitContextForLlm($ambientVisit, $role),
+        'billing_context' => aiCopilotBuildBillingContextForLlm($context),
+    ];
+
+    if (str_contains($messageLower, 'troponin')) {
+        $base['missing_data_instruction'] = aiCopilotContextContainsKeywords($context, ['troponin'])
+            ? 'If troponin is present in retrieved context, report only the documented value and source context.'
+            : 'Troponin is not present in the retrieved context. Explicitly say troponin was not found, do not invent a value, mention other available lab context only if present, and suggest checking the source labs or chart.';
+    }
+
+    if (preg_match('/what changed since the last visit|what changed since last visit|ai-assisted encounter|ambient encounter capture|visit history/', $messageLower) === 1) {
+        $base['comparison_instruction'] = 'Compare the latest visit summary with the prior visit summary and the latest approved ambient encounter summary when present. State clearly which comparison elements are missing.';
+    }
+
+    if (preg_match('/payment due|patient balance|insurance balance|what does .* owe|insurance on file/', $messageLower) === 1) {
+        $base['billing_instruction'] = 'Answer with billing and insurance context only: due date, patient balance, insurance balance, total balance, payer, plan, billing provider, and payment note when present.';
+    }
+
+    $compact = match ($mode) {
+        'billing', 'billing_review' => [
+            'patient' => $base['patient'],
+            'role' => $role,
+            'mode' => $mode,
+            'available_sources' => $base['available_sources'],
+            'billing_context' => $base['billing_context'],
+            'latest_visit_summary' => $base['latest_visit_summary'],
+            'billing_instruction' => $base['billing_instruction'] ?? null,
+        ],
+        'latest_ambient_summary' => [
+            'patient' => $base['patient'],
+            'role' => $role,
+            'mode' => $mode,
+            'available_sources' => ['Patient Chart Context', 'Latest Approved Ambient Encounter Capture', 'AI-Assisted Visit Review', 'Ambient Encounter Capture'],
+            'latest_approved_ambient_encounter' => $base['latest_approved_ambient_encounter'],
+            'care_preferences' => $base['care_preferences'],
+            'billing_context' => in_array($role, ['doctor', 'billing'], true) ? $base['billing_context'] : [],
+            'instruction' => 'Summarize only the latest approved ambient encounter. Do not expand older visits. Keep the answer role-appropriate and draft-only.',
+        ],
+        'rag_chart_context' => [
+            'patient' => $base['patient'],
+            'role' => $role,
+            'mode' => $mode,
+            'available_sources' => $base['available_sources'],
+            'latest_visit_summary' => $base['latest_visit_summary'],
+            'prior_visit_summary' => $base['prior_visit_summary'],
+            'recent_note_summary' => $base['recent_note_summary'],
+            'medications' => $base['medications'],
+            'problem_list' => $base['problem_list'],
+            'latest_vitals_summary' => $base['latest_vitals_summary'],
+            'recent_labs_summary' => $base['recent_labs_summary'],
+            'care_preferences' => $base['care_preferences'],
+            'latest_approved_ambient_encounter' => $base['latest_approved_ambient_encounter'],
+            'billing_context' => preg_match('/insurance|billing|payment|payer/', $messageLower) === 1 ? $base['billing_context'] : [],
+            'comparison_instruction' => $base['comparison_instruction'] ?? null,
+            'missing_data_instruction' => $base['missing_data_instruction'] ?? null,
+        ],
+        'medication_info' => [
+            'patient' => $base['patient'],
+            'role' => $role,
+            'mode' => $mode,
+            'available_sources' => $base['available_sources'],
+            'medications' => $base['medications'],
+            'problem_list' => $base['problem_list'],
+            'allergies' => $base['allergies'],
+            'latest_vitals_summary' => $base['latest_vitals_summary'],
+            'recent_labs_summary' => $base['recent_labs_summary'],
+            'follow_up_considerations' => $base['follow_up_considerations'],
+            'care_preferences' => $base['care_preferences'],
+            'latest_approved_ambient_encounter' => $base['latest_approved_ambient_encounter'],
+            'missing_data_instruction' => $base['missing_data_instruction'] ?? null,
+        ],
+        'treatment_plan', 'clinical_notes', 'follow_up', 'visit_summary', 'patient_education', 'differential_diagnosis' => [
+            'patient' => $base['patient'],
+            'role' => $role,
+            'mode' => $mode,
+            'available_sources' => $base['available_sources'],
+            'latest_visit_summary' => $base['latest_visit_summary'],
+            'prior_visit_summary' => $base['prior_visit_summary'],
+            'recent_note_summary' => $base['recent_note_summary'],
+            'problem_list' => $base['problem_list'],
+            'medications' => $base['medications'],
+            'latest_vitals_summary' => $base['latest_vitals_summary'],
+            'recent_labs_summary' => $base['recent_labs_summary'],
+            'follow_up_considerations' => $base['follow_up_considerations'],
+            'care_preferences' => $base['care_preferences'],
+            'immunization_review_note' => $base['immunization_review_note'],
+            'latest_approved_ambient_encounter' => $base['latest_approved_ambient_encounter'],
+            'comparison_instruction' => $base['comparison_instruction'] ?? null,
+        ],
+        default => [
+            'patient' => $base['patient'],
+            'role' => $role,
+            'mode' => $mode,
+            'available_sources' => $base['available_sources'],
+            'latest_visit_summary' => $base['latest_visit_summary'],
+            'recent_note_summary' => $base['recent_note_summary'],
+            'medications' => $base['medications'],
+            'problem_list' => $base['problem_list'],
+            'latest_vitals_summary' => $base['latest_vitals_summary'],
+            'recent_labs_summary' => $base['recent_labs_summary'],
+            'billing_context' => preg_match('/payment|billing|insurance|payer/', $messageLower) === 1 ? $base['billing_context'] : [],
+            'latest_approved_ambient_encounter' => $base['latest_approved_ambient_encounter'],
+            'missing_data_instruction' => $base['missing_data_instruction'] ?? null,
+        ],
+    };
+
+    return aiCopilotFilterEmptyLlmValue($compact);
+}
+
+function aiCopilotBuildMedicationRowsForLlm(array $context): array
+{
+    $rows = aiCopilotBuildMedicationInformationRows($context);
+    return array_slice(array_values(array_filter(array_map('aiCopilotCleanText', $rows))), 0, 6);
+}
+
+function aiCopilotSummarizeEncounterForLlm(array $encounter): string
+{
+    if ($encounter === []) {
+        return '';
+    }
+
+    $parts = array_filter([
+        aiCopilotCleanText((string) ($encounter['date'] ?? '')),
+        aiCopilotCleanText((string) ($encounter['reason'] ?? '')),
+        aiCopilotCleanText((string) ($encounter['billing_note'] ?? '')),
+    ], static fn($value) => $value !== '');
+
+    return aiCopilotCleanText(implode(' | ', $parts));
+}
+
+function aiCopilotBuildRecentNoteSummaryForLlm(array $facts): array
+{
+    return aiCopilotFilterEmptyLlmValue([
+        'subjective' => aiCopilotCleanText($facts['recent_note_subjective'] ?? ''),
+        'assessment' => aiCopilotCleanText($facts['recent_note_assessment'] ?? ''),
+        'plan' => aiCopilotCleanText($facts['recent_note_plan'] ?? ''),
+    ]);
+}
+
+function aiCopilotExtractCarePreferencesForLlm(array $context): array
+{
+    $items = [];
+    if (aiCopilotContextContainsKeywords($context, ['afternoon phone reminders'])) {
+        $items[] = 'Prefers afternoon phone reminders.';
+    }
+    if (aiCopilotContextContainsKeywords($context, ['written medication instructions'])) {
+        $items[] = 'Prefers written medication instructions.';
+    }
+    if (aiCopilotContextContainsKeywords($context, ['daughter', 'care support contact'])) {
+        $items[] = 'Requested daughter as a care support contact.';
+    }
+
+    return array_slice($items, 0, 4);
+}
+
+function aiCopilotBuildImmunizationReviewForLlm(array $context): string
+{
+    if (!aiCopilotContextContainsKeywords($context, ['vaccine', 'immunization', 'seasonal vaccine', 'flu'])) {
+        return '';
+    }
+
+    return 'Seasonal vaccine or immunization review was mentioned in the retrieved chart context and should be verified before updating the record.';
+}
+
+function aiCopilotBuildAmbientVisitContextForLlm(array $ambientVisit, string $role = 'doctor'): array
+{
+    if ($ambientVisit === []) {
+        return [];
+    }
+
+    $resolvedRole = in_array($role, ['doctor', 'nurse', 'billing', 'front_desk'], true) ? $role : 'doctor';
+    $approvedNotes = array_slice(array_values(array_filter(array_map('aiCopilotCleanText', $ambientVisit['approved_notes'] ?? []))), 0, 5);
+
+    if ($resolvedRole === 'front_desk') {
+        $approvedNotes = aiCopilotAmbientNotesMatching($ambientVisit, [
+            'insurance',
+            'appointment',
+            'reminder',
+            'care preference',
+            'written medication instructions',
+            'afternoon phone reminders',
+        ]);
+    } elseif ($resolvedRole === 'billing') {
+        $approvedNotes = aiCopilotAmbientNotesMatching($ambientVisit, [
+            'insurance',
+            'verification',
+            'appointment',
+        ]);
+    } elseif ($resolvedRole === 'nurse') {
+        $approvedNotes = aiCopilotAmbientNotesMatching($ambientVisit, [
+            'medication support',
+            'care preference',
+            'care team',
+            'appointment',
+            'reminder',
+            'immunization',
+            'insurance',
+        ]);
+    }
+
+    return aiCopilotFilterEmptyLlmValue([
+        'approved_at' => aiCopilotCleanText((string) ($ambientVisit['approved_at_label'] ?? $ambientVisit['approved_at'] ?? '')),
+        'title' => aiCopilotCleanText((string) ($ambientVisit['title'] ?? 'AI-Assisted Visit Review')),
+        'visit_type' => aiCopilotCleanText((string) ($ambientVisit['visit_type'] ?? 'Ambient Encounter Capture')),
+        'summary' => aiCopilotCleanText((string) ($ambientVisit['summary'] ?? '')),
+        'approved_notes' => $approvedNotes,
+        'review_status' => aiCopilotCleanText((string) ($ambientVisit['review_status'] ?? '')),
+    ]);
+}
+
+function aiCopilotBuildBillingContextForLlm(array $context): array
+{
+    $paymentSummary = is_array($context['billing']['payment_summary'] ?? null) ? $context['billing']['payment_summary'] : [];
+    $insurance = is_array($context['primary_insurance'] ?? null) ? $context['primary_insurance'] : [];
+    $claim = is_array($context['billing']['claim'] ?? null) ? $context['billing']['claim'] : [];
+
+    return aiCopilotFilterEmptyLlmValue([
+        'payment_summary' => [
+            'next_payment_due_date' => aiCopilotCleanText((string) ($paymentSummary['next_payment_due_date'] ?? '')),
+            'patient_balance_due' => aiCopilotCleanText((string) ($paymentSummary['patient_balance_due'] ?? '')),
+            'insurance_balance_due' => aiCopilotCleanText((string) ($paymentSummary['insurance_balance_due'] ?? '')),
+            'total_balance_due' => aiCopilotCleanText((string) ($paymentSummary['total_balance_due'] ?? '')),
+            'payer' => aiCopilotCleanText((string) ($paymentSummary['payer'] ?? $insurance['carrier'] ?? '')),
+            'plan_name' => aiCopilotCleanText((string) ($paymentSummary['plan_name'] ?? $insurance['plan_name'] ?? '')),
+            'billing_provider' => aiCopilotCleanText((string) ($paymentSummary['billing_provider'] ?? '')),
+            'payment_note' => aiCopilotCleanText((string) ($paymentSummary['payment_note'] ?? '')),
+            'insurance_note' => aiCopilotCleanText((string) ($paymentSummary['insurance_note'] ?? '')),
+        ],
+        'claim_status' => isset($claim['status']) ? (string) $claim['status'] : '',
+        'insurance_label' => aiCopilotCleanText((string) ($insurance['label'] ?? '')),
+    ]);
+}
+
+function aiCopilotFilterEmptyLlmValue(mixed $value): mixed
+{
+    if (is_array($value)) {
+        $filtered = [];
+        foreach ($value as $key => $item) {
+            $normalized = aiCopilotFilterEmptyLlmValue($item);
+            if ($normalized === null) {
+                continue;
+            }
+            if (is_array($normalized) && $normalized === []) {
+                continue;
+            }
+            if (is_string($normalized) && $normalized === '') {
+                continue;
+            }
+            $filtered[$key] = $normalized;
+        }
+        return $filtered;
+    }
+
+    if (is_string($value)) {
+        return aiCopilotCleanText($value);
+    }
+
+    return $value;
+}
+
+function aiCopilotBuildLlmRequestInstruction(string $role, string $mode, array $context, string $message): string
+{
+    $instructions = [
+        'Answer the user request first using the compact retrieved chart context.',
+        'If the requested data exists in context, include it explicitly in the answer body.',
+        'If requested data is missing, say it was not found in the retrieved OpenEMR context and do not invent a value.',
+        'Keep the answer draft-only and suitable for human review.',
+        'Do not dump the full chart JSON or reference fields not present in the compact context.',
+    ];
+
+    $messageLower = strtolower($message);
+    if ($mode === 'medication_info') {
+        $instructions[] = 'If medications are present, include them explicitly under Current Medication Information.';
+    }
+    if ($mode === 'treatment_plan') {
+        $instructions[] = 'Use Draft Treatment Plan as a section title and base the plan only on the retrieved context.';
+    }
+    if ($mode === 'latest_ambient_summary') {
+        $instructions[] = 'Summarize only the latest approved ambient encounter or AI-assisted visit review. Do not expand older encounters or appointments unless they are explicitly part of the latest approved ambient summary.';
+    }
+    if ($mode === 'rag_chart_context' || preg_match('/what changed since the last visit|visit history|ai-assisted encounter|ambient encounter capture/', $messageLower) === 1) {
+        $instructions[] = 'Use RAG Visit History Summary as a section title and compare only the visit-history context that is provided.';
+    }
+    if (str_contains($messageLower, 'troponin')) {
+        $instructions[] = 'If troponin is not present in retrieved context, explicitly say Troponin was not found, mention any other available lab context only if present, and suggest checking the source chart or labs.';
+    }
+    if (preg_match('/payment due|patient balance|insurance balance|what does .* owe|insurance on file/', $messageLower) === 1) {
+        $instructions[] = 'For billing answers, include due date, balances, payer, plan, billing provider, and payment note when present. Do not include diagnosis, medications, labs, or treatment plan details for billing-focused answers.';
+    }
+
+    return implode(' ', $instructions);
+}
+
+function aiCopilotBuildLlmChatHistory(array $chatHistory): array
+{
+    $trimmedHistory = array_slice($chatHistory, -4);
+    $normalized = [];
+
+    foreach ($trimmedHistory as $historyMessage) {
+        if (!is_array($historyMessage)) {
+            continue;
+        }
+
+        $role = $historyMessage['role'] ?? '';
+        $content = aiCopilotCleanText((string) ($historyMessage['content'] ?? ''));
+        if (!in_array($role, ['user', 'assistant'], true) || $content === '') {
+            continue;
+        }
+
+        if (function_exists('mb_substr')) {
+            $content = mb_substr($content, 0, 500);
+        } else {
+            $content = substr($content, 0, 500);
+        }
+
+        $normalized[] = [
+            'role' => $role,
+            'content' => $content,
+        ];
+    }
+
+    return $normalized;
+}
+
+function aiCopilotGenerateDraft(string $requestId, string $role, string $mode, string $message, array $chatHistory, array $context, array $modeConfig): array
 {
     $apiKey = aiCopilotReadEnv('OPENAI_API_KEY');
+    $openAiConfigured = $apiKey !== '';
     $fallbackReason = 'missing_openai_key';
-    if ($apiKey !== '') {
-        $openAiResponse = aiCopilotGenerateOpenAiDraft($apiKey, $role, $mode, $message, $chatHistory, $context, $modeConfig);
-        if ($openAiResponse !== []) {
+    $errorCategory = null;
+    $openAiAttempt = [];
+    if ($openAiConfigured) {
+        $openAiAttempt = aiCopilotGenerateOpenAiDraft($requestId, $apiKey, $role, $mode, $message, $chatHistory, $context, $modeConfig);
+        if (($openAiAttempt['ok'] ?? false) === true && !empty($openAiAttempt['response'])) {
+            $openAiResponse = $openAiAttempt['response'];
             $openAiResponse['engine'] = 'openai';
+            $openAiResponse['provider'] = 'openai';
+            $openAiResponse['openai_configured'] = true;
             $openAiResponse['fallback_reason'] = null;
-            return $openAiResponse;
+            $openAiResponse['openai_error_category'] = null;
+            $openAiResponse['openai_http_status'] = null;
+            $openAiResponse['openai_error_message_safe'] = null;
+            return aiCopilotEnhanceDraftResponse($openAiResponse, $role, $mode, $message, $context);
         }
         $fallbackReason = 'openai_error';
+        $errorCategory = $openAiAttempt['error_category'] ?? 'unknown_openai_error';
+        aiCopilotLogOpenAiFailure(
+            $requestId,
+            $role,
+            $mode,
+            aiCopilotCleanText((string) ($openAiAttempt['model'] ?? '')),
+            $errorCategory,
+            isset($openAiAttempt['http_status']) && is_numeric($openAiAttempt['http_status']) ? (int) $openAiAttempt['http_status'] : null
+        );
     }
 
     $fallbackResponse = aiCopilotGenerateFallbackDraft($role, $mode, $message, $context);
     $fallbackResponse['engine'] = 'fallback';
+    $fallbackResponse['provider'] = 'local_fallback';
+    $fallbackResponse['model'] = null;
+    $fallbackResponse['openai_configured'] = $openAiConfigured;
+    $fallbackResponse['token_usage'] = null;
+    $fallbackResponse['estimated_cost_usd'] = null;
+    $fallbackResponse['cost_note'] = null;
     $fallbackResponse['fallback_reason'] = $fallbackReason;
-    return $fallbackResponse;
+    $fallbackResponse['error_category'] = $errorCategory;
+    $fallbackResponse['openai_error_category'] = $openAiAttempt['error_category'] ?? null;
+    $fallbackResponse['openai_http_status'] = $openAiAttempt['http_status'] ?? null;
+    $fallbackResponse['openai_error_message_safe'] = $openAiAttempt['error_message_safe'] ?? null;
+    return aiCopilotEnhanceDraftResponse($fallbackResponse, $role, $mode, $message, $context);
 }
 
-function aiCopilotGenerateOpenAiDraft(string $apiKey, string $role, string $mode, string $message, array $chatHistory, array $context, array $modeConfig): array
+function aiCopilotGenerateOpenAiDraft(string $requestId, string $apiKey, string $role, string $mode, string $message, array $chatHistory, array $context, array $modeConfig): array
 {
-    if (!function_exists('curl_init')) {
-        return [];
-    }
-
     $model = aiCopilotReadEnv('OPENAI_MODEL');
     if ($model === '') {
         $model = 'gpt-4o-mini';
+    }
+
+    if (!function_exists('curl_init')) {
+        return aiCopilotBuildOpenAiFailure('curl_unavailable', $model);
     }
 
     $baseUrl = aiCopilotReadEnv('OPENAI_BASE_URL');
@@ -761,10 +1298,17 @@ function aiCopilotGenerateOpenAiDraft(string $apiKey, string $role, string $mode
         $baseUrl = 'https://api.openai.com/v1';
     }
 
+    $llmContext = aiCopilotBuildLlmContext($role, $mode, $context, $message);
+    $llmInstruction = aiCopilotBuildLlmRequestInstruction($role, $mode, $context, $message);
+    $llmContextJson = json_encode($llmContext, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if (!is_string($llmContextJson) || $llmContextJson === '') {
+        return aiCopilotBuildOpenAiFailure('response_parse_error', $model);
+    }
+
     $messages = [
         [
             'role' => 'system',
-            'content' => 'You are Medical Co-Pilot, a beta OpenEMR demo assistant for read-only clinical decision support. Use the user message as the main instruction. Stay grounded in the supplied chart context. Never claim final diagnosis certainty. Never write to the chart, submit orders, prescribe, finalize diagnosis, submit claims, or suggest upcoding. If no patient is selected, say the answer is general only.',
+            'content' => 'You are Medical Co-Pilot, a beta OpenEMR demo assistant for read-only clinical decision support. Use the user message as the main instruction and answer the request first. Stay grounded in the supplied chart context JSON. If requested data exists in context, include it visibly. If requested data is missing, say it is missing and suggest checking the source chart or labs. Do not let safety language replace the answer body. Never claim final diagnosis certainty. Never write to the chart, submit orders, prescribe, finalize diagnosis, submit claims, or suggest upcoding. If no patient is selected, say the answer is general only.',
         ],
         [
             'role' => 'system',
@@ -780,11 +1324,15 @@ function aiCopilotGenerateOpenAiDraft(string $apiKey, string $role, string $mode
         ],
         [
             'role' => 'system',
-            'content' => 'Chart/demo context JSON: ' . json_encode($context, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            'content' => 'Compact chart/demo context JSON: ' . $llmContextJson,
+        ],
+        [
+            'role' => 'system',
+            'content' => 'Additional request instruction: ' . $llmInstruction,
         ],
     ];
 
-    foreach ($chatHistory as $historyMessage) {
+    foreach (aiCopilotBuildLlmChatHistory($chatHistory) as $historyMessage) {
         $messages[] = $historyMessage;
     }
 
@@ -802,7 +1350,7 @@ function aiCopilotGenerateOpenAiDraft(string $apiKey, string $role, string $mode
 
     $curl = curl_init(rtrim($baseUrl, '/') . '/chat/completions');
     if ($curl === false) {
-        return [];
+        return aiCopilotBuildOpenAiFailure('curl_error', $model);
     }
 
     curl_setopt_array($curl, [
@@ -817,33 +1365,159 @@ function aiCopilotGenerateOpenAiDraft(string $apiKey, string $role, string $mode
     ]);
 
     $responseBody = curl_exec($curl);
+    $curlError = curl_error($curl);
     $httpCode = (int) curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
     curl_close($curl);
 
-    if (!is_string($responseBody) || $responseBody === '' || $httpCode >= 400) {
-        return [];
+    if ($responseBody === false || $curlError !== '') {
+        return aiCopilotBuildOpenAiFailure('curl_error', $model);
+    }
+
+    if (!is_string($responseBody) || $responseBody === '') {
+        return aiCopilotBuildOpenAiFailure('missing_content', $model);
+    }
+
+    if ($httpCode >= 400) {
+        return aiCopilotBuildOpenAiFailure(
+            aiCopilotDetectOpenAiErrorCategory($responseBody, $httpCode),
+            $model,
+            $httpCode
+        );
     }
 
     $decoded = json_decode($responseBody, true);
+    if (!is_array($decoded)) {
+        return aiCopilotBuildOpenAiFailure('invalid_json', $model, $httpCode > 0 ? $httpCode : null);
+    }
+
     $assistantText = $decoded['choices'][0]['message']['content'] ?? '';
     if (!is_string($assistantText) || trim($assistantText) === '') {
+        return aiCopilotBuildOpenAiFailure('missing_content', aiCopilotCleanText((string) ($decoded['model'] ?? $model)), $httpCode > 0 ? $httpCode : null);
+    }
+
+    $structured = aiCopilotDecodeStructuredAssistantResponse($assistantText, $mode);
+    if ($structured === []) {
+        $structured = aiCopilotSalvagePlainTextAssistantResponse($assistantText);
+        if ($structured === []) {
+            return aiCopilotBuildOpenAiFailure('response_parse_error', aiCopilotCleanText((string) ($decoded['model'] ?? $model)), $httpCode > 0 ? $httpCode : null);
+        }
+        $structured['openai_response_format'] = 'plain_text_salvaged';
+    } else {
+        $structured['openai_response_format'] = 'structured_json';
+    }
+
+    $structured['model'] = aiCopilotCleanText((string) ($decoded['model'] ?? $model));
+    $structured['provider'] = 'openai';
+    $structured['openai_configured'] = true;
+    $structured['token_usage'] = aiCopilotNormalizeTokenUsage($decoded['usage'] ?? null);
+    $structured['estimated_cost_usd'] = null;
+    $structured['cost_note'] = $structured['token_usage'] !== null ? 'Token usage captured; cost estimate not configured.' : null;
+
+    return [
+        'ok' => true,
+        'response' => $structured,
+    ];
+}
+
+function aiCopilotSalvagePlainTextAssistantResponse(string $assistantText): array
+{
+    $text = aiCopilotCleanMultilineText($assistantText);
+    if ($text === '') {
         return [];
     }
 
-    return aiCopilotDecodeStructuredAssistantResponse($assistantText, $mode);
+    return [
+        'answer' => $text,
+        'sections' => [],
+        'tags' => [],
+    ];
+}
+
+function aiCopilotBuildOpenAiFailure(string $errorCategory, string $model, ?int $httpStatus = null): array
+{
+    $category = in_array($errorCategory, [
+        'curl_unavailable',
+        'curl_error',
+        'http_error',
+        'invalid_json',
+        'missing_content',
+        'response_parse_error',
+        'context_too_large',
+        'unknown_openai_error',
+    ], true) ? $errorCategory : 'unknown_openai_error';
+
+    return [
+        'ok' => false,
+        'error_category' => $category,
+        'http_status' => $httpStatus,
+        'error_message_safe' => aiCopilotBuildOpenAiSafeErrorMessage($category, $httpStatus),
+        'model' => $model,
+    ];
+}
+
+function aiCopilotDetectOpenAiErrorCategory(string $responseBody, int $httpStatus): string
+{
+    $decoded = json_decode($responseBody, true);
+    if (!is_array($decoded)) {
+        return $httpStatus === 413 ? 'context_too_large' : 'http_error';
+    }
+
+    $message = strtolower(aiCopilotCleanText((string) ($decoded['error']['message'] ?? '')));
+    $code = strtolower(aiCopilotCleanText((string) ($decoded['error']['code'] ?? '')));
+
+    if (
+        $httpStatus === 413
+        || str_contains($code, 'context_length')
+        || str_contains($message, 'maximum context length')
+        || str_contains($message, 'context length')
+        || str_contains($message, 'too many tokens')
+    ) {
+        return 'context_too_large';
+    }
+
+    return 'http_error';
+}
+
+function aiCopilotBuildOpenAiSafeErrorMessage(string $errorCategory, ?int $httpStatus = null): string
+{
+    return match ($errorCategory) {
+        'curl_unavailable' => 'cURL is unavailable in the PHP runtime, so OpenAI could not be called.',
+        'curl_error' => 'The OpenAI request failed during transport before a valid response was received.',
+        'http_error' => 'OpenAI returned an HTTP ' . ($httpStatus ?? 'error') . ' response while generating this draft.',
+        'invalid_json' => 'OpenAI returned a response that could not be parsed as JSON.',
+        'missing_content' => 'OpenAI returned no assistant content for this request.',
+        'response_parse_error' => 'OpenAI returned content that did not match the expected structured response format.',
+        'context_too_large' => 'OpenAI rejected the request because the prompt context exceeded the provider limit.',
+        default => 'OpenAI failed for an unknown reason while generating this draft.',
+    };
+}
+
+function aiCopilotLogOpenAiFailure(string $requestId, string $role, string $mode, string $model, string $errorCategory, ?int $httpStatus = null): void
+{
+    error_log(sprintf(
+        '[OpenEMR Clinical Co-Pilot] openai_failure request_id=%s role=%s mode=%s model=%s error_category=%s http_status=%s',
+        $requestId,
+        $role,
+        $mode,
+        $model !== '' ? $model : 'unknown_model',
+        $errorCategory !== '' ? $errorCategory : 'unknown_openai_error',
+        $httpStatus !== null ? (string) $httpStatus : 'null'
+    ));
 }
 
 function aiCopilotBuildStructuredFormatInstruction(string $mode): string
 {
     $instruction = match ($mode) {
         'differential_diagnosis' => 'Return JSON only with keys: answer, sections, tags. Use sections in this order: Likely considerations (tone neutral), Red flags (tone red), Key gaps (tone yellow), Next steps / clarification (tone neutral). Each section must contain an items array of short bullet strings.',
-        'medication_info' => 'Return JSON only with keys: answer, sections, tags. Use sections in this order: Current medication picture, Safety checks, Monitoring considerations, Patient counseling points. Use tone neutral unless a clear caution deserves tone yellow.',
+        'medication_info' => 'Return JSON only with keys: answer, sections, tags. Use sections in this order: Current Medication Information, Clinical review considerations, Monitoring considerations, Patient counseling points. The Current Medication Information section must reflect retrieved medication rows from chart context when they exist. Use tone neutral unless a clear caution deserves tone yellow.',
         'clinical_notes' => 'Return JSON only with keys: answer, sections, tags. Use sections in this order: Draft note, Subjective, Objective, Assessment, Plan. Keep content concise and chart-style.',
-        'treatment_plan' => 'Return JSON only with keys: answer, sections, tags. Use sections in this order: Immediate priorities, Suggested workup or monitoring, Patient education, Follow-up, Safety precautions.',
+        'treatment_plan' => 'Return JSON only with keys: answer, sections, tags. Use sections in this order: Draft Treatment Plan, Monitoring and safety checks, Patient education considerations, Follow-up considerations, Safety precautions.',
         'billing' => 'Return JSON only with keys: answer, sections, tags. Use sections in this order: Billing documentation summary, Possible coding considerations, Missing documentation, Risk / compliance reminders.',
         'follow_up' => 'Return JSON only with keys: answer, sections, tags. Use sections in this order: Follow-up timeframe, What to monitor, Patient instructions, Escalation precautions, Care coordination.',
         'visit_summary' => 'Return JSON only with keys: answer, sections, tags. Use sections in this order: Visit summary, Key concerns addressed, Plan discussed, Follow-up instructions, Patient-friendly explanation.',
         'patient_education' => 'Return JSON only with keys: answer, sections, tags. Use sections in this order: Patient-friendly explanation, Safety reminders.',
+        'rag_chart_context' => 'Return JSON only with keys: answer, sections, tags. Use sections in this order: RAG Visit History Summary, Recommended clinician review points, Retrieval notes. Use retrieved chart context only and do not invent facts.',
+        'latest_ambient_summary' => 'Return JSON only with keys: answer, sections, tags. Use sections appropriate to role and the latest approved ambient encounter only. For doctor, begin with Latest Ambient Encounter Summary. For nurse, focus on care coordination, adherence, and follow-up. For billing, focus on insurance or documentation-safe follow-up only. For front desk, focus on minimum-necessary administrative follow-up only.',
         'billing_review' => 'Return JSON only with keys: answer, sections, tags. Use sections in this order: Plain-language issue, What to check first, Guardrails.',
         'appointment_info' => 'Return JSON only with keys: answer, sections, tags. Use sections in this order: Appointment details, Check-in instructions.',
         'patient_contact' => 'Return JSON only with keys: answer, sections, tags. Use sections in this order: Contact details, Contact workflow reminders.',
@@ -864,6 +1538,15 @@ function aiCopilotDecodeStructuredAssistantResponse(string $assistantText, strin
     }
 
     $decoded = json_decode($candidate, true);
+    if (!is_array($decoded)) {
+        $jsonStart = strpos($candidate, '{');
+        $jsonEnd = strrpos($candidate, '}');
+        if ($jsonStart !== false && $jsonEnd !== false && $jsonEnd > $jsonStart) {
+            $fragment = substr($candidate, $jsonStart, $jsonEnd - $jsonStart + 1);
+            $decoded = json_decode($fragment, true);
+        }
+    }
+
     if (!is_array($decoded)) {
         return [];
     }
@@ -932,6 +1615,776 @@ function aiCopilotNormalizeStructuredResponse(array $response, string $mode): ar
     ];
 }
 
+function aiCopilotAttachClientAmbientVisitContext(array $context, mixed $value, string $role): array
+{
+    $ambientVisit = aiCopilotNormalizeAmbientVisitContext($value);
+    if ($ambientVisit === []) {
+        return $context;
+    }
+
+    $context['approved_ambient_visit'] = $ambientVisit;
+    $context['latest_approved_ambient_encounter'] = $ambientVisit;
+    return $context;
+}
+
+function aiCopilotNormalizeAmbientVisitContext(mixed $value): array
+{
+    if (!is_array($value)) {
+        return [];
+    }
+
+    $approvedNotes = [];
+    foreach (($value['approvedNotes'] ?? []) as $note) {
+        $noteText = aiCopilotCleanText((string) $note);
+        if ($noteText !== '') {
+            $approvedNotes[] = $noteText;
+        }
+    }
+
+    $summary = aiCopilotCleanText((string) ($value['summary'] ?? ''));
+    if ($summary === '' && $approvedNotes === []) {
+        return [];
+    }
+
+    $badges = [];
+    foreach (($value['badges'] ?? []) as $badge) {
+        $badgeText = aiCopilotCleanText((string) $badge);
+        if ($badgeText !== '') {
+            $badges[] = $badgeText;
+        }
+    }
+
+    $tableRow = is_array($value['tableRow'] ?? null) ? $value['tableRow'] : [];
+
+    return [
+        'id' => aiCopilotCleanText((string) ($value['id'] ?? '')),
+        'draft_id' => aiCopilotCleanText((string) ($value['draftId'] ?? '')),
+        'approved_at' => aiCopilotCleanText((string) ($value['approvedAt'] ?? '')),
+        'approved_at_label' => aiCopilotCleanText((string) ($value['approvedAtLabel'] ?? '')),
+        'title' => aiCopilotCleanText((string) ($value['title'] ?? 'AI-Assisted Visit Review')),
+        'visit_type' => aiCopilotCleanText((string) ($value['visitType'] ?? 'Ambient Encounter Capture')),
+        'summary' => $summary,
+        'approved_notes' => array_slice($approvedNotes, 0, 12),
+        'badges' => array_slice($badges, 0, 6),
+        'table_row' => [
+            'date' => aiCopilotCleanText((string) ($tableRow['date'] ?? '')),
+            'issue' => aiCopilotCleanText((string) ($tableRow['issue'] ?? '')),
+            'reason' => aiCopilotCleanText((string) ($tableRow['reason'] ?? '')),
+            'form' => aiCopilotCleanText((string) ($tableRow['form'] ?? '')),
+            'provider' => aiCopilotCleanText((string) ($tableRow['provider'] ?? '')),
+            'billing' => aiCopilotCleanText((string) ($tableRow['billing'] ?? '')),
+            'insurance' => aiCopilotCleanText((string) ($tableRow['insurance'] ?? '')),
+        ],
+        'approved_item_count' => isset($value['approvedItemCount']) && is_numeric($value['approvedItemCount']) ? (int) $value['approvedItemCount'] : count($approvedNotes),
+        'review_status' => aiCopilotCleanText((string) ($value['reviewStatus'] ?? 'Clinician Reviewed')),
+        'consent_confirmed' => !empty($value['consentConfirmed']),
+        'source' => aiCopilotCleanText((string) ($value['source'] ?? 'Consent-Based AI Visit Capture')),
+    ];
+}
+
+function aiCopilotEnhanceDraftResponse(array $draft, string $role, string $mode, string $message, array $context): array
+{
+    if (!aiCopilotContextHasPatient($context)) {
+        return $draft;
+    }
+
+    $normalizedMessage = strtolower($message);
+
+    if ($role === 'front_desk' && preg_match('/\b(everything about|all chart data|full history|entire chart)\b/i', $message) === 1) {
+        return $draft;
+    }
+
+    if (
+        $role === 'doctor'
+        && ($draft['engine'] ?? '') === 'fallback'
+        && preg_match('/(visit history|what changed since).*(ai-assisted encounter|ambient encounter capture)|last ai-assisted encounter/', $normalizedMessage) === 1
+    ) {
+        return aiCopilotBuildFallbackRagVisitHistoryResponse($context, $draft);
+    }
+
+    if ($role === 'doctor' && preg_match('/what sources did you use|sources did you use|retrieval notes|what chart context did you use/', $normalizedMessage) === 1) {
+        return aiCopilotBuildSourcesExplanationResponse($context, $draft);
+    }
+
+    if (
+        $mode === 'latest_ambient_summary'
+        || preg_match('/summarize latest ambient encounter only|latest ambient encounter only|latest ambient encounter|ambient encounter only|latest ai-assisted visit review|latest approved ambient encounter/', $normalizedMessage) === 1
+    ) {
+        return aiCopilotBuildLatestAmbientSummaryResponse($context, $draft, $role);
+    }
+
+    if ($role === 'doctor' && preg_match('/what changed since the last visit|what changed since last visit/', $normalizedMessage) === 1) {
+        return aiCopilotBuildWhatChangedSinceLastVisitResponse($context, $draft);
+    }
+
+    if (
+        $role === 'doctor'
+        && str_contains($normalizedMessage, 'troponin')
+        && !aiCopilotContextContainsKeywords($context, ['troponin'])
+    ) {
+        return aiCopilotBuildMissingLabResultResponse($context, 'Troponin', $draft);
+    }
+
+    if ($role === 'doctor' && $mode === 'medication_info') {
+        return aiCopilotEnsureMedicationSummaryResponse($draft, $context);
+    }
+
+    if ($role === 'doctor' && $mode === 'treatment_plan') {
+        return aiCopilotEnsureTreatmentPlanResponse($draft, $context, $message);
+    }
+
+    if ($role === 'doctor' && $mode === 'rag_chart_context') {
+        return aiCopilotEnsureRagChartContextResponse($draft, $context, $message);
+    }
+
+    if (in_array($role, ['doctor', 'billing'], true) && preg_match('/payment due|next payment due|balance due|patient balance|insurance balance|what does .* owe|insurance on file/', $normalizedMessage) === 1) {
+        return aiCopilotBuildBillingPaymentDueResponse($context, $draft);
+    }
+
+    if ($role === 'front_desk' && preg_match('/contact info|contact information|outreach|phone|email/', $normalizedMessage) === 1) {
+        return aiCopilotBuildFrontDeskContactContextResponse($context, $draft);
+    }
+
+    return $draft;
+}
+
+function aiCopilotAnswerLooksGeneric(array $draft, string $mode, array $context): bool
+{
+    $text = strtolower(aiCopilotCleanText(($draft['answer'] ?? '') . "\n" . implode("\n", array_map(static function ($section) {
+        if (!is_array($section)) {
+            return '';
+        }
+        return aiCopilotCleanText(($section['title'] ?? '') . ' ' . implode(' ', $section['items'] ?? []));
+    }, $draft['sections'] ?? []))));
+
+    if ($text === '') {
+        return true;
+    }
+
+    $patientName = strtolower(aiCopilotCleanText($context['patient']['name'] ?? ''));
+    $hasPatientName = $patientName !== '' && str_contains($text, $patientName);
+
+    return match ($mode) {
+        'medication_info' => !str_contains($text, 'current medication information') || !$hasPatientName,
+        'treatment_plan' => !str_contains($text, 'draft treatment plan'),
+        'rag_chart_context' => !str_contains($text, 'visit history') && !str_contains($text, 'ambient encounter'),
+        'latest_ambient_summary' => !str_contains($text, 'ambient encounter') && !str_contains($text, 'ai-assisted visit review'),
+        default => !$hasPatientName && preg_match('/draft only|human review required|licensed clinician/', $text) === 1,
+    };
+}
+
+function aiCopilotEnsureMedicationSummaryResponse(array $draft, array $context): array
+{
+    $patientName = aiCopilotCleanText($context['patient']['name'] ?? 'the selected patient');
+    $facts = aiCopilotExtractClinicalFacts($context);
+    $medicationSection = aiCopilotBuildSection('Current Medication Information', aiCopilotBuildMedicationInformationRows($context));
+    $clinicalReviewItems = aiCopilotExtractSectionItemsByKeywords($draft['sections'] ?? [], ['safety check', 'clinical review']);
+    $monitoringItems = aiCopilotExtractSectionItemsByKeywords($draft['sections'] ?? [], ['monitoring consideration']);
+    $counselingItems = aiCopilotExtractSectionItemsByKeywords($draft['sections'] ?? [], ['patient counseling', 'counseling']);
+
+    $sections = [
+        $medicationSection,
+        aiCopilotBuildSection(
+            'Clinical review considerations',
+            $clinicalReviewItems !== [] ? $clinicalReviewItems : aiCopilotBuildMedicationClinicalReviewItems($context, $facts)
+        ),
+        aiCopilotBuildSection(
+            'Monitoring considerations',
+            $monitoringItems !== [] ? $monitoringItems : aiCopilotBuildMedicationMonitoringItems($context, $facts)
+        ),
+        aiCopilotBuildSection(
+            'Patient counseling points',
+            $counselingItems !== [] ? $counselingItems : aiCopilotBuildMedicationCounselingItems($context, $facts)
+        ),
+    ];
+
+    $draft['answer'] = 'The following medication information for ' . $patientName . ' must be verified by a licensed clinician.';
+    $draft['sections'] = $sections;
+    $draft['tags'] = aiCopilotFinalizeTags(array_merge($draft['tags'] ?? [], ['Medication review', 'Chart context', 'Review needed']));
+
+    return $draft;
+}
+
+function aiCopilotEnsureTreatmentPlanResponse(array $draft, array $context, string $message): array
+{
+    $facts = aiCopilotExtractClinicalFacts($context);
+    $ambientVisit = is_array($context['approved_ambient_visit'] ?? null) ? $context['approved_ambient_visit'] : [];
+    $patientName = aiCopilotCleanText($context['patient']['name'] ?? 'the selected patient');
+
+    $planItems = [
+        'The retrieved OpenEMR context does not contain a finalized treatment plan for ' . $patientName . ', so this is a safe draft framework based only on available chart context.',
+        'Problems currently shaping the draft plan: ' . aiCopilotFallbackValue(aiCopilotJoinList($facts['conditions']), 'No structured problems were found in the retrieved context.'),
+    ];
+    if ($facts['follow_up_considerations'] !== '') {
+        $planItems[] = 'Follow-up context already documented: ' . $facts['follow_up_considerations'];
+    }
+    if (!empty($ambientVisit['summary'])) {
+        $planItems[] = 'Latest approved Ambient Encounter Capture context: ' . $ambientVisit['summary'];
+    }
+
+    $monitoringItems = [
+        'Review recent vitals and lab context before finalizing clinician-directed next steps: ' . aiCopilotFallbackValue(aiCopilotJoinParts([$facts['vitals_line'], $facts['recent_labs']]), 'Recent vitals or lab summary were not found in retrieved context.'),
+        'Reassess symptom severity, medication adherence, and whether the latest visit-history documentation changes urgency or follow-up timing.',
+    ];
+
+    $educationItems = [
+        'Use patient education language that reinforces the documented plan, warning signs, and follow-up expectations without creating a new order set.',
+    ];
+    if (aiCopilotContextContainsKeywords($context, ['written medication instructions', 'afternoon phone reminders'])) {
+        $educationItems[] = 'Care preferences already documented in the chart context should be considered when explaining the plan.';
+    }
+
+    $followUpItems = [
+        aiCopilotFallbackValue($facts['follow_up_considerations'], 'Define short-interval review versus routine follow-up using the existing chart context only.'),
+        'Review whether the latest visit history or approved ambient encounter adds new coordination needs before finalizing follow-up.',
+    ];
+
+    $safetyItems = [
+        'Draft only. Human review required. Do not treat this draft as an order, prescription, or final clinical decision.',
+        'If requested data is missing or the chart context is incomplete, verify the source chart before acting.',
+    ];
+
+    $draft['answer'] = 'Draft treatment plan for ' . $patientName . ': this summary is grounded in retrieved chart context and must be verified by a licensed clinician.';
+    $draft['sections'] = [
+        aiCopilotBuildSection('Draft Treatment Plan', $planItems),
+        aiCopilotBuildSection('Monitoring and safety checks', $monitoringItems),
+        aiCopilotBuildSection('Patient education considerations', $educationItems),
+        aiCopilotBuildSection('Follow-up considerations', $followUpItems),
+        aiCopilotBuildSection('Safety precautions', $safetyItems),
+    ];
+    $draft['tags'] = aiCopilotFinalizeTags(array_merge($draft['tags'] ?? [], ['Follow-up', 'Chart context', 'Review needed']));
+
+    return $draft;
+}
+
+function aiCopilotEnsureRagChartContextResponse(array $draft, array $context, string $message): array
+{
+    $normalizedMessage = strtolower($message);
+
+    if (preg_match('/what sources did you use|sources did you use|retrieval notes|what chart context did you use/', $normalizedMessage) === 1) {
+        return aiCopilotBuildSourcesExplanationResponse($context, $draft);
+    }
+
+    if (preg_match('/summarize latest ambient encounter only|latest ambient encounter only|latest approved ambient encounter only/', $normalizedMessage) === 1) {
+        return aiCopilotBuildLatestAmbientSummaryResponse($context, $draft, aiCopilotCleanText((string) ($context['role'] ?? 'doctor')));
+    }
+
+    if (preg_match('/what changed since the last visit|what changed since last visit/', $normalizedMessage) === 1) {
+        return aiCopilotBuildWhatChangedSinceLastVisitResponse($context, $draft);
+    }
+
+    if (preg_match('/what changed since.*ai-assisted encounter|visit history/', $normalizedMessage) === 1 || aiCopilotAnswerLooksGeneric($draft, 'rag_chart_context', $context)) {
+        return aiCopilotBuildFallbackRagVisitHistoryResponse($context, $draft);
+    }
+
+    return $draft;
+}
+
+function aiCopilotBuildMissingLabResultResponse(array $context, string $labName, array $draft): array
+{
+    $patientName = aiCopilotCleanText($context['patient']['name'] ?? 'the selected patient');
+    $facts = aiCopilotExtractClinicalFacts($context);
+    $availableLabContext = aiCopilotFallbackValue($facts['recent_labs'], 'No other recent lab summary was found in the retrieved chart context.');
+
+    $draft['answer'] = $labName . ' was not found in the retrieved OpenEMR context for ' . $patientName . '. Draft only. Human review required.';
+    $draft['sections'] = [
+        aiCopilotBuildSection('Retrieved chart check', [
+            $labName . ' was not found in the retrieved OpenEMR context for ' . $patientName . '.',
+            'Other available lab context: ' . $availableLabContext,
+        ]),
+        aiCopilotBuildSection('Next verification step', [
+            'Check the source chart or lab results to verify whether ' . strtolower($labName) . ' was ordered, resulted, or documented outside the retrieved demo context.',
+        ]),
+    ];
+    $draft['tags'] = aiCopilotFinalizeTags(array_merge($draft['tags'] ?? [], ['Chart context', 'Review needed']));
+
+    return $draft;
+}
+
+function aiCopilotBuildFallbackRagVisitHistoryResponse(array $context, array $draft): array
+{
+    $patientName = aiCopilotCleanText($context['patient']['name'] ?? 'the selected patient');
+    $ambientVisit = is_array($context['approved_ambient_visit'] ?? null) ? $context['approved_ambient_visit'] : [];
+    $facts = aiCopilotExtractClinicalFacts($context);
+
+    if ($ambientVisit === []) {
+        $draft['answer'] = 'No approved Ambient Encounter Capture visit-history record was found yet. Complete the consent-based listening workflow and approve the visit draft to make that context available for retrieval.';
+        $draft['sections'] = [
+            aiCopilotBuildSection('Retrieved chart context', [
+                'Active medications in retrieved chart context: ' . aiCopilotFallbackValue($facts['medication_line'], 'No active medications were found.'),
+                'Recent lab and vitals context: ' . aiCopilotFallbackValue(aiCopilotJoinParts([$facts['recent_labs'], $facts['vitals_line']]), 'No recent vitals or lab summary was found.'),
+                'Insurance / follow-up context: ' . aiCopilotFallbackValue(aiCopilotJoinParts([$facts['billing_support'], $facts['follow_up_considerations']]), 'No extra billing or follow-up note was found.'),
+            ]),
+            aiCopilotBuildSection('Next retrieval step', [
+                'Complete the ambient encounter capture flow, review the draft, and approve it to make the latest AI-assisted visit available in visit-history retrieval.',
+            ]),
+        ];
+        $draft['tags'] = aiCopilotFinalizeTags(array_merge($draft['tags'] ?? [], ['Visit summary', 'Chart context', 'Review needed']));
+        return $draft;
+    }
+
+    $approvedNotes = array_slice(array_map(static fn($item) => aiCopilotCleanText((string) $item), $ambientVisit['approved_notes'] ?? []), 0, 6);
+
+    $draft['answer'] = 'Using Doctor-role chart retrieval, I found relevant context from ' . $patientName . '\'s medication history, lab follow-up, visit history, insurance note, immunization review, and care preferences. The latest approved Ambient Encounter Capture visit suggests the next clinical review should focus on medication adherence support, A1C/lipid follow-up, insurance verification, immunization status verification, and care coordination preferences.';
+    $draft['sections'] = [
+        aiCopilotBuildSection('Draft Clinical Summary', [
+            $patientName . '\'s recent chart context indicates a routine follow-up pattern centered on medication adherence, lab follow-up, vitals review, insurance verification, immunization review, and care support.',
+            'The most recent AI-assisted visit was clinician-reviewed and consent-confirmed before being added to the demo visit history.',
+            $ambientVisit['summary'] ?? '',
+        ]),
+        aiCopilotBuildSection('Recommended clinician review points', [
+            'Confirm current medication adherence and whether evening reminders are helping.',
+            'Verify A1C and lipid panel follow-up status.',
+            'Confirm whether insurance verification has been completed.',
+            'Review immunization status before updating the record.',
+            'Confirm care preferences and whether the daughter should be added as a care support contact.',
+            'Review the latest Ambient Encounter Capture visit note in Visit History.',
+        ]),
+        aiCopilotBuildSection('Latest Approved Ambient Encounter Capture', $approvedNotes !== [] ? $approvedNotes : [
+            'An approved ambient encounter capture record is present in the local demo visit-history state.',
+        ]),
+    ];
+    $draft['tags'] = aiCopilotFinalizeTags(array_merge($draft['tags'] ?? [], ['Visit summary', 'Chart context', 'Review needed']));
+
+    return $draft;
+}
+
+function aiCopilotBuildWhatChangedSinceLastVisitResponse(array $context, array $draft): array
+{
+    $patientName = aiCopilotCleanText($context['patient']['name'] ?? 'the selected patient');
+    $facts = aiCopilotExtractClinicalFacts($context);
+    $ambientVisit = is_array($context['approved_ambient_visit'] ?? null) ? $context['approved_ambient_visit'] : [];
+
+    $changes = [];
+    if (!empty($ambientVisit['summary'])) {
+        $changes[] = 'The latest approved AI-assisted encounter adds clinician-reviewed detail about medication adherence, insurance verification, lab follow-up, and care coordination preferences.';
+    } else {
+        $changes[] = 'No approved AI-assisted encounter was found in the retrieved context, so the comparison relies on standard visit history and chart notes only.';
+    }
+
+    if ($facts['medication_concerns'] !== '') {
+        $changes[] = 'Medication review context: ' . $facts['medication_concerns'];
+    }
+    if ($facts['recent_labs'] !== '') {
+        $changes[] = 'Lab / vitals context to compare: ' . aiCopilotJoinParts([$facts['recent_labs'], $facts['vitals_line']]);
+    }
+    if ($facts['billing_support'] !== '') {
+        $changes[] = 'Insurance or billing-related context now noted: ' . $facts['billing_support'];
+    }
+    if (aiCopilotContextContainsKeywords($context, ['written medication instructions', 'afternoon phone reminders', 'daughter'])) {
+        $changes[] = 'Care preference and support-contact details are now part of the retrieved chart context.';
+    }
+
+    $missing = [];
+    if (empty($ambientVisit['summary'])) {
+        $missing[] = 'No approved Ambient Encounter Capture visit-history record was available for direct comparison.';
+    }
+    if ($facts['recent_note_subjective'] === '' && $facts['recent_note_assessment'] === '') {
+        $missing[] = 'The retrieved context does not contain enough prior-note detail to compare every clinical element line by line.';
+    }
+
+    $draft['answer'] = 'RAG Visit History Summary for ' . $patientName . ': retrieved visit-history and chart context were compared before drafting this answer.';
+    $draft['sections'] = [
+        aiCopilotBuildSection('RAG Visit History Summary', $changes),
+        aiCopilotBuildSection('Comparison gaps', $missing !== [] ? $missing : [
+            'No major comparison gaps were detected in the retrieved visit-history context used for this draft.',
+        ]),
+    ];
+    $draft['tags'] = aiCopilotFinalizeTags(array_merge($draft['tags'] ?? [], ['Visit summary', 'Chart context', 'Review needed']));
+
+    return $draft;
+}
+
+function aiCopilotBuildSourcesExplanationResponse(array $context, array $draft): array
+{
+    $sources = aiCopilotBuildSources($context, 'rag_chart_context');
+    $patientName = aiCopilotCleanText($context['patient']['name'] ?? 'the selected patient');
+
+    $draft['answer'] = 'RAG means the Co-Pilot retrieved role-appropriate chart context for ' . $patientName . ' before drafting the response. These are the source categories currently used for grounding.';
+    $draft['sections'] = [
+        aiCopilotBuildSection('Retrieved source categories', $sources),
+        aiCopilotBuildSection('Retrieval note', [
+            'The Co-Pilot uses retrieved chart context before drafting instead of answering from uncited memory.',
+            'This explanation lists source categories only and does not dump the full chart.',
+        ]),
+    ];
+    $draft['tags'] = aiCopilotFinalizeTags(array_merge($draft['tags'] ?? [], ['Chart context', 'Review needed']));
+
+    return $draft;
+}
+
+function aiCopilotBuildLatestAmbientEncounterOnlyResponse(array $context, array $draft): array
+{
+    return aiCopilotBuildLatestAmbientSummaryResponse($context, $draft, aiCopilotCleanText((string) ($context['role'] ?? 'doctor')));
+}
+
+function aiCopilotLatestAmbientVisitFromContext(array $context): array
+{
+    if (is_array($context['latest_approved_ambient_encounter'] ?? null) && !empty($context['latest_approved_ambient_encounter'])) {
+        return $context['latest_approved_ambient_encounter'];
+    }
+
+    return is_array($context['approved_ambient_visit'] ?? null) ? $context['approved_ambient_visit'] : [];
+}
+
+function aiCopilotAmbientNotesMatching(array $ambientVisit, array $keywords): array
+{
+    $matches = [];
+    foreach (array_slice($ambientVisit['approved_notes'] ?? [], 0, 12) as $note) {
+        $noteText = aiCopilotCleanText((string) $note);
+        if ($noteText === '') {
+            continue;
+        }
+
+        $normalizedNote = strtolower($noteText);
+        foreach ($keywords as $keyword) {
+            if (str_contains($normalizedNote, strtolower($keyword))) {
+                $matches[] = $noteText;
+                break;
+            }
+        }
+    }
+
+    return array_slice(array_values(array_unique($matches)), 0, 6);
+}
+
+function aiCopilotBuildLatestAmbientSummaryResponse(array $context, array $draft, string $role): array
+{
+    $patientName = aiCopilotCleanText($context['patient']['name'] ?? 'the selected patient');
+    $ambientVisit = aiCopilotLatestAmbientVisitFromContext($context);
+    $resolvedRole = in_array($role, ['doctor', 'nurse', 'billing', 'front_desk'], true) ? $role : 'doctor';
+
+    if ($ambientVisit === []) {
+        $draft['answer'] = 'No approved Ambient Encounter Capture visit-history record was found yet for ' . $patientName . '. Complete the consent-based listening workflow and approve the visit draft to make that context available for retrieval.';
+        $draft['sections'] = [
+            aiCopilotBuildSection('Latest Approved Ambient Encounter Capture', [
+                'No approved ambient encounter summary is currently available in the retrieved context.',
+            ]),
+        ];
+        $draft['tags'] = aiCopilotFinalizeTags(array_merge($draft['tags'] ?? [], ['Visit summary', 'Chart context', 'Review needed']));
+        return $draft;
+    }
+
+    $approvedAt = aiCopilotFirstNonEmpty([
+        aiCopilotCleanText((string) ($ambientVisit['approved_at_label'] ?? '')),
+        aiCopilotCleanText((string) ($ambientVisit['approved_at'] ?? '')),
+    ]);
+    $visitType = aiCopilotFirstNonEmpty([
+        aiCopilotCleanText((string) ($ambientVisit['visit_type'] ?? '')),
+        'Ambient Encounter Capture',
+    ]);
+    $reviewStatus = aiCopilotFirstNonEmpty([
+        aiCopilotCleanText((string) ($ambientVisit['review_status'] ?? '')),
+        'Clinician Reviewed',
+    ]);
+    $summary = aiCopilotCleanText((string) ($ambientVisit['summary'] ?? ''));
+    $approvedNotes = array_slice(array_values(array_filter(array_map('aiCopilotCleanText', $ambientVisit['approved_notes'] ?? []))), 0, 8);
+    $tableRow = is_array($ambientVisit['table_row'] ?? null) ? $ambientVisit['table_row'] : [];
+
+    if ($resolvedRole === 'front_desk') {
+        $adminItems = array_values(array_filter(array_merge(
+            aiCopilotAmbientNotesMatching($ambientVisit, ['insurance', 'care preference', 'appointment', 'reminder', 'outreach', 'written medication instructions', 'afternoon phone reminders']),
+            [
+                !empty($tableRow['insurance']) ? 'Insurance follow-up: ' . aiCopilotCleanText((string) $tableRow['insurance']) : '',
+                !empty($tableRow['date']) ? 'Upcoming visit timing to confirm: ' . aiCopilotCleanText((string) $tableRow['date']) : '',
+            ]
+        )));
+
+        $draft['answer'] = 'Administrative follow-up summary for the latest approved ambient encounter for ' . $patientName . '. Minimum necessary PHI only.';
+        $draft['sections'] = [
+            aiCopilotBuildSection('Latest Ambient Encounter Summary', array_values(array_filter([
+                $approvedAt !== '' ? 'Approved date / time: ' . $approvedAt : '',
+                'Review status: ' . $reviewStatus,
+                $summary !== '' ? 'Administrative routing note: confirm follow-up tasks tied to the latest approved encounter.' : '',
+            ]))),
+            aiCopilotBuildSection('Administrative workflow only', $adminItems !== [] ? $adminItems : [
+                'Confirm appointment reminders, insurance verification follow-up, and preferred outreach workflow before contacting the patient.',
+                'Route clinical questions from the ambient encounter to clinical staff.',
+            ]),
+        ];
+        $draft['tags'] = aiCopilotFinalizeTags(array_merge($draft['tags'] ?? [], ['Front desk', 'Minimum PHI', 'Review needed']));
+        return $draft;
+    }
+
+    if ($resolvedRole === 'billing') {
+        $billingItems = array_values(array_filter(array_merge(
+            aiCopilotAmbientNotesMatching($ambientVisit, ['insurance', 'verification']),
+            [
+                !empty($tableRow['billing']) ? 'Billing follow-up: ' . aiCopilotCleanText((string) $tableRow['billing']) : '',
+                !empty($tableRow['insurance']) ? 'Insurance follow-up: ' . aiCopilotCleanText((string) $tableRow['insurance']) : '',
+                aiCopilotCleanText((string) ($ambientVisit['source'] ?? '')) !== '' ? 'Source: ' . aiCopilotCleanText((string) $ambientVisit['source']) : '',
+            ]
+        )));
+
+        $draft['answer'] = 'Billing-safe summary of the latest approved ambient encounter for ' . $patientName . '. Billing draft only. Human review required.';
+        $draft['sections'] = [
+            aiCopilotBuildSection('Latest Ambient Encounter Summary', array_values(array_filter([
+                $approvedAt !== '' ? 'Approved date / time: ' . $approvedAt : '',
+                'Visit type: ' . $visitType,
+                'Review status: ' . $reviewStatus,
+            ]))),
+            aiCopilotBuildSection('Billing and insurance follow-up', $billingItems !== [] ? $billingItems : [
+                'Review insurance verification and any documentation gaps referenced in the approved ambient encounter before billing follow-up.',
+            ]),
+        ];
+        $draft['tags'] = aiCopilotFinalizeTags(array_merge($draft['tags'] ?? [], ['Billing review', 'Chart context', 'Review needed']));
+        return $draft;
+    }
+
+    if ($resolvedRole === 'nurse') {
+        $nurseItems = array_values(array_filter(array_merge(
+            aiCopilotAmbientNotesMatching($ambientVisit, ['medication support', 'care preference', 'care team', 'appointment', 'reminder', 'immunization', 'insurance']),
+            [
+                $summary !== '' ? 'Clinician-reviewed summary: ' . $summary : '',
+            ]
+        )));
+
+        $draft['answer'] = 'Nursing follow-up summary for the latest approved ambient encounter for ' . $patientName . '. Draft only. Human review required.';
+        $draft['sections'] = [
+            aiCopilotBuildSection('Latest Ambient Encounter Summary', array_values(array_filter([
+                $approvedAt !== '' ? 'Approved date / time: ' . $approvedAt : '',
+                'Visit type: ' . $visitType,
+                'Review status: ' . $reviewStatus,
+            ]))),
+            aiCopilotBuildSection('Care coordination and follow-up', $nurseItems !== [] ? $nurseItems : [
+                'Use the latest approved ambient encounter to reinforce adherence questions, follow-up timing, and care coordination items without changing medications.',
+            ]),
+        ];
+        $draft['tags'] = aiCopilotFinalizeTags(array_merge($draft['tags'] ?? [], ['Follow-up', 'Chart context', 'Review needed']));
+        return $draft;
+    }
+
+    $reviewItems = array_values(array_filter(array_merge(
+        $approvedNotes,
+        aiCopilotAmbientNotesMatching($ambientVisit, ['medication support', 'labs', 'insurance', 'care preference', 'care team', 'appointment', 'reminder', 'immunization'])
+    )));
+
+    $draft['answer'] = 'Here is the latest approved Ambient Encounter Capture summary for ' . $patientName . '. Draft only. Clinician review required.';
+    $draft['sections'] = [
+        aiCopilotBuildSection('Latest Ambient Encounter Summary', array_values(array_filter([
+            $approvedAt !== '' ? 'Approved date / time: ' . $approvedAt : '',
+            'Visit type: ' . $visitType,
+            'Review status: ' . $reviewStatus,
+            $summary !== '' ? 'Clinician-reviewed summary: ' . $summary : '',
+        ]))),
+        aiCopilotBuildSection('Approved visit updates', $reviewItems !== [] ? $reviewItems : [
+            'An approved ambient encounter record is present, but no additional approved note detail was found in the retrieved context.',
+        ]),
+        aiCopilotBuildSection('Clinician review focus', array_values(array_filter([
+            aiCopilotAmbientNotesMatching($ambientVisit, ['medication support']) !== [] ? 'Medication adherence or support items were captured in the latest ambient encounter and should be verified before acting.' : '',
+            aiCopilotAmbientNotesMatching($ambientVisit, ['labs', 'a1c', 'lipid']) !== [] ? 'Lab follow-up items were captured in the latest ambient encounter and should be reviewed against the source chart.' : '',
+            aiCopilotAmbientNotesMatching($ambientVisit, ['insurance']) !== [] ? 'Insurance verification was mentioned in the latest ambient encounter and may affect follow-up coordination.' : '',
+            aiCopilotAmbientNotesMatching($ambientVisit, ['appointment', 'reminder']) !== [] ? 'Follow-up appointment or reminder planning was captured in the latest ambient encounter.' : '',
+        ]))),
+    ];
+    $draft['tags'] = aiCopilotFinalizeTags(array_merge($draft['tags'] ?? [], ['Visit summary', 'Chart context', 'Review needed']));
+
+    return $draft;
+}
+
+function aiCopilotBuildBillingPaymentDueResponse(array $context, array $draft): array
+{
+    $patientName = aiCopilotCleanText($context['patient']['name'] ?? 'the selected patient');
+    $claim = $context['billing']['claim'] ?? [];
+    $insurance = $context['primary_insurance'] ?? [];
+    $paymentSummary = is_array($context['billing']['payment_summary'] ?? null) ? $context['billing']['payment_summary'] : [];
+    $nextPaymentDueDate = aiCopilotCleanText((string) ($paymentSummary['next_payment_due_date'] ?? ''));
+    $payer = aiCopilotFirstNonEmpty([
+        aiCopilotCleanText((string) ($paymentSummary['payer'] ?? '')),
+        aiCopilotCleanText((string) ($insurance['carrier'] ?? '')),
+        aiCopilotCleanText((string) ($insurance['plan_name'] ?? '')),
+    ]);
+    $planName = aiCopilotFirstNonEmpty([
+        aiCopilotCleanText((string) ($paymentSummary['plan_name'] ?? '')),
+        aiCopilotCleanText((string) ($insurance['plan_name'] ?? '')),
+    ]);
+    $patientBalanceDue = aiCopilotCleanText((string) ($paymentSummary['patient_balance_due'] ?? ''));
+    $insuranceBalanceDue = aiCopilotCleanText((string) ($paymentSummary['insurance_balance_due'] ?? ''));
+    $totalBalanceDue = aiCopilotCleanText((string) ($paymentSummary['total_balance_due'] ?? ''));
+    $billingProvider = aiCopilotFallbackValue(aiCopilotCleanText((string) ($paymentSummary['billing_provider'] ?? '')), 'No billing provider was found in the retrieved billing context.');
+    $paymentNote = aiCopilotFallbackValue(aiCopilotCleanText((string) ($paymentSummary['payment_note'] ?? '')), 'Verify the billing ledger before collection.');
+    $insuranceNote = aiCopilotCleanText((string) ($paymentSummary['insurance_note'] ?? ''));
+    $status = aiCopilotFallbackValue(aiCopilotCleanText((string) ($claim['status'] ?? '')), 'No claim status was found in the retrieved billing context.');
+
+    if ($nextPaymentDueDate !== '') {
+        $draft['answer'] = 'The next patient payment due date for ' . $patientName . ' is ' . $nextPaymentDueDate . '. Billing draft only. Human review required.';
+        $draft['sections'] = [
+            aiCopilotBuildSection('Billing payment snapshot', [
+                'Next patient payment due date: ' . $nextPaymentDueDate,
+                'Patient balance due: ' . aiCopilotFallbackValue($patientBalanceDue, 'Not found in retrieved billing context.'),
+                'Insurance balance due: ' . aiCopilotFallbackValue($insuranceBalanceDue, 'Not found in retrieved billing context.'),
+                'Total balance due: ' . aiCopilotFallbackValue($totalBalanceDue, 'Not found in retrieved billing context.'),
+                'Payer / plan: ' . aiCopilotFallbackValue(aiCopilotJoinParts([$payer, $planName]), 'No payer or plan was found in the retrieved billing context.'),
+                'Billing provider / facility: ' . $billingProvider,
+            ]),
+            aiCopilotBuildSection('Billing review reminders', array_values(array_filter([
+                'Payment note: ' . $paymentNote,
+                $insuranceNote !== '' ? 'Insurance note: ' . $insuranceNote : '',
+                'This is synthetic demo billing data. Verify the billing ledger and payer workflow before collection or patient outreach.',
+            ]))),
+        ];
+        $draft['tags'] = aiCopilotFinalizeTags(array_merge($draft['tags'] ?? [], ['Billing review', 'Chart context', 'Review needed']));
+        return $draft;
+    }
+
+    $draft['answer'] = 'The next payment due date was not found in the retrieved OpenEMR billing context. This is a billing-support draft only and still requires human billing review.';
+    $draft['sections'] = [
+        aiCopilotBuildSection('Available billing context', [
+            'Primary payer / plan context: ' . aiCopilotFallbackValue(aiCopilotJoinParts([$payer, $planName]), 'No primary payer was found in the retrieved billing context.'),
+            'Claim status context: ' . $status,
+        ]),
+        aiCopilotBuildSection('What to verify next', [
+            'Check the billing ledger, payer portal, or the source claim workflow to confirm whether a payment due date exists outside the retrieved demo context.',
+        ]),
+    ];
+    $draft['tags'] = aiCopilotFinalizeTags(array_merge($draft['tags'] ?? [], ['Billing review', 'Review needed']));
+
+    return $draft;
+}
+
+function aiCopilotBuildFrontDeskContactContextResponse(array $context, array $draft): array
+{
+    $name = aiCopilotCleanText($context['patient']['name'] ?? 'the selected patient');
+    $email = aiCopilotFallbackValue($context['patient']['email'] ?? '', 'No demo email on file');
+    $phone = aiCopilotFallbackValue($context['patient']['phone'] ?? '', 'No demo phone on file');
+    $appointment = $context['next_appointment'] ?? [];
+    $formattedDateTime = aiCopilotFormatAppointmentDateTime($appointment['date'] ?? '', $appointment['start_time'] ?? '');
+    $provider = aiCopilotFallbackValue($appointment['provider_name'] ?? '', 'the assigned provider');
+    $location = aiCopilotFallbackValue($appointment['location'] ?? '', 'the clinic');
+    $checkIn = aiCopilotFallbackValue($appointment['check_in_instructions'] ?? '', 'Please verify current check-in instructions before outreach.');
+
+    $draft['answer'] = $name . '\'s minimum necessary outreach details are shown below. Verify contact details before outreach.';
+    $draft['sections'] = [
+        aiCopilotBuildSection('Contact details', [
+            'Phone: ' . $phone,
+            'Email: ' . $email,
+        ]),
+        aiCopilotBuildSection('Appointment / outreach context', [
+            'Next appointment: ' . aiCopilotFallbackValue($formattedDateTime, 'No future appointment was found in the retrieved front-desk context.'),
+            'Provider / location: ' . $provider . ' at ' . $location,
+            'Check-in / outreach reminder: ' . $checkIn,
+        ]),
+    ];
+    $draft['tags'] = aiCopilotFinalizeTags(array_merge($draft['tags'] ?? [], ['Front desk', 'Contact', 'Minimum PHI']));
+
+    return $draft;
+}
+
+function aiCopilotExtractSectionItemsByKeywords(array $sections, array $keywords): array
+{
+    foreach ($sections as $section) {
+        if (!is_array($section)) {
+            continue;
+        }
+
+        $title = strtolower(aiCopilotCleanText((string) ($section['title'] ?? '')));
+        if ($title === '') {
+            continue;
+        }
+
+        foreach ($keywords as $keyword) {
+            if (str_contains($title, strtolower($keyword))) {
+                $items = [];
+                foreach (($section['items'] ?? []) as $item) {
+                    $itemText = aiCopilotCleanText((string) $item);
+                    if ($itemText !== '') {
+                        $items[] = $itemText;
+                    }
+                }
+                return array_slice($items, 0, 6);
+            }
+        }
+    }
+
+    return [];
+}
+
+function aiCopilotBuildMedicationInformationRows(array $context): array
+{
+    if (empty($context['medications'])) {
+        return [
+            'No active medication records were found in the retrieved OpenEMR context for ' . aiCopilotCleanText($context['patient']['name'] ?? 'the selected patient') . '.',
+        ];
+    }
+
+    $rows = [];
+    foreach ($context['medications'] as $medication) {
+        $segments = [];
+        $drug = aiCopilotCleanText((string) ($medication['drug'] ?? 'Medication'));
+        $dosage = aiCopilotCleanText((string) ($medication['dosage'] ?? ''));
+        $quantity = aiCopilotCleanText((string) ($medication['quantity'] ?? ''));
+        $startDate = aiCopilotCleanText((string) ($medication['start_date'] ?? ''));
+        $instructions = aiCopilotCleanText((string) ($medication['note'] ?? ''));
+
+        $segments[] = $drug !== '' ? $drug : 'Medication';
+        $segments[] = 'Dosage: ' . aiCopilotFallbackValue($dosage, 'Not documented');
+        $segments[] = 'Quantity: ' . aiCopilotFallbackValue($quantity, 'Not documented');
+        $segments[] = 'Start date: ' . aiCopilotFallbackValue($startDate, 'Not documented');
+        if ($instructions !== '') {
+            $segments[] = 'Instructions: ' . $instructions;
+        }
+
+        $rows[] = implode(' | ', $segments);
+    }
+
+    return array_slice($rows, 0, 12);
+}
+
+function aiCopilotBuildMedicationClinicalReviewItems(array $context, array $facts): array
+{
+    $items = [
+        'Verify that the active medication list matches what the patient is actually taking, including any missed doses or refill gaps.',
+        'Review interaction and safety questions against the documented problem list, allergies, and current symptoms before making any clinician-directed decisions.',
+    ];
+
+    if ($facts['medication_concerns'] !== '') {
+        $items[] = 'Charted medication concern to verify: ' . $facts['medication_concerns'];
+    }
+
+    if ($facts['allergy_line'] !== '') {
+        $items[] = 'Documented allergy context: ' . $facts['allergy_line'] . '.';
+    }
+
+    return array_slice($items, 0, 6);
+}
+
+function aiCopilotBuildMedicationMonitoringItems(array $context, array $facts): array
+{
+    $items = [];
+
+    if ($facts['vitals_line'] !== '') {
+        $items[] = 'Recent vitals to review with medications: ' . $facts['vitals_line'];
+    }
+
+    if ($facts['recent_labs'] !== '') {
+        $items[] = 'Recent lab context to review with medications: ' . $facts['recent_labs'];
+    }
+
+    if ($facts['follow_up_considerations'] !== '') {
+        $items[] = 'Follow-up consideration already documented in chart context: ' . $facts['follow_up_considerations'];
+    }
+
+    if ($items === []) {
+        $items[] = 'Review available vitals, labs, and current symptom severity before relying on the medication list alone.';
+    }
+
+    return array_slice($items, 0, 6);
+}
+
+function aiCopilotBuildMedicationCounselingItems(array $context, array $facts): array
+{
+    $items = [
+        'Confirm how the patient is taking each medication, whether evening doses are being missed, and whether written instructions would help adherence.',
+        'Review when the patient should contact the care team sooner for worsening symptoms, medication side effects, or new adherence barriers.',
+    ];
+
+    if ($facts['follow_up_considerations'] !== '') {
+        $items[] = 'Use the existing follow-up context when reinforcing next steps: ' . $facts['follow_up_considerations'];
+    }
+
+    return array_slice($items, 0, 6);
+}
+
 function aiCopilotGenerateFallbackDraft(string $role, string $mode, string $message, array $context): array
 {
     if ($role === 'front_desk') {
@@ -967,6 +2420,8 @@ function aiCopilotGenerateFallbackDraft(string $role, string $mode, string $mess
         'treatment_plan' => aiCopilotBuildTreatmentPlanResponse($context),
         'billing' => aiCopilotBuildBillingSupportResponse($context),
         'follow_up' => aiCopilotBuildFollowUpResponse($context),
+        'rag_chart_context' => aiCopilotBuildFallbackRagVisitHistoryResponse($context, aiCopilotBuildChartSummaryResponse($context)),
+        'latest_ambient_summary' => aiCopilotBuildLatestAmbientSummaryResponse($context, aiCopilotBuildChartSummaryResponse($context), $role),
         'visit_summary' => aiCopilotBuildVisitSummaryResponse($context),
         'patient_education' => aiCopilotBuildPatientFriendlyResponse($context),
         'physician_summary' => aiCopilotBuildChartSummaryResponse($context),
@@ -1150,13 +2605,10 @@ function aiCopilotBuildMedicationResponse(array $context): array
 
     return match ($facts['patient_key']) {
         'DEMO-BILL-1003' => aiCopilotBuildResponse(
-            'The current medication picture should be reviewed in the context of chest-pressure red flags and cardiometabolic risk. This beta draft must still be verified by a licensed clinician.',
+            'The following medication information for ' . $context['patient']['name'] . ' must be verified by a licensed clinician.',
             [
-                aiCopilotBuildSection('Current medication picture', [
-                    'Active medications in the chart: ' . aiCopilotFallbackValue($facts['medication_line'], 'No active medications found.'),
-                    'The list fits the documented hypertension, diabetes, and hyperlipidemia history.',
-                ]),
-                aiCopilotBuildSection('Safety checks', [
+                aiCopilotBuildSection('Current Medication Information', aiCopilotBuildMedicationInformationRows($context)),
+                aiCopilotBuildSection('Clinical review considerations', [
                     'Confirm adherence to metformin, lisinopril, atorvastatin, and aspirin, especially around the time symptoms began.',
                     'Aspirin use should remain clinician-directed in the chest-pain context rather than self-adjusted from this beta draft.',
                     'Allergy status is documented as: ' . $allergies,
@@ -1173,13 +2625,10 @@ function aiCopilotBuildMedicationResponse(array $context): array
             aiCopilotScenarioTags($context, ['metformin', 'lisinopril', 'atorvastatin', 'aspirin', 'adherence'])
         ),
         'DEMO-PCP-1001' => aiCopilotBuildResponse(
-            'The medication review should focus on glycemic control, wound-healing risk, neuropathy treatment, and antibiotic-safety context. This beta draft must still be verified by a licensed clinician.',
+            'The following medication information for ' . $context['patient']['name'] . ' must be verified by a licensed clinician.',
             [
-                aiCopilotBuildSection('Current medication picture', [
-                    'Active medications in the chart: ' . aiCopilotFallbackValue($facts['medication_line'], 'No active medications found.'),
-                    'This list supports diabetes management plus neuropathy symptom control.',
-                ]),
-                aiCopilotBuildSection('Safety checks', [
+                aiCopilotBuildSection('Current Medication Information', aiCopilotBuildMedicationInformationRows($context)),
+                aiCopilotBuildSection('Clinical review considerations', [
                     'Glipizide raises hypoglycemia risk if meal timing is inconsistent or intake drops because of illness.',
                     'Metformin and gabapentin both deserve a renal-function check in the infection and wound-healing context.',
                     'Allergy status is documented as: ' . $allergies . ' That matters if antibiotics are being considered.',
@@ -1196,13 +2645,10 @@ function aiCopilotBuildMedicationResponse(array $context): array
             aiCopilotScenarioTags($context, ['metformin', 'glipizide', 'gabapentin', 'wound care', 'hypoglycemia risk'])
         ),
         default => aiCopilotBuildResponse(
-            'The medication review should focus on asthma control, rescue inhaler use, and steroid/controller safety. This beta draft must still be verified by a licensed clinician.',
+            'The following medication information for ' . $context['patient']['name'] . ' must be verified by a licensed clinician.',
             [
-                aiCopilotBuildSection('Current medication picture', [
-                    'Active medications in the chart: ' . aiCopilotFallbackValue($facts['medication_line'], 'No active medications found.'),
-                    'The list suggests both rescue and controller therapy plus allergy overlap management.',
-                ]),
-                aiCopilotBuildSection('Safety checks', [
+                aiCopilotBuildSection('Current Medication Information', aiCopilotBuildMedicationInformationRows($context)),
+                aiCopilotBuildSection('Clinical review considerations', [
                     'Frequent albuterol use can signal poor control and can contribute to tachycardia or shakiness.',
                     'Review controller adherence and whether the patient is using any duplicate inhalers or old steroid prescriptions.',
                     'Prednisone side effects such as insomnia, mood changes, and glucose effects should be reviewed if the recent course is active.',
@@ -1882,14 +3328,6 @@ function aiCopilotMaybeBuildRolePermissionResponse(string $role, string $mode, s
         };
     }
 
-    if ($role === 'doctor' && preg_match('/final diagnosis|definitive diagnosis|diagnose this patient|certain diagnosis/', $value)) {
-        return array_merge(aiCopilotBuildResponse(
-            'I can support differential reasoning, but I cannot autonomously diagnose the patient.',
-            [],
-            ['Review needed', 'Red flags']
-        ), ['restriction_type' => 'doctor_autonomous_diagnosis_block']);
-    }
-
     if ($role === 'nurse' && preg_match('/(change|start|stop|increase|decrease|switch).*(medication|drug|dose|insulin|inhaler|pill)|medication change/', $value)) {
         return array_merge(aiCopilotBuildResponse(
             'I can help explain the current medication plan and flag items to review, but medication changes should be handled by the prescribing clinician.',
@@ -1909,6 +3347,14 @@ function aiCopilotMaybeBuildRolePermissionResponse(string $role, string $mode, s
     if ($role === 'front_desk' && preg_match('/medication|lab|diagnosis|differential|a1c|treatment|soap|clinical note|plan|prescri/', $value)) {
         return array_merge(aiCopilotBuildResponse(
             'This role only has access to scheduling and basic contact workflows. Medication details are restricted.',
+            [],
+            ['Front desk', 'Minimum PHI', 'Review needed']
+        ), ['restriction_type' => 'front_desk_phi_limit']);
+    }
+
+    if ($role === 'front_desk' && preg_match('/everything about|show me everything|all chart data|entire chart|full history/', $value)) {
+        return array_merge(aiCopilotBuildResponse(
+            'Clinical chart details are restricted for the Front Desk role. I can help with appointment information, contact confirmation, reminder drafting, or routing this to clinical staff.',
             [],
             ['Front desk', 'Minimum PHI', 'Review needed']
         ), ['restriction_type' => 'front_desk_phi_limit']);
@@ -1970,7 +3416,7 @@ function aiCopilotBuildNurseRoleContext(array $context): array
 
     $context['notes'] = $notes;
     $context['medications'] = $medications;
-    $context['billing'] = ['encounter' => [], 'rows' => [], 'claim' => []];
+    $context['billing'] = ['encounter' => [], 'rows' => [], 'claim' => [], 'payment_summary' => []];
     $context['primary_insurance'] = [];
 
     return $context;
@@ -2013,6 +3459,7 @@ function aiCopilotBuildBillingRoleContext(array $context): array
             'problems_addressed' => $problemTitles,
             'follow_up_considerations' => $facts['follow_up_considerations'],
             'encounter_reason' => $context['encounters'][0]['reason'] ?? '',
+            'payment_summary' => $context['billing']['payment_summary'] ?? [],
         ],
     ];
 }
@@ -2061,7 +3508,7 @@ function aiCopilotBuildFrontDeskRoleContext(array $context): array
         'medications' => [],
         'latest_vitals' => [],
         'primary_insurance' => [],
-        'billing' => ['encounter' => [], 'rows' => [], 'claim' => []],
+        'billing' => ['encounter' => [], 'rows' => [], 'claim' => [], 'payment_summary' => []],
     ];
 }
 
@@ -2252,7 +3699,7 @@ function aiCopilotSendReminderEmailAction(string $role, array $context): array
             'demo' => true,
             'message' => 'Only the Front Desk role can send appointment reminder emails in this demo.',
             'tags' => ['Front desk', 'Minimum PHI', 'Review needed'],
-            'sources' => aiCopilotBuildSources($context),
+            'sources' => aiCopilotBuildSources($context, 'send_reminder'),
             'safety_note' => aiCopilotRoleSafetyNote($role),
         ];
     }
@@ -2264,7 +3711,7 @@ function aiCopilotSendReminderEmailAction(string $role, array $context): array
             'demo' => true,
             'message' => 'Select a demo patient before sending a reminder email.',
             'tags' => ['Front desk', 'Reminder', 'Minimum PHI'],
-            'sources' => aiCopilotBuildSources($context),
+            'sources' => aiCopilotBuildSources($context, 'send_reminder'),
             'safety_note' => aiCopilotRoleSafetyNote($role),
         ];
     }
@@ -2278,7 +3725,7 @@ function aiCopilotSendReminderEmailAction(string $role, array $context): array
             'demo' => true,
             'message' => 'A demo email address and upcoming appointment are required before sending a reminder.',
             'tags' => ['Front desk', 'Reminder', 'Minimum PHI'],
-            'sources' => aiCopilotBuildSources($context),
+            'sources' => aiCopilotBuildSources($context, 'send_reminder'),
             'safety_note' => aiCopilotRoleSafetyNote($role),
         ];
     }
@@ -2310,7 +3757,7 @@ function aiCopilotSendReminderEmailAction(string $role, array $context): array
             ? 'Reminder email sent to ' . $email . '.'
             : 'Demo reminder prepared for ' . $email . '. Email sending is not configured in this environment.',
         'tags' => ['Front desk', 'Reminder', 'Minimum PHI'],
-        'sources' => aiCopilotBuildSources($context),
+        'sources' => aiCopilotBuildSources($context, 'send_reminder'),
         'safety_note' => aiCopilotRoleSafetyNote($role),
     ];
 }
@@ -2536,37 +3983,173 @@ function aiCopilotClaimChecksFromContext(array $context): array
     return aiCopilotSplitChecklist($raw);
 }
 
-function aiCopilotBuildSources(array $context): array
+function aiCopilotBuildBillingPaymentSummary(array $notes, array $primaryInsurance, array $billingEncounter): array
+{
+    $billingNote = aiCopilotFindNoteBody($notes, 'DEMO AI - Marcus Billing Payment Source');
+    if ($billingNote === '') {
+        return [];
+    }
+
+    $billingMap = aiCopilotParseLabeledNote($billingNote);
+
+    return [
+        'patient_balance_due' => aiCopilotTrimSentenceValue(aiCopilotMapValue($billingMap, 'patient balance due')),
+        'insurance_balance_due' => aiCopilotTrimSentenceValue(aiCopilotMapValue($billingMap, 'insurance balance due')),
+        'total_balance_due' => aiCopilotTrimSentenceValue(aiCopilotMapValue($billingMap, 'total balance due')),
+        'next_payment_due_date' => aiCopilotTrimSentenceValue(aiCopilotMapValue($billingMap, 'next patient payment due date')),
+        'payer' => aiCopilotFirstNonEmpty([
+            aiCopilotTrimSentenceValue(aiCopilotMapValue($billingMap, 'payer')),
+            aiCopilotCleanText($primaryInsurance['carrier'] ?? ''),
+        ]),
+        'plan_name' => aiCopilotFirstNonEmpty([
+            aiCopilotTrimSentenceValue(aiCopilotMapValue($billingMap, 'plan')),
+            aiCopilotTrimSentenceValue(aiCopilotMapValue($billingMap, 'plan name')),
+            aiCopilotCleanText($primaryInsurance['plan_name'] ?? ''),
+        ]),
+        'billing_provider' => aiCopilotFirstNonEmpty([
+            aiCopilotTrimSentenceValue(aiCopilotMapValue($billingMap, 'billing provider')),
+            aiCopilotCleanText($billingEncounter['location'] ?? ''),
+        ]),
+        'payment_note' => aiCopilotTrimSentenceValue(aiCopilotMapValue($billingMap, 'payment note')),
+        'insurance_note' => aiCopilotTrimSentenceValue(aiCopilotMapValue($billingMap, 'insurance note')),
+        'source_title' => 'DEMO AI - Marcus Billing Payment Source',
+        'synthetic_demo_data' => true,
+    ];
+}
+
+function aiCopilotBuildSources(array $context, string $mode = 'general_assistant'): array
 {
     if (!aiCopilotContextHasPatient($context)) {
-        return ['no patient chart selected'];
+        return ['General Prompt Context'];
     }
 
-    $sources = ['patient_data'];
+    if ($mode === 'latest_ambient_summary') {
+        $role = aiCopilotCleanText((string) ($context['role'] ?? 'doctor'));
+        $sources = ['Patient Chart Context'];
 
-    if (!empty($context['appointments']) || !empty($context['next_appointment'])) {
-        $sources[] = 'openemr_postcalendar_events';
+        if (!empty($context['approved_ambient_visit']) || !empty($context['latest_approved_ambient_encounter'])) {
+            $sources[] = 'Latest Approved Ambient Encounter Capture';
+            $sources[] = 'AI-Assisted Visit Review';
+            $sources[] = 'Ambient Encounter Capture';
+        }
+
+        if ($role === 'billing' && (!empty($context['billing']['payment_summary']) || !empty($context['primary_insurance']))) {
+            $sources[] = 'Insurance / Billing Context';
+        }
+
+        return array_values(array_unique($sources));
     }
-    if (!empty($context['encounters'])) {
-        $sources[] = 'form_encounter';
+
+    if (in_array($mode, ['billing', 'billing_review'], true)) {
+        $sources = ['Patient Chart Context'];
+
+        if (!empty($context['primary_insurance']) || !empty($context['billing']['payment_summary'])) {
+            $sources[] = 'Insurance / Billing Context';
+        }
+
+        if (!empty($context['billing']['payment_summary'])) {
+            $sources[] = 'Payment Due Source';
+        }
+
+        if (!empty($context['billing']['payment_summary']['insurance_note']) || !empty($context['primary_insurance'])) {
+            $sources[] = 'Insurance Note';
+        }
+
+        if (!empty($context['billing']['rows']) || !empty($context['billing']['claim']) || !empty($context['billing']['payment_summary'])) {
+            $sources[] = 'Billing / Claim Context';
+        }
+
+        return array_values(array_unique($sources));
     }
-    if (!empty($context['notes'])) {
-        $sources[] = 'pnotes';
-    }
-    if (!empty($context['problems']) || !empty($context['allergies'])) {
-        $sources[] = 'lists';
-    }
+
+    $sources = ['Patient Chart Context'];
+
     if (!empty($context['medications'])) {
-        $sources[] = 'prescriptions';
+        $sources[] = 'Medications';
     }
-    if (!empty($context['latest_vitals'])) {
-        $sources[] = 'form_vitals';
+
+    if (!empty($context['appointments']) || !empty($context['next_appointment']) || !empty($context['encounters'])) {
+        $sources[] = 'Visit History';
     }
-    if (!empty($context['billing']['rows']) || !empty($context['billing']['claim']) || !empty($context['primary_insurance'])) {
-        $sources[] = 'billing/demo claim data';
+
+    if (!empty($context['notes'])) {
+        $sources[] = 'Patient Chart Context';
+    }
+
+    if (!empty($context['approved_ambient_visit'])) {
+        $sources[] = 'Latest Approved Ambient Encounter Capture';
+    }
+
+    if (!empty($context['problems']) || !empty($context['allergies'])) {
+        $sources[] = 'Issues / Problem List';
+    }
+
+    if (!empty($context['latest_vitals']) || aiCopilotContextHasRecentLabs($context)) {
+        $sources[] = 'Vitals / Labs';
+    }
+
+    if (!empty($context['primary_insurance']) || aiCopilotContextContainsKeywords($context, ['insurance', 'coverage', 'payer', 'plan'])) {
+        $sources[] = 'Insurance Note';
+    }
+
+    if (in_array($mode, ['medication_info', 'treatment_plan', 'clinical_notes', 'follow_up', 'visit_summary', 'patient_education', 'rag_chart_context'], true) && aiCopilotContextContainsKeywords($context, ['vaccine', 'immunization', 'flu', 'seasonal vaccine'])) {
+        $sources[] = 'Immunization Review';
+    }
+
+    if (in_array($mode, ['medication_info', 'treatment_plan', 'clinical_notes', 'follow_up', 'visit_summary', 'patient_education', 'rag_chart_context'], true) && aiCopilotContextContainsKeywords($context, ['prefers afternoon phone reminders', 'written medication instructions', 'care support contact', 'daughter'])) {
+        $sources[] = 'Care Preferences';
+    }
+
+    if (in_array($mode, ['medication_info', 'treatment_plan', 'clinical_notes', 'follow_up', 'visit_summary', 'patient_education', 'rag_chart_context'], true) && aiCopilotContextContainsKeywords($context, ['care support contact', 'daughter'])) {
+        $sources[] = 'Care Team';
+    }
+
+    if (!empty($context['primary_insurance']) || !empty($context['billing']['payment_summary'])) {
+        $sources[] = 'Insurance / Billing Context';
+    }
+
+    if (!empty($context['billing']['rows']) || !empty($context['billing']['claim']) || !empty($context['billing']['payment_summary'])) {
+        $sources[] = 'Billing / Claim Context';
     }
 
     return array_values(array_unique($sources));
+}
+
+function aiCopilotContextHasRecentLabs(array $context): bool
+{
+    if (!aiCopilotContextHasPatient($context)) {
+        return false;
+    }
+
+    $facts = aiCopilotExtractClinicalFacts($context);
+    return aiCopilotCleanText($facts['recent_labs'] ?? '') !== '';
+}
+
+function aiCopilotContextContainsKeywords(array $context, array $keywords): bool
+{
+    $haystacks = [];
+
+    foreach (($context['notes'] ?? []) as $note) {
+        $haystacks[] = $note['title'] ?? '';
+        $haystacks[] = $note['body'] ?? '';
+    }
+
+    foreach (($context['encounters'] ?? []) as $encounter) {
+        $haystacks[] = $encounter['reason'] ?? '';
+        $haystacks[] = $encounter['billing_note'] ?? '';
+    }
+
+    $haystacks[] = $context['next_appointment']['summary'] ?? '';
+    $haystacks[] = $context['patient']['scenario'] ?? '';
+    $combined = strtolower(aiCopilotJoinParts($haystacks));
+
+    foreach ($keywords as $keyword) {
+        if ($keyword !== '' && str_contains($combined, strtolower($keyword))) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 function aiCopilotContextHasPatient(array $context): bool
@@ -2880,4 +4463,9 @@ function aiCopilotFirstNonEmpty(array $values): string
     }
 
     return '';
+}
+
+function aiCopilotTrimSentenceValue(string $value): string
+{
+    return rtrim(aiCopilotCleanText($value), '. ');
 }

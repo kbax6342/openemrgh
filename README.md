@@ -34,6 +34,51 @@ Key files:
 
 The co-pilot is designed as a draft-only, clinician-reviewed assistant. It should not autonomously diagnose, prescribe, submit claims, update records, or perform clinical actions without human approval.
 
+## LLM / Fallback Mode
+
+The Clinical Co-Pilot uses OpenAI when `OPENAI_API_KEY` is configured inside the Docker/PHP runtime environment.
+
+Without `OPENAI_API_KEY`, the co-pilot uses a local fallback engine for demo reliability.
+
+The UI and browser console show:
+- engine
+- provider
+- model
+- fallback reason
+- token usage, when returned by OpenAI
+- latency
+- source metadata
+- visible `RAG-grounded response` wording
+- visible `Sources Used`
+
+Never commit API keys.
+
+To verify Docker sees the key:
+
+```bash
+docker compose exec openemr printenv OPENAI_API_KEY
+```
+
+To verify OpenAI mode in the browser:
+- open the Network tab
+- submit a Co-Pilot request
+- inspect the `copilot_api.php` response
+- confirm `meta.engine = "openai"`
+
+To verify fallback mode:
+- leave `OPENAI_API_KEY` unset
+- submit a Co-Pilot request
+- confirm the UI shows `Engine: Local fallback`
+- confirm the API response shows `meta.fallback_reason = "missing_openai_key"`
+
+To run the lightweight local evals:
+
+```bash
+node interface/ai_copilot/copilot_guardrails.test.js
+node interface/ai_copilot/evals/run-clinical-copilot-evals.js
+node evals/run_guardrail_evals.js
+```
+
 ### Contributing
 
 OpenEMR is a leader in healthcare open source software and comprises a large and diverse community of software developers, medical providers and educators with a very healthy mix of both volunteers and professionals. [Join us and learn how to start contributing today!](https://open-emr.org/wiki/index.php/FAQ#How_do_I_begin_to_volunteer_for_the_OpenEMR_project.3F)
