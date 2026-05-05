@@ -145,6 +145,19 @@ const tests = [
         assert.ok(result.ui);
         assert.strictEqual(result.ui.blocked, false);
     },
+    function doctorLabPdfIngestionAllowed() {
+        const result = evaluate({
+            role: 'doctor',
+            mode: 'lab_pdf_ingestion',
+            prompt: 'Ingest the attached lab PDF for clinician review only.',
+            draftResponse: 'Draft lab PDF review prepared for clinician review.'
+        });
+        assert.strictEqual(result.allowed, true);
+        assert.strictEqual(result.blockedReason, '');
+        assert.ok(/Draft only\. Human review required/i.test(result.finalSafety));
+        assert.ok(result.ui);
+        assert.strictEqual(result.ui.blocked, false);
+    },
     function nurseMedicationChangeStillBlocked() {
         const result = evaluate({
             role: 'nurse',
@@ -167,6 +180,18 @@ const tests = [
         assert.strictEqual(result.allowed, false);
         assert.strictEqual(result.blockedReason, 'billing_clinical_scope_block');
     },
+    function billingLabPdfStillBlocked() {
+        const result = evaluate({
+            role: 'billing',
+            mode: 'lab_pdf_ingestion',
+            prompt: 'Review this lab PDF and tell me what treatment Marcus needs next.',
+            draftResponse: 'Treatment recommendation from the PDF.'
+        });
+        assert.strictEqual(result.allowed, false);
+        assert.strictEqual(result.blockedReason, 'billing_clinical_scope_block');
+        assert.ok(result.ui);
+        assert.strictEqual(result.ui.blocked, true);
+    },
     function billingMedicationDetailsBlocked() {
         const result = evaluate({
             role: 'billing',
@@ -185,6 +210,18 @@ const tests = [
             mode: 'treatment_plan',
             prompt: "Tell me Marcus's diagnosis and treatment plan.",
             draftResponse: 'Diagnosis and treatment plan details.'
+        });
+        assert.strictEqual(result.allowed, false);
+        assert.strictEqual(result.blockedReason, 'front_desk_clinical_scope_block');
+        assert.ok(result.ui);
+        assert.strictEqual(result.ui.blocked, true);
+    },
+    function frontDeskLabInterpretationBlocked() {
+        const result = evaluate({
+            role: 'front_desk',
+            mode: 'general_assistant',
+            prompt: 'What labs are abnormal in the uploaded PDF for Marcus?',
+            draftResponse: 'Hemoglobin A1c and LDL are abnormal.'
         });
         assert.strictEqual(result.allowed, false);
         assert.strictEqual(result.blockedReason, 'front_desk_clinical_scope_block');

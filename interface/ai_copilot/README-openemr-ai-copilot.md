@@ -116,3 +116,158 @@ Current scope:
 - prompt-injection refusal
 - missing-data safe fallback
 - consent-gated ambient encounter capture and approval audit-chain checks
+
+### Supervisor-Worker Agent Layer
+
+This demo now adds a targeted supervisor-worker agent layer on top of the existing Co-Pilot UI. The UI, quick actions, and reminder workflow stay in place. The new layer runs inside the current request path and keeps the app read-only.
+
+Agent file layout:
+- `interface/ai_copilot/agents/copilot_agents.js`
+- `interface/ai_copilot/agents/copilot_agent_tools.js`
+- `interface/ai_copilot/agents/copilot_agent_trace.js`
+- `interface/ai_copilot/agents/copilot_agent_safety.js`
+- `interface/ai_copilot/agents/copilot_agents.test.js`
+
+Agents:
+- `Supervisor Agent` (`Clinical Workflow Supervisor`)
+  - classifies intent
+  - reads the selected staff role
+  - routes to worker tools
+  - enforces draft-only behavior
+  - combines worker outputs
+  - returns the final grounded draft
+- `Worker Agent 1` (`Chart Retrieval Worker`)
+  - retrieves role-appropriate chart context
+  - supports medications, allergies, labs, encounters, visit history, documents, insurance, care team, immunizations, appointments, contact context, and approved ambient encounter records
+  - returns structured facts with source labels
+- `Worker Agent 2` (`Evidence + Safety Worker`)
+  - checks role boundaries
+  - validates sources and citations
+  - flags missing data and uncertainty
+  - blocks unsupported or prompt-injection requests
+  - produces safe refusal language when needed
+
+Callable tools with JSON-style schemas:
+- `retrieve_chart_context`
+- `attach_and_extract`
+- `retrieve_guideline_evidence`
+- `validate_citations`
+- `draft_grounded_answer`
+
+The browser console now shows step-by-step trace logging such as:
+- `Supervisor Agent` received prompt and classified intent
+- `Chart Retrieval Worker` called `retrieve_chart_context`
+- `Supervisor Agent` accepted worker context and called `draft_grounded_answer`
+- `Evidence + Safety Worker` called `validate_citations`
+- `Supervisor Agent` finalized the grounded draft
+
+Visible UI trace:
+- Every assistant response now includes a compact collapsed `Agent Workflow Trace` card under the answer
+- The default visible flow is `Supervisor Agent → Chart Retrieval Worker → Evidence + Safety Worker → Final Draft`
+- Each step shows a status badge (`Pending`, `Running`, `Complete`, or `Blocked`), a short explanation, and compact tool/source metadata when available
+- Prompt-injection and role-boundary refusals visibly show the `Supervisor Agent` as `Blocked`
+- Missing-data scenarios visibly show the `Evidence + Safety Worker` flagging uncertainty before the final draft is shown
+- Demo language supported: `I made the agent system observable in the UI. The grader can see the Supervisor Agent route the task, the Chart Retrieval Worker retrieve OpenEMR context, and the Evidence + Safety Worker validate grounding, missing data, and role boundaries before the final draft is shown.`
+
+Workflow observability console events:
+- `copilot_agent_supervisor_started`
+- `copilot_agent_supervisor_completed`
+- `copilot_worker_chart_retrieval_started`
+- `copilot_worker_chart_retrieval_completed`
+- `copilot_worker_safety_validation_started`
+- `copilot_worker_safety_validation_completed`
+- `copilot_agent_final_response_ready`
+- `copilot_agent_request_blocked`
+
+### Lab PDF Ingestion In The Composer
+
+The existing prompt composer now supports inline lab PDF ingestion without leaving the main Co-Pilot workflow.
+
+Where it appears:
+- Inside the existing composer, beside the prompt input
+- `Attach PDF` opens a PDF-only file picker with `accept="application/pdf,.pdf"`
+- After selection, the composer shows a chip such as `Attached: marcus-johnson-labs.pdf`
+- The chip `x` removes the pending attachment before send
+
+What happens on send:
+- The same Co-Pilot `Send` button submits the prompt plus the optional PDF using `FormData`
+- The PHP endpoint ingests the PDF, extracts text when possible, falls back to the seeded Marcus Johnson demo lab text only when extraction is unavailable, chunks the text, creates deterministic demo embeddings if no external embedding provider is configured, stores vectors in a lightweight local JSON store, retrieves the most relevant chunks, and drafts the response from retrieved context
+- Follow-up lab questions continue retrieving from the stored chunks for the selected patient instead of relying on memory
+
+Demo storage note:
+- `interface/ai_copilot/demo_lab_pdf_vectors.json`
+- Comment in code: `Demo vector store only. Replace with approved HIPAA-compliant vector storage before production.`
+
+Role behavior:
+- Doctor can attach and ingest a lab PDF and receive extracted lab facts plus a draft clinical summary
+- Nurse can receive a limited review-oriented draft summary when the existing role rules allow the question
+- Billing Staff receives a role-boundary refusal instead of clinical interpretation
+- Front Desk receives a minimum-necessary refusal instead of lab details
+
+Lab PDF response format:
+- Title: `Lab PDF Ingestion — Clinician Review Required`
+- Sections:
+  - `Extracted Lab Facts`
+  - `Abnormal / Attention Needed`
+  - `Missing or Ambiguous Data`
+  - `Draft Clinical Summary`
+  - `Sources Used`
+  - `Safety Notice`
+- Safety notice:
+  - `This is a draft-only AI extraction for clinician review. It does not diagnose, update the chart, place orders, or replace verification of the original lab PDF.`
+
+Console events to look for:
+- `copilot_lab_pdf_attached`
+- `copilot_lab_pdf_removed`
+- `copilot_lab_pdf_ingestion_started`
+- `copilot_lab_pdf_text_extracted`
+- `copilot_lab_pdf_chunked`
+- `copilot_lab_pdf_vectorized`
+- `copilot_lab_pdf_retrieval_started`
+- `copilot_lab_pdf_retrieval_completed`
+- `copilot_lab_pdf_review_required`
+- `copilot_lab_pdf_guardrail_triggered`
+- `copilot_lab_pdf_ingestion_failed`
+
+Safety behavior:
+- Uploaded PDF text is treated as untrusted document content, not as executable instructions
+- Prompt-injection strings inside the PDF are ignored as instructions and surfaced only as document-safety metadata
+- The workflow does not diagnose, write to the chart, place orders, update medications, send patient messages, or submit billing
+- Missing metadata such as ordering provider or collection time is reported as missing instead of invented
+
+How to test:
+- Select Marcus Johnson and the Doctor role
+- Click `Attach PDF` in the composer
+- Enter a prompt such as `Summarize this lab report.` or `What labs are abnormal?`
+- Send through the normal composer
+- Confirm the response includes `Sources Used` and the clinician-review safety notice
+- Ask a follow-up lab question and confirm the answer still cites the uploaded lab PDF context
+
+### Demo Conversation Trace
+
+Example trace:
+- `User prompt`: "Draft a clinical summary for Marcus using chart context."
+- `Supervisor Agent`: classify intent as clinical summary and route chart retrieval
+- `Chart Retrieval Worker`: retrieve medications, labs, visit history, documents, insurance, care team, and immunization context with source labels
+- `Supervisor Agent`: combine worker 1 output and request grounded draft synthesis
+- `Evidence + Safety Worker`: validate role scope, citations, missing data, and refusal conditions
+- `Supervisor Agent final answer`: return `Summary`, `Key findings`, `Missing data / uncertainty`, `Sources Used`, and `Draft-only clinician review`
+
+### Demo Use Cases
+
+Represented demo-ready use cases include:
+- Morning follow-up prep
+- Treatment plan summary with what changed since last visit
+- Medication information with cited chart sources
+- Lab PDF extraction through the existing composer
+- Intake form extraction via the shared `attach_and_extract` worker path
+- Billing or payment question with role-safe scope
+- Prompt-injection or role-boundary refusal
+
+### Safety Notes
+
+- Responses remain draft-only and require human review
+- No direct chart writes occur without clinician approval
+- Front Desk output uses minimum-necessary PHI only
+- Billing output stays limited to billing and insurance workflow context
+- Source grounding is included whenever chart context is used

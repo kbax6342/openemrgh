@@ -1941,6 +1941,157 @@ body.copilot-embedded.body_top {
     word-break: break-word;
 }
 
+.copilot-agent-trace {
+    margin-top: 10px;
+    border: 1px solid rgba(207, 213, 244, 0.82);
+    border-radius: 18px;
+    background: rgba(252, 253, 255, 0.98);
+    box-shadow: 0 10px 22px rgba(35, 50, 94, 0.05);
+    overflow: hidden;
+}
+
+.copilot-agent-trace-blocked {
+    border-color: rgba(214, 85, 85, 0.22);
+    background: rgba(255, 248, 248, 0.98);
+}
+
+.copilot-agent-trace-summary {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 13px;
+    cursor: pointer;
+    list-style: none;
+}
+
+.copilot-agent-trace-summary::-webkit-details-marker {
+    display: none;
+}
+
+.copilot-agent-trace-summary-text {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.copilot-agent-trace-title {
+    color: var(--copilot-purple-deep);
+    font-size: 0.82rem;
+    font-weight: 800;
+    line-height: 1.3;
+}
+
+.copilot-agent-trace-flow {
+    color: var(--copilot-muted);
+    font-size: 0.75rem;
+    line-height: 1.45;
+}
+
+.copilot-agent-trace-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 5px 9px;
+    border-radius: 999px;
+    border: 1px solid rgba(207, 213, 244, 0.92);
+    background: rgba(255, 255, 255, 0.96);
+    color: var(--copilot-purple-deep);
+    font-size: 0.7rem;
+    font-weight: 800;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+.copilot-agent-trace-badge-pending {
+    color: var(--copilot-muted);
+    background: rgba(246, 247, 251, 0.98);
+}
+
+.copilot-agent-trace-badge-running {
+    border-color: rgba(63, 128, 255, 0.28);
+    background: rgba(240, 246, 255, 0.98);
+    color: #1e5db6;
+}
+
+.copilot-agent-trace-badge-complete {
+    border-color: rgba(59, 159, 104, 0.28);
+    background: rgba(241, 251, 245, 0.98);
+    color: #177245;
+}
+
+.copilot-agent-trace-badge-blocked {
+    border-color: rgba(214, 85, 85, 0.28);
+    background: rgba(255, 242, 242, 0.98);
+    color: #9a2525;
+}
+
+.copilot-agent-trace-body {
+    padding: 0 13px 13px;
+    display: grid;
+    gap: 10px;
+}
+
+.copilot-agent-trace-step {
+    padding: 11px 12px;
+    border: 1px solid rgba(224, 228, 244, 0.94);
+    border-radius: 15px;
+    background: rgba(255, 255, 255, 0.98);
+}
+
+.copilot-agent-trace-step-blocked {
+    border-color: rgba(214, 85, 85, 0.2);
+    background: rgba(255, 247, 247, 0.98);
+}
+
+.copilot-agent-trace-step-running {
+    border-color: rgba(63, 128, 255, 0.2);
+    background: rgba(246, 250, 255, 0.98);
+}
+
+.copilot-agent-trace-step-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.copilot-agent-trace-step-name {
+    margin: 0;
+    color: var(--copilot-text);
+    font-size: 0.8rem;
+    font-weight: 800;
+    line-height: 1.3;
+}
+
+.copilot-agent-trace-step-description {
+    margin: 7px 0 0;
+    color: var(--copilot-muted);
+    font-size: 0.76rem;
+    line-height: 1.5;
+}
+
+.copilot-agent-trace-step-meta {
+    margin-top: 9px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.copilot-agent-trace-step-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(207, 213, 244, 0.9);
+    background: rgba(248, 250, 255, 0.98);
+    color: var(--copilot-purple-deep);
+    font-size: 0.69rem;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
 .copilot-guardrail-status {
     display: inline-flex;
     align-items: center;
@@ -1991,6 +2142,97 @@ body.copilot-embedded.body_top {
     box-shadow: var(--copilot-shadow-soft);
 }
 
+.copilot-composer-input-stack {
+    min-width: 0;
+}
+
+.copilot-composer-attachment-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+}
+
+.copilot-attach-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 34px;
+    padding: 0 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(107, 92, 255, 0.18);
+    background: rgba(246, 248, 255, 0.9);
+    color: var(--copilot-purple-deep);
+    font-size: 0.9rem;
+    font-weight: 700;
+    transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, opacity 0.18s ease;
+}
+
+.copilot-attach-button:hover:enabled,
+.copilot-attach-button:focus-visible:enabled {
+    transform: translateY(-1px);
+    border-color: rgba(107, 92, 255, 0.34);
+    box-shadow: 0 10px 18px rgba(76, 94, 183, 0.12);
+    outline: none;
+}
+
+.copilot-attach-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.58;
+    box-shadow: none;
+}
+
+.copilot-attach-glyph {
+    font-size: 1rem;
+    line-height: 1;
+}
+
+.copilot-attachment-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 34px;
+    max-width: 100%;
+    padding: 0 6px 0 12px;
+    border-radius: 999px;
+    background: rgba(109, 84, 255, 0.12);
+    color: var(--copilot-purple-deep);
+    font-weight: 700;
+}
+
+.copilot-attachment-chip-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 320px;
+}
+
+.copilot-attachment-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: 0;
+    border-radius: 50%;
+    background: rgba(109, 84, 255, 0.18);
+    color: var(--copilot-purple-deep);
+    font-size: 1rem;
+    line-height: 1;
+}
+
+.copilot-attachment-remove:hover:enabled,
+.copilot-attachment-remove:focus-visible:enabled {
+    background: rgba(109, 84, 255, 0.28);
+    outline: none;
+}
+
+.copilot-attachment-remove:disabled {
+    cursor: not-allowed;
+    opacity: 0.58;
+}
+
 .copilot-composer-actions {
     display: inline-flex;
     align-items: center;
@@ -2016,6 +2258,25 @@ body.copilot-embedded.body_top {
 
 .copilot-input::placeholder {
     color: #8a93ab;
+}
+
+.copilot-lab-pdf-status {
+    margin: 4px 4px 0 8px;
+    color: var(--copilot-muted);
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+.copilot-lab-pdf-status[data-tone="success"] {
+    color: #1f7a46;
+}
+
+.copilot-lab-pdf-status[data-tone="warning"] {
+    color: #8f5b00;
+}
+
+.copilot-lab-pdf-status[data-tone="error"] {
+    color: #a43131;
 }
 
 .copilot-send-button {
@@ -2729,6 +2990,36 @@ body.copilot-embedded.body_top {
 
 .medical-copilot--compact .copilot-runtime-meta-row dt {
     font-size: 0.6rem;
+}
+
+.medical-copilot--compact .copilot-agent-trace {
+    margin-top: 9px;
+    border-radius: 16px;
+}
+
+.medical-copilot--compact .copilot-agent-trace-summary {
+    padding: 11px 12px;
+    gap: 10px;
+}
+
+.medical-copilot--compact .copilot-agent-trace-title {
+    font-size: 0.8rem;
+}
+
+.medical-copilot--compact .copilot-agent-trace-flow,
+.medical-copilot--compact .copilot-agent-trace-step-description,
+.medical-copilot--compact .copilot-agent-trace-step-chip {
+    font-size: var(--copilot-font-xs);
+}
+
+.medical-copilot--compact .copilot-agent-trace-body {
+    padding: 0 12px 12px;
+    gap: 8px;
+}
+
+.medical-copilot--compact .copilot-agent-trace-step {
+    padding: 10px 11px;
+    border-radius: 14px;
 }
 
 .medical-copilot--compact .copilot-composer {

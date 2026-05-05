@@ -20,6 +20,7 @@
         'billing_review',
         'follow_up',
         'rag_chart_context',
+        'lab_pdf_ingestion',
         'latest_ambient_summary',
         'visit_summary',
         'patient_education',
@@ -74,6 +75,7 @@
     ];
 
     const TOPIC_PATTERNS = {
+        lab_pdf_ingestion: /\b(lab pdf ingestion|lab pdf|attach.*pdf|upload.*pdf|ingest.*pdf|extract.*pdf|pdf lab result)\b/i,
         medication_info: /\b(medication|medications|meds|dose|dosage|prescription|prescriptions|interaction|counsel|refill|metformin|insulin|lisinopril|atorvastatin|albuterol|gabapentin)\b/i,
         differential_diagnosis: /\b(diagnose|diagnosis|differential|what could be causing|cause of|likely condition|red flag|do not miss)\b/i,
         clinical_notes: /\b(clinical note|soap|encounter note|documentation|note summary|chart summary|summarize the chart|subjective|objective|assessment|plan)\b/i,
@@ -548,6 +550,7 @@
 
     return {
         evaluate,
-        inferTopic
+        inferTopic,
+        containsPromptInjection
     };
 }));

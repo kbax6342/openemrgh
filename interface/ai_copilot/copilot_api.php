@@ -9,6 +9,8 @@
  */
 
 require_once("../globals.php");
+require_once(__DIR__ . '/lab_pdf_vector_store.php');
+require_once(__DIR__ . '/lab_pdf_ingestion.php');
 
 use OpenEMR\Common\Csrf\CsrfUtils;
 use OpenEMR\Common\Session\SessionWrapperFactory;
@@ -29,12 +31,11 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
     exit;
 }
 
-$rawInput = file_get_contents('php://input') ?: '';
 $requestId = aiCopilotResolveRequestId(null);
-$payload = json_decode($rawInput, true);
+$payload = aiCopilotParseRequestPayload();
 if (!is_array($payload)) {
     aiCopilotJsonResponse(400, [
-        'error' => 'Invalid JSON request body.',
+        'error' => 'Invalid request payload.',
         'meta' => aiCopilotErrorMeta($requestId, 'invalid_json'),
     ]);
     exit;
@@ -79,6 +80,57 @@ if ($patientId !== false && $patientId !== null && $patientId > 0) {
 
 $requestedMode = is_string($payload['mode'] ?? '') ? trim($payload['mode']) : '';
 $openAiConfigured = aiCopilotReadEnv('OPENAI_API_KEY') !== '';
+$toolInput = is_array($payload['tool_input'] ?? null) ? $payload['tool_input'] : [];
+$toolPrompt = aiCopilotNormalizePrompt($toolInput['prompt'] ?? $payload['message'] ?? '');
+$uploadedLabPdf = aiCopilotNormalizeUploadedLabPdf($_FILES['lab_pdf_attachment'] ?? null);
+$useSeededLabPdf = aiCopilotRequestTruthValue($payload['use_seeded_lab_pdf'] ?? false);
+
+if ($action === 'agent_tool') {
+    $toolName = aiCopilotNormalizePrompt($payload['tool_name'] ?? '');
+    $toolRequestedMode = is_string($toolInput['mode'] ?? null)
+        ? trim((string) $toolInput['mode'])
+        : $requestedMode;
+    $mode = aiCopilotResolveMode($toolRequestedMode, $toolPrompt, $validModes);
+    $chatHistory = aiCopilotNormalizeChatHistory($toolInput['chat_history'] ?? $payload['chat_history'] ?? []);
+    $fullContext = !empty($patient)
+        ? aiCopilotBuildContext($patient, $mode)
+        : aiCopilotBuildGeneralContext($mode, $toolPrompt);
+    $context = aiCopilotFilterContextForRole($fullContext, $role, $mode);
+    $context = aiCopilotAttachClientAmbientVisitContext($context, $payload['ambient_visit_context'] ?? null, $role);
+    $context = aiCopilotAttachClientAmbientVisitContext($context, $payload['ambient_context']['latestApprovedVisit'] ?? null, $role);
+    $context = aiCopilotAttachClientLabPdfContext($context, $payload['lab_pdf_context'] ?? null, $role);
+    $context = aiCopilotAttachRetrievedLabPdfContext($context, $toolPrompt, $role, $mode, $requestId);
+
+    $result = aiCopilotExecuteAgentTool(
+        $toolName,
+        $toolInput,
+        $requestId,
+        $role,
+        $mode,
+        $toolPrompt,
+        $chatHistory,
+        $context,
+        $validModes,
+        $openAiConfigured,
+        $requestStartedAt
+    );
+
+    if (($result['ok'] ?? false) !== true) {
+        aiCopilotJsonResponse(400, [
+            'error' => $result['error'] ?? 'Unsupported tool request.',
+            'meta' => aiCopilotErrorMeta($requestId, $result['error_category'] ?? 'agent_tool_error'),
+        ]);
+        exit;
+    }
+
+    aiCopilotJsonResponse(200, [
+        'ok' => true,
+        'tool_name' => $toolName,
+        'result' => $result['result'] ?? [],
+        'meta' => $result['meta'] ?? aiCopilotErrorMeta($requestId, 'agent_tool'),
+    ]);
+    exit;
+}
 
 if ($action === 'send_reminder_email') {
     $fullContext = !empty($patient)
@@ -128,7 +180,11 @@ $fullContext = !empty($patient)
 $context = aiCopilotFilterContextForRole($fullContext, $role, $mode);
 $context = aiCopilotAttachClientAmbientVisitContext($context, $payload['ambient_visit_context'] ?? null, $role);
 $context = aiCopilotAttachClientAmbientVisitContext($context, $payload['ambient_context']['latestApprovedVisit'] ?? null, $role);
+$context = aiCopilotAttachClientLabPdfContext($context, $payload['lab_pdf_context'] ?? null, $role);
+$context = aiCopilotAttachUploadedLabPdfContext($context, $uploadedLabPdf, $useSeededLabPdf, $payload, $role, $mode, $message, $requestId);
+$context = aiCopilotAttachRetrievedLabPdfContext($context, $message, $role, $mode, $requestId);
 $sources = aiCopilotBuildSources($context, $mode);
+$clientLabPdfToolOutput = aiCopilotLabPdfToolOutputForClient(is_array($context['attached_lab_pdf_tool_output'] ?? null) ? $context['attached_lab_pdf_tool_output'] : []);
 $permissionResponse = aiCopilotMaybeBuildRolePermissionResponse($role, $mode, $message, $context);
 if ($permissionResponse !== []) {
     $meta = aiCopilotBuildResponseMeta(
@@ -161,6 +217,7 @@ if ($permissionResponse !== []) {
         'safety_note' => aiCopilotRoleSafetyNote($role),
         'engine' => 'guardrail',
         'provider' => 'guardrail',
+        'tool_output' => $clientLabPdfToolOutput !== [] ? $clientLabPdfToolOutput : null,
         'meta' => $meta,
     ]);
     exit;
@@ -202,6 +259,7 @@ aiCopilotJsonResponse(200, [
     'safety_note' => aiCopilotRoleSafetyNote($role),
     'engine' => $draft['engine'],
     'provider' => $draft['provider'] ?? (($draft['engine'] ?? '') === 'openai' ? 'openai' : 'local_fallback'),
+    'tool_output' => $clientLabPdfToolOutput !== [] ? $clientLabPdfToolOutput : null,
     'meta' => $meta,
 ]);
 
@@ -395,13 +453,78 @@ function aiCopilotIsRagGrounded(string $mode, array $context): bool
         'patient_education',
         'rag_chart_context',
         'latest_ambient_summary',
+        'lab_pdf_ingestion',
     ], true);
 }
 
 function aiCopilotResolveAction(mixed $value): string
 {
     $action = is_string($value) ? trim($value) : 'chat';
-    return in_array($action, ['chat', 'send_reminder_email'], true) ? $action : 'chat';
+    return in_array($action, ['chat', 'send_reminder_email', 'agent_tool'], true) ? $action : 'chat';
+}
+
+function aiCopilotParseRequestPayload(): ?array
+{
+    $contentType = strtolower((string) ($_SERVER['CONTENT_TYPE'] ?? ''));
+    if (str_contains($contentType, 'multipart/form-data')) {
+        $payload = $_POST;
+        if (!is_array($payload)) {
+            return null;
+        }
+
+        if (isset($payload['chat_history_json']) && !isset($payload['chat_history'])) {
+            $decoded = json_decode((string) $payload['chat_history_json'], true);
+            $payload['chat_history'] = is_array($decoded) ? $decoded : [];
+        }
+
+        if (isset($payload['ambient_visit_context_json']) && !isset($payload['ambient_visit_context'])) {
+            $decoded = json_decode((string) $payload['ambient_visit_context_json'], true);
+            $payload['ambient_visit_context'] = is_array($decoded) ? $decoded : null;
+        }
+
+        if (isset($payload['ambient_context_json']) && !isset($payload['ambient_context'])) {
+            $decoded = json_decode((string) $payload['ambient_context_json'], true);
+            $payload['ambient_context'] = is_array($decoded) ? $decoded : null;
+        }
+
+        if (isset($payload['lab_pdf_context_json']) && !isset($payload['lab_pdf_context'])) {
+            $decoded = json_decode((string) $payload['lab_pdf_context_json'], true);
+            $payload['lab_pdf_context'] = is_array($decoded) ? $decoded : null;
+        }
+
+        return $payload;
+    }
+
+    $rawInput = file_get_contents('php://input') ?: '';
+    $decoded = json_decode($rawInput, true);
+    return is_array($decoded) ? $decoded : null;
+}
+
+function aiCopilotRequestTruthValue(mixed $value): bool
+{
+    if (is_bool($value)) {
+        return $value;
+    }
+
+    if (is_numeric($value)) {
+        return (int) $value === 1;
+    }
+
+    $normalized = strtolower(trim((string) $value));
+    return in_array($normalized, ['1', 'true', 'yes', 'on'], true);
+}
+
+function aiCopilotNormalizeUploadedLabPdf(mixed $file): ?array
+{
+    if (!is_array($file)) {
+        return null;
+    }
+
+    if (!isset($file['name']) && !isset($file['tmp_name'])) {
+        return null;
+    }
+
+    return $file;
 }
 
 function aiCopilotRoleCatalog(): array
@@ -418,6 +541,7 @@ function aiCopilotRoleCatalog(): array
                 'treatment_plan',
                 'follow_up',
                 'rag_chart_context',
+                'lab_pdf_ingestion',
                 'latest_ambient_summary',
                 'visit_summary',
                 'patient_education',
@@ -505,6 +629,10 @@ function aiCopilotModeCatalog(): array
             'title' => 'RAG: Review Marcus\'s Chart Context',
             'style' => 'Retrieve relevant chart context first, summarize what changed, cite visit history and other chart sources, and stay draft-only. Do not answer from uncited memory.',
         ],
+        'lab_pdf_ingestion' => [
+            'title' => 'Lab PDF Ingestion',
+            'style' => 'Extract draft lab facts from an attached lab PDF, call out missing data, cite the attachment as a source, and require clinician review. Never write the extracted content back to the chart automatically.',
+        ],
         'latest_ambient_summary' => [
             'title' => 'Latest Ambient Encounter Summary',
             'style' => 'Summarize only the latest approved ambient encounter capture or AI-assisted visit review. Keep the summary role-appropriate, draft-only, and grounded in the retrieved ambient encounter context.',
@@ -570,6 +698,9 @@ function aiCopilotInferModeFromMessage(string $message): string
 {
     $value = strtolower($message);
 
+    if (preg_match('/lab pdf ingestion|lab pdf|attach.*pdf|upload.*pdf|ingest.*pdf|extract.*pdf|pdf lab results?/', $value)) {
+        return 'lab_pdf_ingestion';
+    }
     if (preg_match('/summarize latest ambient encounter only|latest ambient encounter only|latest ambient encounter|ambient encounter only|latest ai-assisted visit review|latest approved ambient encounter/', $value)) {
         return 'latest_ambient_summary';
     }
@@ -1236,6 +1367,23 @@ function aiCopilotBuildLlmChatHistory(array $chatHistory): array
 
 function aiCopilotGenerateDraft(string $requestId, string $role, string $mode, string $message, array $chatHistory, array $context, array $modeConfig): array
 {
+    if ($mode === 'lab_pdf_ingestion') {
+        $fallbackResponse = aiCopilotBuildLabPdfIngestionResponse($context);
+        $fallbackResponse['engine'] = 'fallback';
+        $fallbackResponse['provider'] = 'local_fallback';
+        $fallbackResponse['model'] = null;
+        $fallbackResponse['openai_configured'] = aiCopilotReadEnv('OPENAI_API_KEY') !== '';
+        $fallbackResponse['token_usage'] = null;
+        $fallbackResponse['estimated_cost_usd'] = null;
+        $fallbackResponse['cost_note'] = null;
+        $fallbackResponse['fallback_reason'] = 'attachment_review_workflow';
+        $fallbackResponse['error_category'] = null;
+        $fallbackResponse['openai_error_category'] = null;
+        $fallbackResponse['openai_http_status'] = null;
+        $fallbackResponse['openai_error_message_safe'] = null;
+        return aiCopilotEnhanceDraftResponse($fallbackResponse, $role, $mode, $message, $context);
+    }
+
     $apiKey = aiCopilotReadEnv('OPENAI_API_KEY');
     $openAiConfigured = $apiKey !== '';
     $fallbackReason = 'missing_openai_key';
@@ -2397,6 +2545,10 @@ function aiCopilotGenerateFallbackDraft(string $role, string $mode, string $mess
 
     $normalized = strtolower($message);
 
+    if (!empty($context['attached_lab_pdf_tool_output']) && aiCopilotLabPdfPromptRequestsRetrieval($message, $mode)) {
+        return aiCopilotBuildLabPdfIngestionResponse($context);
+    }
+
     if (preg_match('/patient-friendly/', $normalized)) {
         return aiCopilotBuildPatientFriendlyResponse($context);
     }
@@ -2421,6 +2573,7 @@ function aiCopilotGenerateFallbackDraft(string $role, string $mode, string $mess
         'billing' => aiCopilotBuildBillingSupportResponse($context),
         'follow_up' => aiCopilotBuildFollowUpResponse($context),
         'rag_chart_context' => aiCopilotBuildFallbackRagVisitHistoryResponse($context, aiCopilotBuildChartSummaryResponse($context)),
+        'lab_pdf_ingestion' => aiCopilotBuildLabPdfIngestionResponse($context),
         'latest_ambient_summary' => aiCopilotBuildLatestAmbientSummaryResponse($context, aiCopilotBuildChartSummaryResponse($context), $role),
         'visit_summary' => aiCopilotBuildVisitSummaryResponse($context),
         'patient_education' => aiCopilotBuildPatientFriendlyResponse($context),
@@ -3344,6 +3497,14 @@ function aiCopilotMaybeBuildRolePermissionResponse(string $role, string $mode, s
         ), ['restriction_type' => 'billing_claim_submission_block']);
     }
 
+    if ($role === 'billing' && preg_match('/medication|lab|diagnosis|differential|a1c|ldl|creatinine|egfr|treatment|soap|clinical note|plan|prescri/', $value)) {
+        return array_merge(aiCopilotBuildResponse(
+            'Detailed clinical interpretation is not available for the Billing Staff role. I can help with insurance context, claim workflow, payment status, or route this for clinician review instead.',
+            [],
+            ['Billing review', 'Review needed']
+        ), ['restriction_type' => 'billing_clinical_scope_block']);
+    }
+
     if ($role === 'front_desk' && preg_match('/medication|lab|diagnosis|differential|a1c|treatment|soap|clinical note|plan|prescri/', $value)) {
         return array_merge(aiCopilotBuildResponse(
             'This role only has access to scheduling and basic contact workflows. Medication details are restricted.',
@@ -4017,10 +4178,1337 @@ function aiCopilotBuildBillingPaymentSummary(array $notes, array $primaryInsuran
     ];
 }
 
+function aiCopilotAttachClientLabPdfContext(array $context, mixed $value, string $role): array
+{
+    $toolOutput = aiCopilotNormalizeLabPdfContext($value);
+    if ($toolOutput === []) {
+        return $context;
+    }
+
+    $context['attached_lab_pdf_tool_output'] = $toolOutput;
+    return $context;
+}
+
+function aiCopilotAttachUploadedLabPdfContext(
+    array $context,
+    ?array $uploadedLabPdf,
+    bool $useSeededLabPdf,
+    array $payload,
+    string $role,
+    string $mode,
+    string $message,
+    string $requestId
+): array {
+    if (!$useSeededLabPdf && $uploadedLabPdf === null) {
+        return $context;
+    }
+
+    $patientKey = aiCopilotCleanText((string) ($context['patient']['pubpid'] ?? ''));
+    $patientName = aiCopilotCleanText((string) ($context['patient']['name'] ?? ''));
+    $toolOutput = attach_and_vectorize_lab_pdf([
+        'request_id' => $requestId,
+        'role' => $role,
+        'mode' => $mode,
+        'prompt' => $message,
+        'patient_key' => $patientKey,
+        'patient_name' => $patientName,
+        'file' => $uploadedLabPdf,
+        'use_seeded_demo' => $useSeededLabPdf,
+        'attachment_purpose' => aiCopilotCleanText((string) ($payload['attachment_purpose'] ?? 'lab_pdf_ingestion')),
+    ]);
+
+    if ($toolOutput !== []) {
+        $context['attached_lab_pdf_tool_output'] = $toolOutput;
+    }
+
+    return $context;
+}
+
+function aiCopilotNormalizeLabPdfContext(mixed $value): array
+{
+    if (!is_array($value)) {
+        return [];
+    }
+
+    $toolOutput = is_array($value['toolOutput'] ?? null)
+        ? $value['toolOutput']
+        : $value;
+    if (!is_array($toolOutput)) {
+        return [];
+    }
+
+    $documentMetadata = is_array($toolOutput['documentMetadata'] ?? null) ? $toolOutput['documentMetadata'] : [];
+    $extractedFacts = [];
+    foreach (($toolOutput['extractedFacts'] ?? []) as $fact) {
+        if (!is_array($fact)) {
+            continue;
+        }
+
+        $name = aiCopilotCleanText((string) ($fact['name'] ?? ''));
+        $valueText = aiCopilotCleanText((string) ($fact['value'] ?? ''));
+        $interpretation = aiCopilotCleanText((string) ($fact['interpretation'] ?? ''));
+        if ($name === '' && $valueText === '' && $interpretation === '') {
+            continue;
+        }
+
+        $extractedFacts[] = [
+            'name' => $name,
+            'value' => $valueText,
+            'interpretation' => $interpretation,
+            'source_label' => aiCopilotCleanText((string) ($fact['sourceLabel'] ?? 'Attached Lab PDF')),
+        ];
+    }
+
+    $missingData = [];
+    foreach (($toolOutput['missingData'] ?? []) as $item) {
+        $itemText = aiCopilotCleanText((string) $item);
+        if ($itemText !== '') {
+            $missingData[] = $itemText;
+        }
+    }
+
+    $sourceMetadata = is_array($toolOutput['sourceMetadata'] ?? null) ? $toolOutput['sourceMetadata'] : [];
+    $retrieval = is_array($toolOutput['retrieval'] ?? null) ? $toolOutput['retrieval'] : [];
+    $retrievalChunks = [];
+    foreach (($retrieval['chunks'] ?? []) as $chunk) {
+        if (!is_array($chunk)) {
+            continue;
+        }
+
+        $chunkId = aiCopilotCleanText((string) ($chunk['id'] ?? ''));
+        $chunkText = aiCopilotCleanText((string) ($chunk['chunkText'] ?? $chunk['chunk_text'] ?? ''));
+        if ($chunkId === '' && $chunkText === '') {
+            continue;
+        }
+
+        $retrievalChunks[] = [
+            'id' => $chunkId,
+            'chunk_text' => $chunkText,
+            'file_name' => aiCopilotCleanText((string) ($chunk['fileName'] ?? $chunk['file_name'] ?? '')),
+            'source_page' => isset($chunk['sourcePage']) && is_numeric($chunk['sourcePage'])
+                ? (int) $chunk['sourcePage']
+                : (isset($chunk['source_page']) && is_numeric($chunk['source_page']) ? (int) $chunk['source_page'] : null),
+            'score' => isset($chunk['score']) && is_numeric($chunk['score']) ? (float) $chunk['score'] : null,
+            'uploaded_at' => aiCopilotCleanText((string) ($chunk['uploadedAt'] ?? $chunk['uploaded_at'] ?? '')),
+            'extraction_method' => aiCopilotCleanText((string) ($chunk['extractionMethod'] ?? $chunk['extraction_method'] ?? '')),
+            'chunk_index' => isset($chunk['chunkIndex']) && is_numeric($chunk['chunkIndex'])
+                ? (int) $chunk['chunkIndex']
+                : (isset($chunk['chunk_index']) && is_numeric($chunk['chunk_index']) ? (int) $chunk['chunk_index'] : null),
+            'embedding' => array_values(array_map(static fn($value) => (float) $value, is_array($chunk['embedding'] ?? null) ? $chunk['embedding'] : [])),
+        ];
+    }
+
+    $vectorizedResult = [];
+    foreach (($toolOutput['vectorizedResult'] ?? $toolOutput['vectorized_result'] ?? []) as $item) {
+        if (!is_array($item)) {
+            continue;
+        }
+
+        $vectorizedResult[] = [
+            'id' => aiCopilotCleanText((string) ($item['id'] ?? '')),
+            'file_name' => aiCopilotCleanText((string) ($item['fileName'] ?? $item['file_name'] ?? '')),
+            'chunk_index' => isset($item['chunkIndex']) && is_numeric($item['chunkIndex'])
+                ? (int) $item['chunkIndex']
+                : (isset($item['chunk_index']) && is_numeric($item['chunk_index']) ? (int) $item['chunk_index'] : null),
+            'source_page' => isset($item['sourcePage']) && is_numeric($item['sourcePage'])
+                ? (int) $item['sourcePage']
+                : (isset($item['source_page']) && is_numeric($item['source_page']) ? (int) $item['source_page'] : null),
+            'text_preview' => aiCopilotCleanText((string) ($item['textPreview'] ?? $item['text_preview'] ?? '')),
+            'embedding' => array_values(array_map(static fn($value) => (float) $value, is_array($item['embedding'] ?? null) ? $item['embedding'] : [])),
+            'score' => isset($item['score']) && is_numeric($item['score']) ? (float) $item['score'] : null,
+        ];
+    }
+
+    $safetyMetadata = is_array($toolOutput['safetyMetadata'] ?? null) ? $toolOutput['safetyMetadata'] : [];
+
+    return [
+        'tool' => aiCopilotCleanText((string) ($toolOutput['tool'] ?? AI_COPILOT_LAB_PDF_TOOL_NAME)),
+        'status' => aiCopilotCleanText((string) ($toolOutput['status'] ?? '')),
+        'ingestion_status' => aiCopilotCleanText((string) ($toolOutput['ingestionStatus'] ?? $toolOutput['ingestion_status'] ?? '')),
+        'safe_message' => aiCopilotCleanText((string) ($toolOutput['safeMessage'] ?? '')),
+        'extraction_method' => aiCopilotCleanText((string) ($toolOutput['extractionMethod'] ?? '')),
+        'extracted_text_preview' => aiCopilotCleanText((string) ($toolOutput['extractedTextPreview'] ?? $toolOutput['extracted_text_preview'] ?? '')),
+        'number_of_chunks' => isset($toolOutput['numberOfChunks']) && is_numeric($toolOutput['numberOfChunks'])
+            ? (int) $toolOutput['numberOfChunks']
+            : (isset($toolOutput['number_of_chunks']) && is_numeric($toolOutput['number_of_chunks']) ? (int) $toolOutput['number_of_chunks'] : 0),
+        'document_metadata' => [
+            'title' => aiCopilotCleanText((string) ($documentMetadata['title'] ?? '')),
+            'mime_type' => aiCopilotCleanText((string) ($documentMetadata['mimeType'] ?? 'application/pdf')),
+            'size' => isset($documentMetadata['size']) && is_numeric($documentMetadata['size']) ? (int) $documentMetadata['size'] : null,
+            'seeded_demo' => !empty($documentMetadata['seededDemo']),
+            'patient_key' => aiCopilotCleanText((string) ($documentMetadata['patientKey'] ?? '')),
+            'patient_name' => aiCopilotCleanText((string) ($documentMetadata['patientName'] ?? '')),
+            'uploaded_at' => aiCopilotCleanText((string) ($documentMetadata['uploadedAt'] ?? '')),
+        ],
+        'source_metadata' => [
+            'file_name' => aiCopilotCleanText((string) ($sourceMetadata['fileName'] ?? $sourceMetadata['file_name'] ?? '')),
+            'uploaded_at' => aiCopilotCleanText((string) ($sourceMetadata['uploadedAt'] ?? $sourceMetadata['uploaded_at'] ?? '')),
+            'source_type' => aiCopilotCleanText((string) ($sourceMetadata['sourceType'] ?? $sourceMetadata['source_type'] ?? 'lab_pdf')),
+            'source_label' => aiCopilotCleanText((string) ($sourceMetadata['sourceLabel'] ?? $sourceMetadata['source_label'] ?? 'Uploaded lab PDF')),
+            'chunk_count' => isset($sourceMetadata['chunkCount']) && is_numeric($sourceMetadata['chunkCount'])
+                ? (int) $sourceMetadata['chunkCount']
+                : (isset($sourceMetadata['chunk_count']) && is_numeric($sourceMetadata['chunk_count']) ? (int) $sourceMetadata['chunk_count'] : 0),
+            'request_id' => aiCopilotCleanText((string) ($sourceMetadata['requestId'] ?? $sourceMetadata['request_id'] ?? '')),
+        ],
+        'extracted_facts' => array_slice($extractedFacts, 0, 12),
+        'missing_data' => array_slice(array_values(array_unique($missingData)), 0, 10),
+        'missing_data_flags' => array_slice(array_values(array_unique($missingData)), 0, 10),
+        'retrieval' => [
+            'chunk_ids' => array_values(array_filter(array_map(static fn($item) => aiCopilotCleanText((string) $item), $retrieval['chunkIds'] ?? $retrieval['chunk_ids'] ?? []), static fn($item) => $item !== '')),
+            'chunk_count' => isset($retrieval['chunkCount']) && is_numeric($retrieval['chunkCount'])
+                ? (int) $retrieval['chunkCount']
+                : (isset($retrieval['chunk_count']) && is_numeric($retrieval['chunk_count']) ? (int) $retrieval['chunk_count'] : count($retrievalChunks)),
+            'chunks' => $retrievalChunks,
+        ],
+        'vectorized_result' => $vectorizedResult,
+        'safety' => [
+            'draft_only' => !empty($toolOutput['safety']['draftOnly']),
+            'review_required' => !empty($toolOutput['safety']['reviewRequired']),
+        ],
+        'safety_metadata' => [
+            'prompt_injection_detected' => !empty($safetyMetadata['promptInjectionDetected']) || !empty($safetyMetadata['prompt_injection_detected']),
+            'prompt_injection_matches' => array_values(array_filter(array_map('aiCopilotCleanText', $safetyMetadata['promptInjectionMatches'] ?? $safetyMetadata['prompt_injection_matches'] ?? []), static fn($item) => $item !== '')),
+            'untrusted_document_text' => !empty($safetyMetadata['untrustedDocumentText']) || !empty($safetyMetadata['untrusted_document_text']),
+            'no_chart_write' => !empty($safetyMetadata['noChartWrite']) || !empty($safetyMetadata['no_chart_write']),
+            'ocr_required' => !empty($safetyMetadata['ocrRequired']) || !empty($safetyMetadata['ocr_required']),
+        ],
+    ];
+}
+
+function aiCopilotLabPdfToolOutputForClient(array $toolOutput): array
+{
+    if ($toolOutput === []) {
+        return [];
+    }
+
+    $extractedFacts = [];
+    foreach (($toolOutput['extracted_facts'] ?? []) as $fact) {
+        if (!is_array($fact)) {
+            continue;
+        }
+
+        $extractedFacts[] = [
+            'name' => aiCopilotCleanText((string) ($fact['name'] ?? '')),
+            'value' => aiCopilotCleanText((string) ($fact['value'] ?? '')),
+            'interpretation' => aiCopilotCleanText((string) ($fact['interpretation'] ?? '')),
+            'sourceLabel' => aiCopilotCleanText((string) ($fact['source_label'] ?? 'Attached Lab PDF')),
+        ];
+    }
+
+    return [
+        'tool' => aiCopilotCleanText((string) ($toolOutput['tool'] ?? AI_COPILOT_LAB_PDF_TOOL_NAME)),
+        'status' => aiCopilotCleanText((string) ($toolOutput['status'] ?? '')),
+        'ingestionStatus' => aiCopilotCleanText((string) ($toolOutput['ingestion_status'] ?? '')),
+        'safeMessage' => aiCopilotCleanText((string) ($toolOutput['safe_message'] ?? '')),
+        'extractionMethod' => aiCopilotCleanText((string) ($toolOutput['extraction_method'] ?? '')),
+        'extractedTextPreview' => aiCopilotCleanText((string) ($toolOutput['extracted_text_preview'] ?? '')),
+        'numberOfChunks' => $toolOutput['number_of_chunks'] ?? 0,
+        'documentMetadata' => [
+            'title' => aiCopilotCleanText((string) ($toolOutput['document_metadata']['title'] ?? '')),
+            'mimeType' => aiCopilotCleanText((string) ($toolOutput['document_metadata']['mime_type'] ?? 'application/pdf')),
+            'size' => $toolOutput['document_metadata']['size'] ?? null,
+            'seededDemo' => !empty($toolOutput['document_metadata']['seeded_demo']),
+            'patientKey' => aiCopilotCleanText((string) ($toolOutput['document_metadata']['patient_key'] ?? '')),
+            'patientName' => aiCopilotCleanText((string) ($toolOutput['document_metadata']['patient_name'] ?? '')),
+            'uploadedAt' => aiCopilotCleanText((string) ($toolOutput['document_metadata']['uploaded_at'] ?? '')),
+        ],
+        'sourceMetadata' => [
+            'fileName' => aiCopilotCleanText((string) ($toolOutput['source_metadata']['file_name'] ?? '')),
+            'uploadedAt' => aiCopilotCleanText((string) ($toolOutput['source_metadata']['uploaded_at'] ?? '')),
+            'sourceType' => aiCopilotCleanText((string) ($toolOutput['source_metadata']['source_type'] ?? 'lab_pdf')),
+            'sourceLabel' => aiCopilotCleanText((string) ($toolOutput['source_metadata']['source_label'] ?? 'Uploaded lab PDF')),
+            'chunkCount' => $toolOutput['source_metadata']['chunk_count'] ?? 0,
+            'requestId' => aiCopilotCleanText((string) ($toolOutput['source_metadata']['request_id'] ?? '')),
+        ],
+        'extractedFacts' => $extractedFacts,
+        'abnormalFindings' => array_values(array_unique(array_filter(array_map('aiCopilotCleanText', $toolOutput['abnormal_findings'] ?? []), static fn($item) => $item !== ''))),
+        'missingData' => array_values(array_unique(array_filter(array_map('aiCopilotCleanText', $toolOutput['missing_data'] ?? []), static fn($item) => $item !== ''))),
+        'missingDataFlags' => array_values(array_unique(array_filter(array_map('aiCopilotCleanText', $toolOutput['missing_data_flags'] ?? []), static fn($item) => $item !== ''))),
+        'retrieval' => [
+            'chunkIds' => array_values(array_filter(array_map('aiCopilotCleanText', $toolOutput['retrieval']['chunk_ids'] ?? []), static fn($item) => $item !== '')),
+            'chunkCount' => $toolOutput['retrieval']['chunk_count'] ?? 0,
+            'chunks' => array_map(static function ($chunk): array {
+                return [
+                    'id' => aiCopilotCleanText((string) ($chunk['id'] ?? '')),
+                    'chunkText' => aiCopilotCleanText((string) ($chunk['chunk_text'] ?? '')),
+                    'fileName' => aiCopilotCleanText((string) ($chunk['file_name'] ?? '')),
+                    'sourcePage' => $chunk['source_page'] ?? null,
+                    'score' => $chunk['score'] ?? null,
+                    'uploadedAt' => aiCopilotCleanText((string) ($chunk['uploaded_at'] ?? '')),
+                    'extractionMethod' => aiCopilotCleanText((string) ($chunk['extraction_method'] ?? '')),
+                    'chunkIndex' => $chunk['chunk_index'] ?? null,
+                    'embedding' => array_values(array_map(static fn($value) => (float) $value, is_array($chunk['embedding'] ?? null) ? $chunk['embedding'] : [])),
+                ];
+            }, array_values(array_filter($toolOutput['retrieval']['chunks'] ?? [], 'is_array'))),
+        ],
+        'vectorizedResult' => array_map(static function ($item): array {
+            return [
+                'id' => aiCopilotCleanText((string) ($item['id'] ?? '')),
+                'fileName' => aiCopilotCleanText((string) ($item['file_name'] ?? '')),
+                'chunkIndex' => $item['chunk_index'] ?? null,
+                'sourcePage' => $item['source_page'] ?? null,
+                'textPreview' => aiCopilotCleanText((string) ($item['text_preview'] ?? '')),
+                'embedding' => array_values(array_map(static fn($value) => (float) $value, is_array($item['embedding'] ?? null) ? $item['embedding'] : [])),
+                'score' => $item['score'] ?? null,
+            ];
+        }, array_values(array_filter($toolOutput['vectorized_result'] ?? [], 'is_array'))),
+        'safety' => [
+            'draftOnly' => !empty($toolOutput['safety']['draft_only']),
+            'reviewRequired' => !empty($toolOutput['safety']['review_required']),
+        ],
+        'safetyMetadata' => [
+            'promptInjectionDetected' => !empty($toolOutput['safety_metadata']['prompt_injection_detected']),
+            'promptInjectionMatches' => array_values(array_filter(array_map('aiCopilotCleanText', $toolOutput['safety_metadata']['prompt_injection_matches'] ?? []), static fn($item) => $item !== '')),
+            'untrustedDocumentText' => !empty($toolOutput['safety_metadata']['untrusted_document_text']),
+            'noChartWrite' => !empty($toolOutput['safety_metadata']['no_chart_write']),
+            'ocrRequired' => !empty($toolOutput['safety_metadata']['ocr_required']),
+        ],
+    ];
+}
+
+function aiCopilotAgentToolCatalog(): array
+{
+    return [
+        'retrieve_chart_context' => [
+            'name' => 'retrieve_chart_context',
+            'description' => 'Retrieve role-appropriate OpenEMR chart context as structured facts with source labels.',
+            'worker' => 'chart_retrieval_worker',
+            'input_schema' => [
+                'type' => 'object',
+                'required' => ['role', 'mode', 'prompt'],
+                'properties' => [
+                    'patient_id' => ['type' => ['integer', 'null']],
+                    'role' => ['type' => 'string'],
+                    'mode' => ['type' => 'string'],
+                    'prompt' => ['type' => 'string'],
+                    'requested_domains' => ['type' => 'array'],
+                    'include_latest_ambient' => ['type' => 'boolean'],
+                    'minimum_necessary' => ['type' => 'boolean'],
+                ],
+            ],
+            'output_schema' => [
+                'type' => 'object',
+                'properties' => [
+                    'facts' => ['type' => 'array'],
+                    'sources' => ['type' => 'array'],
+                    'missing_data' => ['type' => 'array'],
+                    'grounded' => ['type' => 'boolean'],
+                ],
+            ],
+        ],
+        'attach_and_extract' => [
+            'name' => 'attach_and_extract',
+            'description' => 'Validate an attached demo lab PDF payload and return structured extraction facts for clinician review.',
+            'worker' => 'chart_retrieval_worker',
+            'input_schema' => [
+                'type' => 'object',
+                'required' => ['role'],
+                'properties' => [
+                    'role' => ['type' => 'string'],
+                    'patient_key' => ['type' => 'string'],
+                    'use_demo_seed' => ['type' => 'boolean'],
+                    'tool_output' => ['type' => 'object'],
+                ],
+            ],
+            'output_schema' => [
+                'type' => 'object',
+                'properties' => [
+                    'tool_output' => ['type' => 'object'],
+                    'sources' => ['type' => 'array'],
+                    'missing_data' => ['type' => 'array'],
+                ],
+            ],
+        ],
+        'retrieve_guideline_evidence' => [
+            'name' => 'retrieve_guideline_evidence',
+            'description' => 'Return internal demo workflow and role-policy evidence used to ground safe responses.',
+            'worker' => 'chart_retrieval_worker',
+            'input_schema' => [
+                'type' => 'object',
+                'required' => ['role', 'mode', 'prompt'],
+                'properties' => [
+                    'role' => ['type' => 'string'],
+                    'mode' => ['type' => 'string'],
+                    'prompt' => ['type' => 'string'],
+                    'intent' => ['type' => 'string'],
+                ],
+            ],
+            'output_schema' => [
+                'type' => 'object',
+                'properties' => [
+                    'evidence' => ['type' => 'array'],
+                    'sources' => ['type' => 'array'],
+                    'policy_flags' => ['type' => 'array'],
+                ],
+            ],
+        ],
+        'validate_citations' => [
+            'name' => 'validate_citations',
+            'description' => 'Validate role boundaries, source grounding, citations, missing data, and safe refusal conditions.',
+            'worker' => 'evidence_safety_worker',
+            'input_schema' => [
+                'type' => 'object',
+                'required' => ['role', 'mode', 'prompt', 'draft'],
+                'properties' => [
+                    'role' => ['type' => 'string'],
+                    'mode' => ['type' => 'string'],
+                    'prompt' => ['type' => 'string'],
+                    'draft' => ['type' => 'object'],
+                    'chart_context_result' => ['type' => 'object'],
+                    'guideline_evidence_result' => ['type' => 'object'],
+                    'attachment_result' => ['type' => 'object'],
+                ],
+            ],
+            'output_schema' => [
+                'type' => 'object',
+                'properties' => [
+                    'allowed' => ['type' => 'boolean'],
+                    'blocked_reason' => ['type' => 'string'],
+                    'safe_refusal' => ['type' => 'string'],
+                    'citation_gaps' => ['type' => 'array'],
+                    'missing_data' => ['type' => 'array'],
+                    'validated_sources' => ['type' => 'array'],
+                    'draft_only_note' => ['type' => 'string'],
+                ],
+            ],
+        ],
+        'draft_grounded_answer' => [
+            'name' => 'draft_grounded_answer',
+            'description' => 'Draft a structured, source-grounded response with summary, key findings, uncertainty, and review language.',
+            'worker' => 'clinical_workflow_supervisor',
+            'input_schema' => [
+                'type' => 'object',
+                'required' => ['role', 'mode', 'prompt'],
+                'properties' => [
+                    'request_id' => ['type' => 'string'],
+                    'role' => ['type' => 'string'],
+                    'mode' => ['type' => 'string'],
+                    'prompt' => ['type' => 'string'],
+                    'chat_history' => ['type' => 'array'],
+                    'chart_context_result' => ['type' => 'object'],
+                    'guideline_evidence_result' => ['type' => 'object'],
+                    'attachment_result' => ['type' => 'object'],
+                ],
+            ],
+            'output_schema' => [
+                'type' => 'object',
+                'properties' => [
+                    'draft' => ['type' => 'object'],
+                    'meta' => ['type' => 'object'],
+                    'tool_output' => ['type' => 'object'],
+                ],
+            ],
+        ],
+    ];
+}
+
+function aiCopilotExecuteAgentTool(
+    string $toolName,
+    array $toolInput,
+    string $requestId,
+    string $role,
+    string $mode,
+    string $prompt,
+    array $chatHistory,
+    array $context,
+    array $validModes,
+    bool $openAiConfigured,
+    float $requestStartedAt
+): array {
+    $catalog = aiCopilotAgentToolCatalog();
+    if (!isset($catalog[$toolName])) {
+        return [
+            'ok' => false,
+            'error' => 'Unsupported tool request.',
+            'error_category' => 'unsupported_tool',
+        ];
+    }
+
+    $result = match ($toolName) {
+        'retrieve_chart_context' => aiCopilotAgentRetrieveChartContextTool($toolInput, $role, $mode, $prompt, $context),
+        'attach_and_extract' => aiCopilotAgentAttachAndExtractTool($toolInput, $role, $mode, $prompt, $context),
+        'retrieve_guideline_evidence' => aiCopilotAgentRetrieveGuidelineEvidenceTool($toolInput, $role, $mode, $prompt, $context),
+        'validate_citations' => aiCopilotAgentValidateCitationsTool($toolInput, $role, $mode, $prompt, $context),
+        'draft_grounded_answer' => aiCopilotAgentDraftGroundedAnswerTool($toolInput, $requestId, $role, $mode, $prompt, $chatHistory, $context, $validModes, $openAiConfigured, $requestStartedAt),
+        default => [],
+    };
+
+    return [
+        'ok' => true,
+        'result' => $result,
+        'meta' => [
+            'request_id' => $requestId,
+            'tool_name' => $toolName,
+            'role' => $role,
+            'mode' => $mode,
+            'tool_schema' => $catalog[$toolName],
+        ],
+    ];
+}
+
+function aiCopilotAgentToolSource(string $id, string $title, string $category): array
+{
+    return [
+        'id' => aiCopilotCleanText($id),
+        'title' => aiCopilotCleanText($title),
+        'label' => aiCopilotCleanText($title),
+        'category' => aiCopilotCleanText($category),
+    ];
+}
+
+function aiCopilotAgentToolFact(string $domain, string $label, string $value, string $sourceId, string $sourceLabel): array
+{
+    return [
+        'domain' => aiCopilotCleanText($domain),
+        'label' => aiCopilotCleanText($label),
+        'value' => aiCopilotCleanText($value),
+        'source_id' => aiCopilotCleanText($sourceId),
+        'source_label' => aiCopilotCleanText($sourceLabel),
+    ];
+}
+
+function aiCopilotAgentNormalizeSources(array $sources): array
+{
+    $normalized = [];
+    foreach ($sources as $source) {
+        if (!is_array($source)) {
+            continue;
+        }
+
+        $title = aiCopilotCleanText((string) ($source['title'] ?? $source['label'] ?? ''));
+        if ($title === '') {
+            continue;
+        }
+
+        $category = aiCopilotCleanText((string) ($source['category'] ?? $source['id'] ?? 'source'));
+        $id = aiCopilotCleanText((string) ($source['id'] ?? $category));
+        $key = $category . '::' . $title;
+        $normalized[$key] = [
+            'id' => $id !== '' ? $id : $category,
+            'title' => $title,
+            'label' => $title,
+            'category' => $category !== '' ? $category : 'source',
+        ];
+    }
+
+    return array_values($normalized);
+}
+
+function aiCopilotAgentRequestedDomains(array $toolInput, string $role, string $mode, string $prompt): array
+{
+    $allowedDomains = [
+        'medications',
+        'allergies',
+        'labs',
+        'encounters',
+        'visit_history',
+        'documents',
+        'insurance',
+        'care_team',
+        'immunizations',
+        'problem_list',
+        'appointments',
+        'patient_contact',
+    ];
+
+    $requested = [];
+    foreach (($toolInput['requested_domains'] ?? []) as $domain) {
+        $domainText = aiCopilotCleanText((string) $domain);
+        if ($domainText !== '' && in_array($domainText, $allowedDomains, true)) {
+            $requested[] = $domainText;
+        }
+    }
+
+    if ($requested !== []) {
+        return array_values(array_unique($requested));
+    }
+
+    $normalizedPrompt = strtolower($prompt);
+    if ($role === 'front_desk' || in_array($mode, ['appointment_info', 'patient_contact', 'send_reminder', 'front_desk_summary'], true)) {
+        return ['appointments', 'patient_contact'];
+    }
+
+    if ($role === 'billing' || in_array($mode, ['billing', 'billing_review'], true)) {
+        return ['insurance', 'visit_history', 'documents'];
+    }
+
+    $requested = ['encounters', 'visit_history', 'documents'];
+    if (preg_match('/medication|dose|interaction|refill/', $normalizedPrompt) === 1 || $mode === 'medication_info') {
+        $requested[] = 'medications';
+    }
+    if (preg_match('/allerg/', $normalizedPrompt) === 1) {
+        $requested[] = 'allergies';
+    }
+    if (preg_match('/lab|troponin|a1c|glucose|ldl|creatinine|wbc|pdf/', $normalizedPrompt) === 1 || in_array($mode, ['treatment_plan', 'follow_up', 'rag_chart_context', 'clinical_notes', 'visit_summary', 'lab_pdf_ingestion'], true)) {
+        $requested[] = 'labs';
+    }
+    if (preg_match('/insurance|billing|claim|payer|payment|policy/', $normalizedPrompt) === 1 || in_array($mode, ['billing', 'billing_review'], true)) {
+        $requested[] = 'insurance';
+    }
+    if (preg_match('/care team|daughter|care support/', $normalizedPrompt) === 1 || in_array($mode, ['rag_chart_context', 'latest_ambient_summary'], true)) {
+        $requested[] = 'care_team';
+    }
+    if (preg_match('/immunization|vaccine|flu/', $normalizedPrompt) === 1 || in_array($mode, ['rag_chart_context', 'visit_summary', 'patient_education'], true)) {
+        $requested[] = 'immunizations';
+    }
+    if (preg_match('/problem|condition|diagnosis|summary/', $normalizedPrompt) === 1 || in_array($mode, ['clinical_notes', 'treatment_plan', 'differential_diagnosis'], true)) {
+        $requested[] = 'problem_list';
+    }
+
+    return array_values(array_unique($requested));
+}
+
+function aiCopilotAgentRetrieveChartContextTool(array $toolInput, string $role, string $mode, string $prompt, array $context): array
+{
+    $requestedDomains = aiCopilotAgentRequestedDomains($toolInput, $role, $mode, $prompt);
+    $sources = [];
+    $factsOutput = [];
+    $missingData = [];
+
+    if (!aiCopilotContextHasPatient($context)) {
+        return [
+            'tool' => 'retrieve_chart_context',
+            'worker' => 'chart_retrieval_worker',
+            'patient' => [],
+            'role_scope' => aiCopilotContextScope($role, $context),
+            'domains' => $requestedDomains,
+            'facts' => [],
+            'sources' => [aiCopilotAgentToolSource('general_prompt_context', 'General Prompt Context', 'general_prompt_context')],
+            'missing_data' => ['No demo patient is selected, so chart-specific retrieval is unavailable.'],
+            'grounded' => false,
+        ];
+    }
+
+    $facts = aiCopilotExtractClinicalFacts($context);
+    $ambientVisit = aiCopilotLatestAmbientVisitFromContext($context);
+    $medicationRows = aiCopilotBuildMedicationInformationRows($context);
+    $allergyLine = aiCopilotFormatConditionList($context['allergies'] ?? []);
+    $encounterLines = [];
+    foreach (array_slice($context['encounters'] ?? [], 0, 2) as $encounter) {
+        $line = aiCopilotSummarizeEncounterForLlm($encounter);
+        if ($line !== '') {
+            $encounterLines[] = $line;
+        }
+    }
+
+    foreach ($requestedDomains as $domain) {
+        switch ($domain) {
+            case 'medications':
+                if ($medicationRows !== []) {
+                    $sources[] = aiCopilotAgentToolSource('medications', 'Medications', 'medications');
+                    foreach (array_slice($medicationRows, 0, 6) as $row) {
+                        $factsOutput[] = aiCopilotAgentToolFact('medications', 'Active medication', $row, 'medications', 'Medications');
+                    }
+                } else {
+                    $missingData[] = 'No active medications were available in the role-appropriate retrieved context.';
+                }
+                break;
+            case 'allergies':
+                if ($allergyLine !== '') {
+                    $sources[] = aiCopilotAgentToolSource('allergies', 'Allergies', 'allergies');
+                    $factsOutput[] = aiCopilotAgentToolFact('allergies', 'Documented allergies', $allergyLine, 'allergies', 'Allergies');
+                } else {
+                    $missingData[] = 'No allergy list was available in the role-appropriate retrieved context.';
+                }
+                break;
+            case 'labs':
+                $labFacts = [];
+                if (aiCopilotCleanText($facts['recent_labs'] ?? '') !== '') {
+                    $labFacts[] = aiCopilotCleanText($facts['recent_labs']);
+                }
+                foreach (($context['attached_lab_pdf_tool_output']['extracted_facts'] ?? []) as $fact) {
+                    if (!is_array($fact)) {
+                        continue;
+                    }
+
+                    $line = aiCopilotJoinParts([
+                        aiCopilotCleanText((string) ($fact['name'] ?? '')),
+                        aiCopilotCleanText((string) ($fact['value'] ?? '')),
+                        aiCopilotCleanText((string) ($fact['interpretation'] ?? '')),
+                    ]);
+                    if ($line !== '') {
+                        $labFacts[] = $line;
+                    }
+                }
+
+                if ($labFacts !== []) {
+                    $sources[] = aiCopilotAgentToolSource('labs', 'Vitals / Labs', 'vitals_labs');
+                    foreach (array_slice(array_values(array_unique($labFacts)), 0, 6) as $line) {
+                        $factsOutput[] = aiCopilotAgentToolFact('labs', 'Lab context', $line, 'labs', 'Vitals / Labs');
+                    }
+                } else {
+                    $missingData[] = 'No recent lab results were available in the retrieved context.';
+                }
+                break;
+            case 'encounters':
+                if ($encounterLines !== []) {
+                    $sources[] = aiCopilotAgentToolSource('encounters', 'Encounter History', 'visit_history');
+                    foreach ($encounterLines as $line) {
+                        $factsOutput[] = aiCopilotAgentToolFact('encounters', 'Encounter summary', $line, 'encounters', 'Encounter History');
+                    }
+                } else {
+                    $missingData[] = 'No recent encounter summaries were available in the retrieved context.';
+                }
+                break;
+            case 'visit_history':
+                if ($ambientVisit !== []) {
+                    $sources[] = aiCopilotAgentToolSource('latest_approved_ambient_encounter', 'Latest Approved Ambient Encounter Capture', 'ambient_encounter_capture');
+                    $factsOutput[] = aiCopilotAgentToolFact(
+                        'visit_history',
+                        'Latest approved ambient encounter',
+                        aiCopilotCleanText((string) ($ambientVisit['summary'] ?? 'Clinician-reviewed ambient encounter available.')),
+                        'latest_approved_ambient_encounter',
+                        'Latest Approved Ambient Encounter Capture'
+                    );
+                } elseif (!empty($context['approved_ambient_visit'])) {
+                    $missingData[] = 'Ambient encounter context was present but did not contain a retrievable approved summary.';
+                } else {
+                    $missingData[] = 'No approved ambient encounter summary was available for visit-history retrieval.';
+                }
+
+                if ($encounterLines !== []) {
+                    $sources[] = aiCopilotAgentToolSource('visit_history', 'Visit History', 'visit_history');
+                    foreach ($encounterLines as $line) {
+                        $factsOutput[] = aiCopilotAgentToolFact('visit_history', 'Visit-history summary', $line, 'visit_history', 'Visit History');
+                    }
+                }
+                break;
+            case 'documents':
+                $documentLines = [];
+                foreach (array_slice($context['notes'] ?? [], 0, 4) as $note) {
+                    $title = aiCopilotCleanText((string) ($note['title'] ?? ''));
+                    if ($title !== '') {
+                        $documentLines[] = $title;
+                    }
+                }
+                $pdfTitle = aiCopilotCleanText((string) ($context['attached_lab_pdf_tool_output']['document_metadata']['title'] ?? ''));
+                if ($pdfTitle !== '') {
+                    $documentLines[] = $pdfTitle;
+                }
+
+                if ($documentLines !== []) {
+                    $sources[] = aiCopilotAgentToolSource('documents', 'Documents / Notes', 'documents');
+                    foreach (array_slice(array_values(array_unique($documentLines)), 0, 6) as $line) {
+                        $factsOutput[] = aiCopilotAgentToolFact('documents', 'Document reference', $line, 'documents', 'Documents / Notes');
+                    }
+                } else {
+                    $missingData[] = 'No recent chart documents or notes were available in the retrieved context.';
+                }
+                break;
+            case 'insurance':
+                $insuranceLines = [];
+                if (!empty($context['primary_insurance'])) {
+                    $insuranceLines[] = aiCopilotJoinParts([
+                        aiCopilotCleanText((string) ($context['primary_insurance']['carrier'] ?? '')),
+                        aiCopilotCleanText((string) ($context['primary_insurance']['plan_name'] ?? '')),
+                        aiCopilotCleanText((string) ($context['primary_insurance']['policy_number'] ?? '')),
+                    ]);
+                }
+                if (!empty($context['billing']['payment_summary'])) {
+                    $paymentSummary = $context['billing']['payment_summary'];
+                    $insuranceLines[] = aiCopilotJoinParts([
+                        aiCopilotCleanText((string) ($paymentSummary['payer'] ?? '')),
+                        aiCopilotCleanText((string) ($paymentSummary['plan_name'] ?? '')),
+                        aiCopilotCleanText((string) ($paymentSummary['payment_note'] ?? '')),
+                    ]);
+                }
+
+                $insuranceLines = array_values(array_filter(array_map('aiCopilotCleanText', $insuranceLines), static fn($item) => $item !== ''));
+                if ($insuranceLines !== []) {
+                    $sources[] = aiCopilotAgentToolSource('insurance', 'Insurance / Billing Context', 'insurance');
+                    foreach (array_slice($insuranceLines, 0, 4) as $line) {
+                        $factsOutput[] = aiCopilotAgentToolFact('insurance', 'Insurance context', $line, 'insurance', 'Insurance / Billing Context');
+                    }
+                } else {
+                    $missingData[] = 'No insurance context was available in the retrieved role-appropriate data.';
+                }
+                break;
+            case 'care_team':
+                $careTeamItems = aiCopilotExtractCarePreferencesForLlm($context);
+                if (aiCopilotContextContainsKeywords($context, ['daughter', 'care support contact'])) {
+                    $careTeamItems[] = 'Requested daughter as a care support contact.';
+                }
+                $careTeamItems = array_values(array_unique(array_filter(array_map('aiCopilotCleanText', $careTeamItems), static fn($item) => $item !== '')));
+                if ($careTeamItems !== []) {
+                    $sources[] = aiCopilotAgentToolSource('care_team', 'Care Team', 'care_team');
+                    foreach (array_slice($careTeamItems, 0, 4) as $item) {
+                        $factsOutput[] = aiCopilotAgentToolFact('care_team', 'Care-team context', $item, 'care_team', 'Care Team');
+                    }
+                } else {
+                    $missingData[] = 'No care-team update was available in the retrieved context.';
+                }
+                break;
+            case 'immunizations':
+                $immunizationLine = aiCopilotBuildImmunizationReviewForLlm($context);
+                if ($immunizationLine !== '') {
+                    $sources[] = aiCopilotAgentToolSource('immunizations', 'Immunization Review', 'immunizations');
+                    $factsOutput[] = aiCopilotAgentToolFact('immunizations', 'Immunization review', $immunizationLine, 'immunizations', 'Immunization Review');
+                } else {
+                    $missingData[] = 'No immunization review note was available in the retrieved context.';
+                }
+                break;
+            case 'problem_list':
+                $conditions = $facts['conditions'] ?? [];
+                $conditions = array_values(array_filter(array_map('aiCopilotCleanText', $conditions), static fn($item) => $item !== ''));
+                if ($conditions !== []) {
+                    $sources[] = aiCopilotAgentToolSource('problem_list', 'Issues / Problem List', 'problem_list');
+                    $factsOutput[] = aiCopilotAgentToolFact('problem_list', 'Problem-list context', aiCopilotJoinList(array_slice($conditions, 0, 6)), 'problem_list', 'Issues / Problem List');
+                } else {
+                    $missingData[] = 'No active problem list summary was available in the retrieved context.';
+                }
+                break;
+            case 'appointments':
+                $appointment = $context['next_appointment'] ?? [];
+                $appointmentLine = aiCopilotJoinParts([
+                    aiCopilotFormatAppointmentDateTime($appointment['date'] ?? '', $appointment['start_time'] ?? ''),
+                    aiCopilotCleanText((string) ($appointment['appointment_type'] ?? '')),
+                    aiCopilotCleanText((string) ($appointment['provider_name'] ?? '')),
+                    aiCopilotCleanText((string) ($appointment['location'] ?? '')),
+                ]);
+                if ($appointmentLine !== '') {
+                    $sources[] = aiCopilotAgentToolSource('appointments', 'Appointment Context', 'appointments');
+                    $factsOutput[] = aiCopilotAgentToolFact('appointments', 'Upcoming appointment', $appointmentLine, 'appointments', 'Appointment Context');
+                } else {
+                    $missingData[] = 'No upcoming appointment details were available in the retrieved context.';
+                }
+                break;
+            case 'patient_contact':
+                $contactLine = aiCopilotJoinParts([
+                    aiCopilotCleanText((string) ($context['patient']['email'] ?? '')),
+                    aiCopilotCleanText((string) ($context['patient']['phone'] ?? $context['patient']['phone_cell'] ?? $context['patient']['phone_home'] ?? '')),
+                ]);
+                if ($contactLine !== '') {
+                    $sources[] = aiCopilotAgentToolSource('patient_contact', 'Patient Contact', 'patient_contact');
+                    $factsOutput[] = aiCopilotAgentToolFact('patient_contact', 'Contact details', $contactLine, 'patient_contact', 'Patient Contact');
+                } else {
+                    $missingData[] = 'No patient contact details were available in the retrieved context.';
+                }
+                break;
+        }
+    }
+
+    return [
+        'tool' => 'retrieve_chart_context',
+        'worker' => 'chart_retrieval_worker',
+        'patient' => [
+            'pid' => $context['patient']['pid'] ?? null,
+            'pubpid' => $context['patient']['pubpid'] ?? '',
+            'name' => $context['patient']['name'] ?? '',
+        ],
+        'role_scope' => aiCopilotContextScope($role, $context),
+        'domains' => $requestedDomains,
+        'facts' => $factsOutput,
+        'sources' => aiCopilotAgentNormalizeSources($sources),
+        'missing_data' => array_values(array_unique(array_filter(array_map('aiCopilotCleanText', $missingData), static fn($item) => $item !== ''))),
+        'grounded' => $factsOutput !== [],
+    ];
+}
+
+function aiCopilotAgentAttachAndExtractTool(array $toolInput, string $role, string $mode, string $prompt, array $context): array
+{
+    $toolOutput = aiCopilotNormalizeLabPdfContext($toolInput['tool_output'] ?? []);
+    if ($toolOutput === []) {
+        $toolOutput = is_array($context['attached_lab_pdf_tool_output'] ?? null) ? $context['attached_lab_pdf_tool_output'] : [];
+    }
+
+    $sources = [];
+    if ($toolOutput !== []) {
+        $sources[] = aiCopilotAgentToolSource('attached_lab_pdf', 'Attached Lab PDF', 'documents');
+    }
+
+    return [
+        'tool' => 'attach_and_extract',
+        'worker' => 'chart_retrieval_worker',
+        'tool_output' => aiCopilotLabPdfToolOutputForClient($toolOutput),
+        'sources' => aiCopilotAgentNormalizeSources($sources),
+        'missing_data' => array_values(array_unique(array_filter(array_map('aiCopilotCleanText', $toolOutput['missing_data'] ?? []), static fn($item) => $item !== ''))),
+    ];
+}
+
+function aiCopilotAgentRetrieveGuidelineEvidenceTool(array $toolInput, string $role, string $mode, string $prompt, array $context): array
+{
+    $sources = [
+        aiCopilotAgentToolSource('policy_draft_only', 'OpenEMR AI Copilot Draft-Only Policy', 'policy'),
+        aiCopilotAgentToolSource('policy_role_scope', 'OpenEMR AI Copilot Role Policy', 'policy'),
+    ];
+    $evidence = [
+        [
+            'statement' => 'Responses remain draft-only and require human review before any clinical, billing, or administrative action.',
+            'source_label' => 'OpenEMR AI Copilot Draft-Only Policy',
+        ],
+        [
+            'statement' => 'No direct chart writes occur without clinician approval in this demo workflow.',
+            'source_label' => 'OpenEMR AI Copilot Draft-Only Policy',
+        ],
+    ];
+    $policyFlags = ['draft_only', 'no_direct_chart_write'];
+
+    if ($role === 'front_desk') {
+        $evidence[] = [
+            'statement' => 'Front Desk responses must use minimum necessary PHI and avoid diagnoses, medications, labs, and treatment details.',
+            'source_label' => 'OpenEMR AI Copilot Role Policy',
+        ];
+        $policyFlags[] = 'minimum_necessary_phi';
+    } elseif ($role === 'billing') {
+        $evidence[] = [
+            'statement' => 'Billing role responses may cover insurance, payment, and claim-review workflow but not clinical treatment details.',
+            'source_label' => 'OpenEMR AI Copilot Role Policy',
+        ];
+        $policyFlags[] = 'billing_scope_only';
+    } elseif ($role === 'nurse') {
+        $evidence[] = [
+            'statement' => 'Nurse role responses may support education and follow-up, but medication changes and prescribing remain restricted.',
+            'source_label' => 'OpenEMR AI Copilot Role Policy',
+        ];
+        $policyFlags[] = 'nurse_scope_only';
+    } else {
+        $evidence[] = [
+            'statement' => 'Doctor role responses may summarize chart context and draft treatment considerations, but never finalize diagnosis or autonomous treatment decisions.',
+            'source_label' => 'OpenEMR AI Copilot Role Policy',
+        ];
+        $policyFlags[] = 'doctor_draft_only';
+    }
+
+    if (in_array($mode, ['rag_chart_context', 'latest_ambient_summary'], true)) {
+        $sources[] = aiCopilotAgentToolSource('workflow_retrieval_first', 'OpenEMR Retrieval-First Workflow', 'workflow');
+        $evidence[] = [
+            'statement' => 'Chart-context responses should retrieve role-appropriate sources before drafting and should not answer from uncited memory.',
+            'source_label' => 'OpenEMR Retrieval-First Workflow',
+        ];
+        $policyFlags[] = 'retrieval_first';
+    }
+
+    if ($mode === 'lab_pdf_ingestion') {
+        $sources[] = aiCopilotAgentToolSource('workflow_attachment_review', 'OpenEMR Attachment Review Workflow', 'workflow');
+        $evidence[] = [
+            'statement' => 'Attached lab PDF extraction remains draft-only and may still require OCR or manual verification against the source document.',
+            'source_label' => 'OpenEMR Attachment Review Workflow',
+        ];
+        $policyFlags[] = 'attachment_review_required';
+    }
+
+    return [
+        'tool' => 'retrieve_guideline_evidence',
+        'worker' => 'chart_retrieval_worker',
+        'evidence' => $evidence,
+        'sources' => aiCopilotAgentNormalizeSources($sources),
+        'policy_flags' => array_values(array_unique($policyFlags)),
+    ];
+}
+
+function aiCopilotAgentDraftOnlyNote(string $role): string
+{
+    return match ($role) {
+        'front_desk' => 'Administrative draft only. Human review required. Minimum necessary PHI only.',
+        'billing' => 'Draft only. Human billing and compliance review required. No automatic claim actions occur.',
+        'nurse' => 'Draft only. Human nursing and clinician review required. Medication changes and orders are restricted.',
+        default => 'Draft only. Human clinician review required. No direct chart writes occur without clinician approval.',
+    };
+}
+
+function aiCopilotAgentFlattenDraftItems(array $sections, array $ignoredTitles = []): array
+{
+    $ignored = array_map(static fn($value) => strtolower(aiCopilotCleanText((string) $value)), $ignoredTitles);
+    $items = [];
+    foreach ($sections as $section) {
+        if (!is_array($section)) {
+            continue;
+        }
+
+        $title = strtolower(aiCopilotCleanText((string) ($section['title'] ?? '')));
+        if (in_array($title, $ignored, true)) {
+            continue;
+        }
+
+        foreach (($section['items'] ?? []) as $item) {
+            $itemText = aiCopilotCleanText((string) $item);
+            if ($itemText !== '') {
+                $items[] = $itemText;
+            }
+        }
+    }
+
+    return array_values(array_unique($items));
+}
+
+function aiCopilotAgentBuildStructuredDraft(
+    array $draft,
+    string $role,
+    string $mode,
+    string $prompt,
+    array $context,
+    array $chartContextResult,
+    array $guidelineEvidenceResult,
+    array $attachmentResult,
+    array $meta
+): array {
+    $sources = aiCopilotAgentNormalizeSources(array_merge(
+        is_array($draft['sources'] ?? null) ? $draft['sources'] : [],
+        is_array($chartContextResult['sources'] ?? null) ? $chartContextResult['sources'] : [],
+        is_array($guidelineEvidenceResult['sources'] ?? null) ? $guidelineEvidenceResult['sources'] : [],
+        is_array($attachmentResult['sources'] ?? null) ? $attachmentResult['sources'] : []
+    ));
+    $missingData = array_values(array_unique(array_filter(array_map('aiCopilotCleanText', array_merge(
+        is_array($chartContextResult['missing_data'] ?? null) ? $chartContextResult['missing_data'] : [],
+        is_array($attachmentResult['missing_data'] ?? null) ? $attachmentResult['missing_data'] : [],
+        is_array($draft['missing_data'] ?? null) ? $draft['missing_data'] : []
+    )), static fn($item) => $item !== '')));
+
+    $keyFindings = aiCopilotAgentFlattenDraftItems($draft['sections'] ?? [], [
+        'summary',
+        'missing data / uncertainty',
+        'sources used',
+        'draft-only clinician review',
+    ]);
+    if ($keyFindings === []) {
+        $keyFindings[] = aiCopilotCleanText((string) ($draft['answer'] ?? 'Draft response prepared for review.'));
+    }
+
+    $summaryItems = [];
+    $answer = aiCopilotCleanText((string) ($draft['answer'] ?? 'Draft response prepared for review.'));
+    if ($answer !== '') {
+        $summaryItems[] = $answer;
+    }
+
+    $sections = [
+        aiCopilotBuildSection('Summary', $summaryItems !== [] ? $summaryItems : ['Draft response prepared for review.']),
+        aiCopilotBuildSection('Key findings', array_slice($keyFindings, 0, 8)),
+        aiCopilotBuildSection(
+            'Missing data / uncertainty',
+            $missingData !== [] ? $missingData : ['No major chart-grounding gaps were identified in the retrieved context used for this draft.'],
+            $missingData !== [] ? 'yellow' : 'neutral'
+        ),
+        aiCopilotBuildSection(
+            'Sources Used',
+            $sources !== [] ? array_map(static fn($source) => aiCopilotCleanText((string) ($source['title'] ?? '')), $sources) : ['No source labels were returned.'],
+            'neutral'
+        ),
+        aiCopilotBuildSection('Draft-only clinician review', [
+            aiCopilotAgentDraftOnlyNote($role),
+            'No direct chart writes occur without clinician approval.',
+        ]),
+    ];
+
+    return [
+        'answer' => $answer,
+        'sections' => $sections,
+        'tags' => aiCopilotFinalizeTags(array_merge($draft['tags'] ?? [], ['Chart context', 'Review needed'])),
+        'sources' => $sources,
+        'safety_note' => aiCopilotAgentDraftOnlyNote($role),
+        'missing_data' => $missingData,
+        'meta' => $meta,
+        'tool_output' => $attachmentResult['tool_output'] ?? null,
+    ];
+}
+
+function aiCopilotBuildLabPdfIngestionResponse(array $context): array
+{
+    $toolOutput = is_array($context['attached_lab_pdf_tool_output'] ?? null) ? $context['attached_lab_pdf_tool_output'] : [];
+    $role = aiCopilotCleanText((string) ($context['role'] ?? 'doctor'));
+    if ($toolOutput === []) {
+        return aiCopilotBuildResponse(
+            'Lab PDF Ingestion — Clinician Review Required',
+            [
+                aiCopilotBuildSection('Extracted Lab Facts', ['No lab PDF context was available for this request. Attach a PDF or use the seeded demo lab document before retrying the workflow.'], 'yellow'),
+                aiCopilotBuildSection('Missing or Ambiguous Data', ['No attachment context was available, so no lab values were extracted or retrieved.'], 'yellow'),
+                aiCopilotBuildSection('Safety Notice', [AI_COPILOT_LAB_PDF_REVIEW_NOTICE]),
+            ],
+            ['Draft note', 'Review needed']
+        );
+    }
+
+    if (($toolOutput['status'] ?? '') === 'role_blocked') {
+        return aiCopilotBuildResponse(
+            'Lab PDF Ingestion — Clinician Review Required',
+            [
+                aiCopilotBuildSection('Extracted Lab Facts', [aiCopilotCleanText((string) ($toolOutput['safe_message'] ?? 'Lab PDF ingestion is restricted in this workflow.'))], 'yellow'),
+                aiCopilotBuildSection('Missing or Ambiguous Data', ['The attachment workflow was blocked before any chart write, order, or diagnosis action could occur.'], 'yellow'),
+                aiCopilotBuildSection('Safety Notice', [AI_COPILOT_LAB_PDF_REVIEW_NOTICE]),
+            ],
+            ['Draft note', 'Review needed']
+        );
+    }
+
+    $documentTitle = aiCopilotCleanText((string) ($toolOutput['document_metadata']['title'] ?? 'Attached Lab PDF'));
+    $findingItems = [];
+    foreach (($toolOutput['extracted_facts'] ?? []) as $fact) {
+        if (!is_array($fact)) {
+            continue;
+        }
+
+        $findingItems[] = aiCopilotJoinParts([
+            aiCopilotCleanText((string) ($fact['name'] ?? '')),
+            aiCopilotCleanText((string) ($fact['value'] ?? '')),
+            aiCopilotCleanText((string) ($fact['interpretation'] ?? '')),
+        ]);
+    }
+    $findingItems = array_values(array_filter(array_map('aiCopilotCleanText', $findingItems), static fn($item) => $item !== ''));
+
+    $abnormalItems = array_values(array_unique(array_filter(array_map('aiCopilotCleanText', $toolOutput['abnormal_findings'] ?? []), static fn($item) => $item !== '')));
+    $missingItems = array_values(array_unique(array_filter(array_map('aiCopilotCleanText', $toolOutput['missing_data'] ?? []), static fn($item) => $item !== '')));
+    $retrievalChunks = array_values(array_filter($toolOutput['retrieval']['chunks'] ?? [], 'is_array'));
+    $retrievalChunkIds = array_values(array_filter(array_map('aiCopilotCleanText', $toolOutput['retrieval']['chunk_ids'] ?? []), static fn($item) => $item !== ''));
+    $uploadedAt = aiCopilotCleanText((string) ($toolOutput['document_metadata']['uploaded_at'] ?? $toolOutput['source_metadata']['uploaded_at'] ?? ''));
+    $extractionMethod = aiCopilotCleanText((string) ($toolOutput['extraction_method'] ?? ''));
+    $status = aiCopilotCleanText((string) ($toolOutput['status'] ?? ''));
+    $promptInjectionDetected = !empty($toolOutput['safety_metadata']['prompt_injection_detected']);
+
+    if ($promptInjectionDetected) {
+        $missingItems[] = 'Instruction-like text inside the PDF was ignored as untrusted source content and was not treated as system or workflow instructions.';
+    }
+
+    $sourceItems = [];
+    $sourceItems[] = 'File: ' . aiCopilotFallbackValue($documentTitle, 'Uploaded lab PDF');
+    if ($retrievalChunkIds !== []) {
+        $sourceItems[] = 'Chunk ids: ' . aiCopilotJoinList($retrievalChunkIds);
+    } else {
+        $sourceItems[] = 'Chunk ids: No retrieved chunk ids were available.';
+    }
+
+    $pageReferences = [];
+    foreach ($retrievalChunks as $chunk) {
+        if (isset($chunk['source_page']) && is_numeric($chunk['source_page'])) {
+            $pageReferences[] = 'Page ' . (int) $chunk['source_page'];
+        }
+    }
+    $pageReferences = array_values(array_unique($pageReferences));
+    if ($pageReferences !== []) {
+        $sourceItems[] = 'Page references: ' . aiCopilotJoinList($pageReferences);
+    }
+
+    $sourceItems[] = 'Extraction method: ' . aiCopilotFallbackValue($extractionMethod, 'not reported');
+    $sourceItems[] = 'Uploaded timestamp: ' . aiCopilotFallbackValue($uploadedAt, 'not reported');
+    if ($status !== '') {
+        $sourceItems[] = 'Ingestion status: ' . $status;
+    }
+
+    $draftSummaryItems = [];
+    if ($role === 'nurse') {
+        $draftSummaryItems[] = 'Limited nursing review summary only. Escalate abnormal or unclear values to the supervising clinician for diagnosis, treatment decisions, medication changes, or orders.';
+        $draftSummaryItems[] = 'Use the extracted lab facts to support follow-up preparation and reinforce that the original PDF still requires clinician verification.';
+    } else {
+        $draftSummaryItems[] = 'Draft clinical summary for clinician review only. Verify the extracted values, abnormal flags, and missing metadata directly against the original lab PDF before acting.';
+        if ($abnormalItems !== []) {
+            $draftSummaryItems[] = 'Priority review items include: ' . aiCopilotJoinList(array_slice($abnormalItems, 0, 4));
+        }
+        if ($findingItems !== []) {
+            $draftSummaryItems[] = 'Extracted lab facts were grounded to the uploaded PDF chunks listed in Sources Used.';
+        }
+    }
+
+    if ($status === 'ocr_required') {
+        $draftSummaryItems = [
+            'The attached PDF appears scanned or text-light. OCR or manual clinician verification of the original document is required before relying on extracted facts.',
+        ];
+    } elseif ($status === 'invalid_file_type') {
+        $draftSummaryItems = [
+            aiCopilotCleanText((string) ($toolOutput['safe_message'] ?? 'Please attach a PDF file for this workflow.')),
+        ];
+    }
+
+    if ($findingItems === []) {
+        $findingItems[] = $status === 'ocr_required'
+            ? 'No structured lab facts were extracted because OCR or manual review is still required.'
+            : 'No structured lab facts were extracted or retrieved from the uploaded document.';
+    }
+
+    if ($abnormalItems === []) {
+        $abnormalItems[] = 'No explicit abnormal lab values were extracted or retrieved from the document context.';
+    }
+
+    if ($missingItems === []) {
+        $missingItems[] = 'No additional missing lab metadata was detected in the retrieved document context.';
+    }
+
+    $status = $toolOutput['status'] ?? '';
+    return aiCopilotBuildResponse(
+        'Lab PDF Ingestion — Clinician Review Required',
+        [
+            aiCopilotBuildSection('Extracted Lab Facts', array_slice($findingItems, 0, 10), $status === 'ocr_required' ? 'yellow' : 'neutral'),
+            aiCopilotBuildSection('Abnormal / Attention Needed', array_slice($abnormalItems, 0, 8), $abnormalItems !== [] ? 'yellow' : 'neutral'),
+            aiCopilotBuildSection('Missing or Ambiguous Data', array_slice($missingItems, 0, 8), 'yellow'),
+            aiCopilotBuildSection('Draft Clinical Summary', $draftSummaryItems),
+            aiCopilotBuildSection('Sources Used', $sourceItems),
+            aiCopilotBuildSection('Safety Notice', [AI_COPILOT_LAB_PDF_REVIEW_NOTICE]),
+        ],
+        ['Draft note', 'Chart context', 'Review needed']
+    );
+}
+
+function aiCopilotAgentDraftGroundedAnswerTool(
+    array $toolInput,
+    string $requestId,
+    string $role,
+    string $mode,
+    string $prompt,
+    array $chatHistory,
+    array $context,
+    array $validModes,
+    bool $openAiConfigured,
+    float $requestStartedAt
+): array {
+    $chartContextResult = is_array($toolInput['chart_context_result'] ?? null) ? $toolInput['chart_context_result'] : [];
+    $guidelineEvidenceResult = is_array($toolInput['guideline_evidence_result'] ?? null) ? $toolInput['guideline_evidence_result'] : [];
+    $attachmentResult = is_array($toolInput['attachment_result'] ?? null) ? $toolInput['attachment_result'] : [];
+
+    $draft = $mode === 'lab_pdf_ingestion'
+        ? aiCopilotBuildLabPdfIngestionResponse($context)
+        : aiCopilotGenerateDraft($requestId, $role, $mode, $prompt, $chatHistory, $context, $validModes[$mode]);
+
+    $meta = aiCopilotBuildResponseMeta(
+        $requestId,
+        $role,
+        $mode,
+        $context,
+        $draft,
+        [
+            'restricted_by_role' => false,
+            'fallback_used' => ($draft['engine'] ?? 'fallback') === 'fallback',
+            'fallback_reason' => $draft['fallback_reason'] ?? ($mode === 'lab_pdf_ingestion' ? 'attachment_review_workflow' : null),
+            'engine' => $draft['engine'] ?? 'fallback',
+            'provider' => $draft['provider'] ?? (($draft['engine'] ?? '') === 'openai' ? 'openai' : 'local_fallback'),
+            'model' => $draft['model'] ?? null,
+            'openai_configured' => (bool) ($draft['openai_configured'] ?? $openAiConfigured),
+            'error_category' => $draft['error_category'] ?? null,
+            'openai_error_category' => $draft['openai_error_category'] ?? null,
+            'openai_http_status' => $draft['openai_http_status'] ?? null,
+            'openai_error_message_safe' => $draft['openai_error_message_safe'] ?? null,
+            'rag_grounded' => aiCopilotShouldMarkRagGroundedForRequest($mode, $prompt, $context) || !empty($attachmentResult['tool_output']),
+        ],
+        $requestStartedAt
+    );
+
+    $structuredDraft = aiCopilotAgentBuildStructuredDraft(
+        $draft,
+        $role,
+        $mode,
+        $prompt,
+        $context,
+        $chartContextResult,
+        $guidelineEvidenceResult,
+        $attachmentResult,
+        $meta
+    );
+
+    return [
+        'tool' => 'draft_grounded_answer',
+        'worker' => 'clinical_workflow_supervisor',
+        'draft' => [
+            'answer' => $structuredDraft['answer'],
+            'sections' => $structuredDraft['sections'],
+            'tags' => $structuredDraft['tags'],
+            'sources' => $structuredDraft['sources'],
+            'safety_note' => $structuredDraft['safety_note'],
+            'missing_data' => $structuredDraft['missing_data'],
+        ],
+        'meta' => $structuredDraft['meta'],
+        'tool_output' => $structuredDraft['tool_output'],
+    ];
+}
+
+function aiCopilotAgentPromptInjectionReason(string $prompt): string
+{
+    $patterns = [
+        '/\bignore (all|any|previous|prior) instructions\b/i',
+        '/\bignore (your|the) rules\b/i',
+        '/\bbypass (role|guardrail|restriction|policy|safety)\b/i',
+        '/\bshow (me )?(the )?full chart\b/i',
+        '/\breveal (the )?(hidden|restricted|internal) (context|notes|data|prompt)\b/i',
+        '/\bact as (an )?admin\b/i',
+        '/\boverride (hipaa|role restrictions|privacy rules|safety rules)\b/i',
+        '/\bsystem prompt\b/i',
+    ];
+
+    foreach ($patterns as $pattern) {
+        if (preg_match($pattern, $prompt) === 1) {
+            return 'prompt_injection_block';
+        }
+    }
+
+    return '';
+}
+
+function aiCopilotAgentValidateCitationsTool(array $toolInput, string $role, string $mode, string $prompt, array $context): array
+{
+    $draft = is_array($toolInput['draft'] ?? null) ? $toolInput['draft'] : [];
+    $chartContextResult = is_array($toolInput['chart_context_result'] ?? null) ? $toolInput['chart_context_result'] : [];
+    $guidelineEvidenceResult = is_array($toolInput['guideline_evidence_result'] ?? null) ? $toolInput['guideline_evidence_result'] : [];
+    $attachmentResult = is_array($toolInput['attachment_result'] ?? null) ? $toolInput['attachment_result'] : [];
+    $sources = aiCopilotAgentNormalizeSources(array_merge(
+        is_array($draft['sources'] ?? null) ? $draft['sources'] : [],
+        is_array($chartContextResult['sources'] ?? null) ? $chartContextResult['sources'] : [],
+        is_array($guidelineEvidenceResult['sources'] ?? null) ? $guidelineEvidenceResult['sources'] : [],
+        is_array($attachmentResult['sources'] ?? null) ? $attachmentResult['sources'] : []
+    ));
+    $missingData = array_values(array_unique(array_filter(array_map('aiCopilotCleanText', array_merge(
+        is_array($draft['missing_data'] ?? null) ? $draft['missing_data'] : [],
+        is_array($chartContextResult['missing_data'] ?? null) ? $chartContextResult['missing_data'] : [],
+        is_array($attachmentResult['missing_data'] ?? null) ? $attachmentResult['missing_data'] : []
+    )), static fn($item) => $item !== '')));
+
+    $blockedReason = aiCopilotAgentPromptInjectionReason($prompt);
+    $safeRefusal = $blockedReason !== ''
+        ? 'I can\'t bypass role restrictions or reveal hidden chart context. Please use a prompt that matches the selected role and approved workflow.'
+        : '';
+    $permissionResponse = $blockedReason === ''
+        ? aiCopilotMaybeBuildRolePermissionResponse($role, $mode, $prompt, $context)
+        : [];
+    if ($permissionResponse !== []) {
+        $blockedReason = aiCopilotCleanText((string) ($permissionResponse['restriction_type'] ?? 'role_guardrail'));
+        $safeRefusal = aiCopilotCleanText((string) ($permissionResponse['answer'] ?? 'This request is outside the allowed workflow.'));
+    }
+
+    $citationGaps = [];
+    if (aiCopilotShouldMarkRagGroundedForRequest($mode, $prompt, $context) && $sources === []) {
+        $citationGaps[] = 'Chart grounding was required for this request, but no source labels were returned.';
+        if ($blockedReason === '') {
+            $blockedReason = 'missing_citations';
+            $safeRefusal = 'I need retrieved chart sources before I can provide a grounded draft for this request.';
+        }
+    }
+
+    if ($mode === 'lab_pdf_ingestion' && empty($attachmentResult['tool_output'])) {
+        $missingData[] = 'No lab PDF extraction payload was available for evidence review.';
+    }
+
+    return [
+        'tool' => 'validate_citations',
+        'worker' => 'evidence_safety_worker',
+        'allowed' => $blockedReason === '',
+        'blocked_reason' => $blockedReason,
+        'safe_refusal' => $safeRefusal,
+        'citation_gaps' => $citationGaps,
+        'missing_data' => $missingData,
+        'unsupported_claims' => [],
+        'validated_sources' => $sources,
+        'draft_only_note' => aiCopilotAgentDraftOnlyNote($role),
+        'policy_flags' => array_values(array_unique(array_filter(array_merge(
+            is_array($guidelineEvidenceResult['policy_flags'] ?? null) ? $guidelineEvidenceResult['policy_flags'] : [],
+            [$blockedReason !== '' ? 'blocked' : 'validated']
+        )))),
+    ];
+}
+
 function aiCopilotBuildSources(array $context, string $mode = 'general_assistant'): array
 {
     if (!aiCopilotContextHasPatient($context)) {
         return ['General Prompt Context'];
+    }
+
+    if ($mode === 'lab_pdf_ingestion') {
+        $sources = ['Patient Chart Context'];
+        if (!empty($context['attached_lab_pdf_tool_output'])) {
+            $sources[] = 'Attached Lab PDF';
+            $sources[] = 'Uploaded Lab PDF';
+        }
+        if (!empty($context['medications'])) {
+            $sources[] = 'Medications';
+        }
+        if (!empty($context['notes'])) {
+            $sources[] = 'Documents / Notes';
+        }
+
+        return array_values(array_unique($sources));
     }
 
     if ($mode === 'latest_ambient_summary') {
@@ -4063,6 +5551,10 @@ function aiCopilotBuildSources(array $context, string $mode = 'general_assistant
     }
 
     $sources = ['Patient Chart Context'];
+
+    if (!empty($context['attached_lab_pdf_tool_output']) || !empty($context['retrieved_lab_pdf_context'])) {
+        $sources[] = 'Uploaded Lab PDF';
+    }
 
     if (!empty($context['medications'])) {
         $sources[] = 'Medications';
