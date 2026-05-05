@@ -191,6 +191,9 @@ Where it appears:
 
 What happens on send:
 - The same Co-Pilot `Send` button submits the prompt plus the optional PDF using `FormData`
+- Before any uploaded PDF is stored, vectorized, or retrieved, the server runs a medical-document validation gate
+- When `AWS_MEDICAL_DOCUMENT_GUARD_ENABLED=true`, the gate uses Amazon Textract plus Amazon Comprehend Medical from server-side code only
+- If AWS validation is unavailable during demo, the workflow returns `review_required` and blocks vectorization instead of silently ingesting the file
 - The PHP endpoint ingests the PDF, extracts text when possible, falls back to the seeded Marcus Johnson demo lab text only when extraction is unavailable, chunks the text, creates deterministic demo embeddings if no external embedding provider is configured, stores vectors in a lightweight local JSON store, retrieves the most relevant chunks, and drafts the response from retrieved context
 - Follow-up lab questions continue retrieving from the stored chunks for the selected patient instead of relying on memory
 
@@ -217,6 +220,17 @@ Lab PDF response format:
   - `This is a draft-only AI extraction for clinician review. It does not diagnose, update the chart, place orders, or replace verification of the original lab PDF.`
 
 Console events to look for:
+- `copilot_upload_received`
+- `copilot_document_guard_started`
+- `copilot_textract_started`
+- `copilot_textract_succeeded`
+- `copilot_textract_failed`
+- `copilot_comprehend_medical_started`
+- `copilot_comprehend_medical_succeeded`
+- `copilot_document_guard_allowed`
+- `copilot_document_guard_rejected`
+- `copilot_document_guard_review_required`
+- `copilot_vectorization_blocked`
 - `copilot_lab_pdf_attached`
 - `copilot_lab_pdf_removed`
 - `copilot_lab_pdf_ingestion_started`
@@ -230,6 +244,7 @@ Console events to look for:
 - `copilot_lab_pdf_ingestion_failed`
 
 Safety behavior:
+- Wrong PDFs such as invoices, resumes, flyers, or unrelated business documents are blocked before vectorization and never appear in `Sources Used`
 - Uploaded PDF text is treated as untrusted document content, not as executable instructions
 - Prompt-injection strings inside the PDF are ignored as instructions and surfaced only as document-safety metadata
 - The workflow does not diagnose, write to the chart, place orders, update medications, send patient messages, or submit billing
@@ -240,6 +255,8 @@ How to test:
 - Click `Attach PDF` in the composer
 - Enter a prompt such as `Summarize this lab report.` or `What labs are abnormal?`
 - Send through the normal composer
+- In DevTools, confirm the `[Medical Co-Pilot Audit]` document-guard events appear before the ingestion/vectorization events
+- Upload an obvious non-medical PDF and confirm the inline warning says it does not appear to be a medical document, with no `Sources Used` entry created for that file
 - Confirm the response includes `Sources Used` and the clinician-review safety notice
 - Ask a follow-up lab question and confirm the answer still cites the uploaded lab PDF context
 

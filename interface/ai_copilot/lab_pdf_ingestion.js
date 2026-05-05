@@ -11,7 +11,9 @@
     const TOOL_NAME = 'attach_and_vectorize_lab_pdf';
     const ACCEPT_ATTRIBUTE = 'application/pdf,.pdf';
     const SEEDED_FILE_NAME = 'marcus-johnson-labs-may-2026.pdf';
+    const SEEDED_INTAKE_FILE_NAME = 'marcus-johnson-intake-form.pdf';
     const REVIEW_NOTICE = 'This is a draft-only AI extraction for clinician review. It does not diagnose, update the chart, place orders, or replace verification of the original lab PDF.';
+    const INTAKE_REVIEW_NOTICE = 'This is a draft-only AI extraction for clinician review. It does not diagnose, update the chart, place orders, or replace verification of the original intake form.';
     const EXTRACTION_REVIEW_REQUIRED_MESSAGE = 'PDF text extraction did not produce reliable lab rows. Clinician must verify the source PDF.';
     const SEEDED_MISSING_DATA = [
         'Ordering provider not clearly detected',
@@ -28,6 +30,18 @@
         '- Ordering provider not clearly detected',
         '- Collection time not clearly detected'
     ].join('\n');
+    const SEEDED_INTAKE_TEXT = [
+        'Synthetic demo data only',
+        'Document: Marcus Johnson intake form',
+        'Reason for visit: blood sugar management and medication questions',
+        'Medication adherence issue: sometimes misses evening Metformin',
+        'Allergies: no known drug allergies reported',
+        'Insurance update: patient says coverage changed recently',
+        'Care preference: written instructions and phone reminders'
+    ].join('\n');
+    const SEEDED_INTAKE_MISSING_DATA = [
+        'Current concerns were not clearly detected in the uploaded intake form.'
+    ];
 
     const PROMPT_INJECTION_PATTERNS = [
         /\bignore (all|any|previous|prior) instructions\b/i,
@@ -91,6 +105,130 @@
         }
     ];
 
+    const DOCUMENT_TYPE_HINTS = {
+        intake_form: {
+            filePatterns: [/\bintake\b/i, /\bintake-form\b/i, /\bpatient-intake\b/i, /\bquestionnaire\b/i, /\bform\b/i],
+            textPatterns: [/\breason for visit\b/i, /\bcurrent concerns\b/i, /\bmedication notes\b/i, /\bmedication adherence\b/i, /\ballergies\b/i, /\binsurance update\b/i, /\bcare preferences\b/i, /\bpreferred contact\b/i]
+        },
+        lab_pdf: {
+            filePatterns: [/\blab\b/i, /\blabs\b/i, /\bresult\b/i, /\bdiagnostic\b/i],
+            textPatterns: [/\ba1c\b/i, /\bglucose\b/i, /\bldl\b/i, /\bhdl\b/i, /\bcreatinine\b/i, /\begfr\b/i, /\bmg\/dL\b/i, /\bhigh\b/i, /\blow\b/i, /\bnormal\b/i, /%/]
+        }
+    };
+
+    const MEDICAL_GUARD_ACCEPTED_CLASSES = [
+        'lab_results',
+        'intake_form',
+        'discharge_summary',
+        'medication_list',
+        'insurance_claim',
+        'clinical_note',
+        'visit_summary'
+    ];
+
+    const MEDICAL_GUARD_REJECTED_CLUES = [
+        'invoice',
+        'vendor',
+        'payment terms',
+        'resume',
+        'job application',
+        'event checklist',
+        'restaurant menu',
+        'book manuscript',
+        'marketing flyer',
+        'school assignment',
+        'unrelated business document'
+    ];
+
+    const MEDICAL_GUARD_MEDICAL_HINTS = [
+        'patient',
+        'provider',
+        'allergies',
+        'medication',
+        'medications',
+        'diagnosis',
+        'clinical',
+        'visit',
+        'encounter',
+        'discharge',
+        'assessment',
+        'plan',
+        'hemoglobin a1c',
+        'a1c',
+        'glucose',
+        'ldl',
+        'hdl',
+        'creatinine',
+        'egfr',
+        'mg/dl',
+        'member id',
+        'claim',
+        'payer',
+        'insurance',
+        'coverage',
+        'reason for visit',
+        'current concerns',
+        'care preferences'
+    ];
+
+    const MEDICAL_GUARD_DOCUMENT_HINTS = {
+        lab_results: {
+            filePatterns: [/\blab\b/i, /\blabs\b/i, /\bresult\b/i, /\bdiagnostic\b/i],
+            textPatterns: [/\ba1c\b/i, /\bglucose\b/i, /\bldl\b/i, /\bhdl\b/i, /\bcreatinine\b/i, /\begfr\b/i, /\bmg\/dL\b/i]
+        },
+        intake_form: {
+            filePatterns: [/\bintake\b/i, /\bquestionnaire\b/i, /\bform\b/i],
+            textPatterns: [/\breason for visit\b/i, /\bcurrent concerns\b/i, /\bmedication adherence\b/i, /\ballergies\b/i, /\binsurance update\b/i, /\bcare preferences\b/i]
+        },
+        discharge_summary: {
+            filePatterns: [/\bdischarge\b/i, /\bhospital\b/i],
+            textPatterns: [/\bdischarge summary\b/i, /\bhospital course\b/i, /\bdischarge diagnosis\b/i]
+        },
+        medication_list: {
+            filePatterns: [/\bmedication\b/i],
+            textPatterns: [/\bmedication list\b/i, /\bcurrent medications\b/i, /\bdosage\b/i]
+        },
+        insurance_claim: {
+            filePatterns: [/\binsurance\b/i, /\bclaim\b/i, /\bpayer\b/i],
+            textPatterns: [/\bmember id\b/i, /\bpolicy\b/i, /\bcoverage\b/i, /\bclaim\b/i]
+        },
+        clinical_note: {
+            filePatterns: [/\bnote\b/i, /\bclinical\b/i, /\bprogress\b/i],
+            textPatterns: [/\bhpi\b/i, /\bassessment\b/i, /\bplan\b/i]
+        },
+        visit_summary: {
+            filePatterns: [/\bvisit\b/i, /\bsummary\b/i],
+            textPatterns: [/\bvisit summary\b/i, /\bfollow-up\b/i, /\bnext steps\b/i]
+        }
+    };
+
+    const INTAKE_FIELD_DEFINITIONS = {
+        reasonForVisit: {
+            title: 'Reason for Visit',
+            patterns: [/^reason for visit\s*:\s*(.+)$/i, /^visit reason\s*:\s*(.+)$/i]
+        },
+        currentConcerns: {
+            title: 'Current Concerns',
+            patterns: [/^current concerns\s*:\s*(.+)$/i, /^concerns\s*:\s*(.+)$/i]
+        },
+        medicationAdherence: {
+            title: 'Medication / Adherence Notes',
+            patterns: [/^medication adherence issue\s*:\s*(.+)$/i, /^medication adherence\s*:\s*(.+)$/i, /^medication notes\s*:\s*(.+)$/i, /^medication\/adherence notes\s*:\s*(.+)$/i]
+        },
+        allergies: {
+            title: 'Allergies',
+            patterns: [/^allergies\s*:\s*(.+)$/i]
+        },
+        insuranceUpdate: {
+            title: 'Insurance Update',
+            patterns: [/^insurance update\s*:\s*(.+)$/i, /^coverage update\s*:\s*(.+)$/i]
+        },
+        carePreferences: {
+            title: 'Care Preferences',
+            patterns: [/^care preferences\s*:\s*(.+)$/i, /^care preference\s*:\s*(.+)$/i, /^preferred contact\s*:\s*(.+)$/i]
+        }
+    };
+
     function normalizeWhitespace(value) {
         return String(value || '')
             .replace(/\r/g, '\n')
@@ -135,6 +273,160 @@
         const fileName = String(fileLike.name || fileLike.fileName || '').toLowerCase();
         const mimeType = String(fileLike.type || fileLike.mimeType || '').toLowerCase();
         return mimeType === 'application/pdf' || /\.pdf$/i.test(fileName);
+    }
+
+    function detectDocumentType(fileName, text = '') {
+        const normalizedFileName = String(fileName || '');
+        const normalizedText = String(text || '');
+
+        for (const pattern of DOCUMENT_TYPE_HINTS.intake_form.filePatterns) {
+            if (pattern.test(normalizedFileName)) {
+                return 'intake_form';
+            }
+        }
+        for (const pattern of DOCUMENT_TYPE_HINTS.intake_form.textPatterns) {
+            if (pattern.test(normalizedText)) {
+                return 'intake_form';
+            }
+        }
+        for (const pattern of DOCUMENT_TYPE_HINTS.lab_pdf.filePatterns) {
+            if (pattern.test(normalizedFileName)) {
+                return 'lab_pdf';
+            }
+        }
+        for (const pattern of DOCUMENT_TYPE_HINTS.lab_pdf.textPatterns) {
+            if (pattern.test(normalizedText)) {
+                return 'lab_pdf';
+            }
+        }
+
+        return 'unknown';
+    }
+
+    function detectMedicalGuardDocumentType(fileName, text = '') {
+        const normalizedFileName = String(fileName || '');
+        const normalizedText = String(text || '');
+
+        for (const documentType of Object.keys(MEDICAL_GUARD_DOCUMENT_HINTS)) {
+            const hints = MEDICAL_GUARD_DOCUMENT_HINTS[documentType];
+            for (const pattern of hints.filePatterns) {
+                if (pattern.test(normalizedFileName)) {
+                    return documentType;
+                }
+            }
+            for (const pattern of hints.textPatterns) {
+                if (pattern.test(normalizedText)) {
+                    return documentType;
+                }
+            }
+        }
+
+        return 'unknown';
+    }
+
+    function summarizeMedicalGuardHints(text, minimumScore = 0.70) {
+        const normalized = normalizeWhitespace(text).toLowerCase();
+        const matches = unique(MEDICAL_GUARD_MEDICAL_HINTS.filter(function (hint) {
+            return normalized.includes(String(hint).toLowerCase());
+        }));
+        const averageScore = matches.length > 0
+            ? Math.min(0.99, minimumScore + (Math.min(matches.length, 6) * 0.03))
+            : 0;
+
+        return {
+            totalEntities: matches.length,
+            highConfidenceEntityCount: matches.length,
+            highConfidenceEntities: matches.slice(0, 12).map(function (hint) {
+                return {
+                    text: hint,
+                    category: 'MEDICAL_HINT',
+                    score: Number(averageScore.toFixed(4))
+                };
+            }),
+            averageScore: Number(averageScore.toFixed(4)),
+            minimumScore: minimumScore
+        };
+    }
+
+    function evaluateMedicalDocumentGuard(input = {}) {
+        const fileName = String(input.fileName || '');
+        const text = normalizeWhitespace(input.text || input.extractedText || input.fallbackText || '');
+        const minimumEntities = Math.max(1, Number.isFinite(Number(input.minimumEntities)) ? Number(input.minimumEntities) : 2);
+        const minimumScore = Number.isFinite(Number(input.minimumScore)) ? Number(input.minimumScore) : 0.70;
+        const documentType = detectMedicalGuardDocumentType(fileName, text);
+        const detectedEntitySummary = summarizeMedicalGuardHints(text, minimumScore);
+        const rejectedClues = MEDICAL_GUARD_REJECTED_CLUES.filter(function (clue) {
+            return `${fileName}\n${text}`.toLowerCase().includes(clue.toLowerCase());
+        });
+        const highConfidenceEntityCount = detectedEntitySummary.highConfidenceEntityCount || 0;
+        const documentTypeRecognized = MEDICAL_GUARD_ACCEPTED_CLASSES.includes(documentType);
+        const confidence = Math.max(
+            0,
+            Math.min(
+                0.99,
+                Math.max(detectedEntitySummary.averageScore || 0, rejectedClues.length > 0 ? 0.25 : 0.45)
+                    + (documentTypeRecognized ? 0.18 : 0)
+                    + (Math.min(highConfidenceEntityCount, 6) * 0.04)
+                    - (rejectedClues.length > 0 ? 0.25 : 0)
+            )
+        );
+        const summary = {
+            ...detectedEntitySummary,
+            rejectedClues,
+            medicalEntityCount: highConfidenceEntityCount
+        };
+
+        if (!text) {
+            return {
+                decision: 'review_required',
+                documentType: documentTypeRecognized ? documentType : 'unknown',
+                confidence: 0,
+                extractedTextPreview: '',
+                detectedEntitySummary: summary,
+                rejectionReason: 'No reliable text was available for medical-document validation.'
+            };
+        }
+
+        if (rejectedClues.length >= 2 && highConfidenceEntityCount < minimumEntities) {
+            return {
+                decision: 'rejected',
+                documentType: 'unknown',
+                confidence: Number(confidence.toFixed(4)),
+                extractedTextPreview: text.slice(0, 220),
+                detectedEntitySummary: summary,
+                rejectionReason: 'The uploaded PDF appears to be a non-medical document based on business or unrelated document language.'
+            };
+        }
+
+        if (documentTypeRecognized && highConfidenceEntityCount >= minimumEntities && confidence >= minimumScore) {
+            return {
+                decision: 'allowed',
+                documentType,
+                confidence: Number(confidence.toFixed(4)),
+                extractedTextPreview: text.slice(0, 220),
+                detectedEntitySummary: summary
+            };
+        }
+
+        if (!documentTypeRecognized && highConfidenceEntityCount <= 0) {
+            return {
+                decision: 'rejected',
+                documentType: 'unknown',
+                confidence: Number(confidence.toFixed(4)),
+                extractedTextPreview: text.slice(0, 220),
+                detectedEntitySummary: summary,
+                rejectionReason: 'The uploaded PDF did not contain enough recognizable clinical or healthcare language to be ingested.'
+            };
+        }
+
+        return {
+            decision: 'review_required',
+            documentType: documentTypeRecognized ? documentType : 'unknown',
+            confidence: Number(confidence.toFixed(4)),
+            extractedTextPreview: text.slice(0, 220),
+            detectedEntitySummary: summary,
+            rejectionReason: 'Document type could not be verified with high confidence.'
+        };
     }
 
     function decodePdfLiteralString(value) {
@@ -220,6 +512,17 @@
         };
     }
 
+    function buildSeededIntakeFallbackDocument(options = {}) {
+        return {
+            fileName: options.fileName || SEEDED_INTAKE_FILE_NAME,
+            patientKey: String(options.patientKey || 'marcus-johnson'),
+            patientName: String(options.patientName || 'Marcus Johnson'),
+            extractionMethod: 'synthetic_marcus_intake_demo',
+            text: SEEDED_INTAKE_TEXT,
+            missingData: SEEDED_INTAKE_MISSING_DATA.slice()
+        };
+    }
+
     function isLikelySyntheticMarcusJohnsonPdf(fileName, text) {
         const normalizedFileName = String(fileName || '').toLowerCase();
         const normalizedText = String(text || '').toLowerCase();
@@ -232,10 +535,28 @@
         const forceSeededFallback = Boolean(options.forceSeededFallback);
         const patientKey = String(options.patientKey || 'marcus-johnson');
         const patientName = String(options.patientName || 'Marcus Johnson');
+        const requestedDocumentType = String(options.documentType || detectDocumentType(fileName, options.extractedText || '') || '');
         let extractedText = normalizeWhitespace(options.extractedText || '');
 
         if (!extractedText && options.arrayBuffer && !forceSeededFallback) {
             extractedText = extractPrintableTextFromPdfBuffer(options.arrayBuffer);
+        }
+
+        if ((requestedDocumentType === 'intake_form' || /marcus[-_ ]johnson.*intake.*\.pdf/i.test(fileName)) && (forceSeededFallback || !extractedText)) {
+            const seededIntake = buildSeededIntakeFallbackDocument({
+                fileName: fileName || SEEDED_INTAKE_FILE_NAME,
+                patientKey,
+                patientName
+            });
+
+            return {
+                status: forceSeededFallback ? 'seeded_demo_fallback' : 'synthetic_marcus_intake_demo',
+                extractionMethod: seededIntake.extractionMethod,
+                text: seededIntake.text,
+                preview: seededIntake.text.slice(0, 240),
+                missingData: seededIntake.missingData.slice(),
+                promptInjectionMatches: detectPromptInjectionText(extractedText)
+            };
         }
 
         if (forceSeededFallback || isLikelySyntheticMarcusJohnsonPdf(fileName, extractedText)) {
@@ -519,6 +840,113 @@
         };
     }
 
+    function intakeMissingFieldMessage(fieldKey) {
+        const mapping = {
+            reasonForVisit: 'Reason for visit was not clearly detected in the uploaded intake form.',
+            currentConcerns: 'Current concerns were not clearly detected in the uploaded intake form.',
+            medicationAdherence: 'Medication / adherence notes were not clearly detected in the uploaded intake form.',
+            allergies: 'Allergies were not clearly detected in the uploaded intake form.',
+            insuranceUpdate: 'Insurance update was not clearly detected in the uploaded intake form.',
+            carePreferences: 'Care preferences were not clearly detected in the uploaded intake form.'
+        };
+        return mapping[fieldKey] || 'A required intake field was not clearly detected in the uploaded intake form.';
+    }
+
+    function extractIntakeFactsFromText(text, options = {}) {
+        const useSeededIntake = Boolean(options.useSyntheticMarcus) || /marcus[-_ ]johnson.*intake.*\.pdf/i.test(String(options.fileName || ''));
+        const sourceText = useSeededIntake ? SEEDED_INTAKE_TEXT : text;
+        const lines = normalizeWhitespace(sourceText).split('\n');
+        const fields = {
+            reasonForVisit: '',
+            currentConcerns: '',
+            medicationAdherence: '',
+            allergies: '',
+            insuranceUpdate: '',
+            carePreferences: ''
+        };
+        const missing = [];
+        const rejectedLines = [];
+
+        lines.forEach(function (line) {
+            const normalizedLine = normalizeWhitespace(line);
+            if (!normalizedLine || isPromptInjectionLine(normalizedLine)) {
+                return;
+            }
+            if (/^(patient|document|synthetic demo data only)\b/i.test(normalizedLine)) {
+                return;
+            }
+            if (/^missing[:]?$/i.test(normalizedLine)) {
+                return;
+            }
+            if (/^-\s+(.+)$/i.test(normalizedLine)) {
+                missing.push(normalizedLine.replace(/^-\s+/, ''));
+                return;
+            }
+
+            let matched = false;
+            Object.entries(INTAKE_FIELD_DEFINITIONS).forEach(function ([fieldKey, definition]) {
+                if (matched) {
+                    return;
+                }
+                (definition.patterns || []).forEach(function (pattern) {
+                    if (matched) {
+                        return;
+                    }
+                    const match = normalizedLine.match(pattern);
+                    if (match) {
+                        const value = normalizeWhitespace(match[1] || '');
+                        if (value) {
+                            fields[fieldKey] = value;
+                        }
+                        matched = true;
+                    }
+                });
+            });
+
+            if (matched) {
+                return;
+            }
+
+            if (normalizedLine.includes(':') && /[A-Za-z]/.test(normalizedLine)) {
+                rejectedLines.push(normalizedLine);
+            }
+        });
+
+        Object.keys(fields).forEach(function (fieldKey) {
+            if (!normalizeWhitespace(fields[fieldKey])) {
+                missing.push(intakeMissingFieldMessage(fieldKey));
+            }
+        });
+
+        const facts = Object.entries(INTAKE_FIELD_DEFINITIONS).reduce(function (collection, [fieldKey, definition]) {
+            const value = normalizeWhitespace(fields[fieldKey] || '');
+            if (!value) {
+                return collection;
+            }
+            collection.push({
+                key: fieldKey,
+                label: definition.title,
+                name: definition.title,
+                value: value,
+                interpretation: '',
+                sourceLabel: 'Uploaded Intake Form',
+                source_label: 'Uploaded Intake Form'
+            });
+            return collection;
+        }, []);
+
+        return {
+            fields: {
+                ...fields,
+                missingOrAmbiguousData: unique(useSeededIntake ? missing.concat(SEEDED_INTAKE_MISSING_DATA) : missing)
+            },
+            facts: facts,
+            missing: unique(useSeededIntake ? missing.concat(SEEDED_INTAKE_MISSING_DATA) : missing),
+            rejectedLines: unique(rejectedLines),
+            validFieldCount: facts.length
+        };
+    }
+
     function buildExtractionReviewResult(options = {}) {
         return {
             status: 'extraction_review_required',
@@ -549,36 +977,271 @@
         }).length;
     }
 
-    function buildLabPdfTelemetryPayload(input = {}) {
-        const toolOutput = input.toolOutput && typeof input.toolOutput === 'object' ? input.toolOutput : {};
-        const extractedFacts = Array.isArray(toolOutput.extractedFacts || toolOutput.extracted_facts)
-            ? (toolOutput.extractedFacts || toolOutput.extracted_facts)
+    function resolveLabPdfToolOutput(responseOrToolOutput) {
+        if (responseOrToolOutput && typeof responseOrToolOutput === 'object' && responseOrToolOutput.tool_output && typeof responseOrToolOutput.tool_output === 'object') {
+            return responseOrToolOutput.tool_output;
+        }
+
+        if (responseOrToolOutput && typeof responseOrToolOutput === 'object' && responseOrToolOutput.toolOutput && typeof responseOrToolOutput.toolOutput === 'object') {
+            return responseOrToolOutput.toolOutput;
+        }
+
+        return responseOrToolOutput && typeof responseOrToolOutput === 'object'
+            ? responseOrToolOutput
+            : {};
+    }
+
+    function buildLabPdfSafeTelemetryPayload(responseOrToolOutput, overrides = {}) {
+        const toolOutput = resolveLabPdfToolOutput(responseOrToolOutput);
+        const responseMeta = responseOrToolOutput && typeof responseOrToolOutput === 'object' && responseOrToolOutput.meta && typeof responseOrToolOutput.meta === 'object'
+            ? responseOrToolOutput.meta
+            : {};
+        const metadata = toolOutput.document_metadata || toolOutput.documentMetadata || {};
+        const sourceMetadata = toolOutput.source_metadata || toolOutput.sourceMetadata || {};
+        const retrieval = toolOutput.retrieval && typeof toolOutput.retrieval === 'object'
+            ? toolOutput.retrieval
+            : {};
+        const safety = toolOutput.safety_metadata || toolOutput.safetyMetadata || {};
+        const documentGuard = toolOutput.document_guard || toolOutput.documentGuard || {};
+        const missingData = Array.isArray(toolOutput.missing_data || toolOutput.missingData)
+            ? (toolOutput.missing_data || toolOutput.missingData)
             : [];
-        const missingData = Array.isArray(toolOutput.missingData || toolOutput.missing_data)
-            ? (toolOutput.missingData || toolOutput.missing_data)
-            : [];
-        const documentMetadata = toolOutput.documentMetadata || toolOutput.document_metadata || {};
+        const documentType = String(
+            overrides.documentType
+            || metadata.document_type
+            || metadata.documentType
+            || sourceMetadata.source_type
+            || sourceMetadata.sourceType
+            || 'lab_pdf'
+        );
 
         return {
-            requestId: input.requestId || null,
-            role: input.role || null,
-            mode: input.mode || 'lab_pdf_ingestion',
-            selectedPatientKey: input.selectedPatientKey || null,
-            fileName: input.fileName || documentMetadata.title || null,
-            extractionMethod: input.extractionMethod || toolOutput.extractionMethod || toolOutput.extraction_method || null,
-            labValueCount: Number.isFinite(input.labValueCount) ? input.labValueCount : extractedFacts.length,
-            abnormalCount: Number.isFinite(input.abnormalCount) ? input.abnormalCount : countAbnormalFacts(toolOutput),
-            missingDataCount: Number.isFinite(input.missingDataCount) ? input.missingDataCount : missingData.length,
-            status: input.status || toolOutput.status || null
+            requestId: overrides.requestId || toolOutput.requestId || responseMeta.request_id || '',
+            role: overrides.role || responseOrToolOutput.role || '',
+            mode: overrides.mode || responseOrToolOutput.mode || 'lab_pdf_ingestion',
+            selectedPatientKey: overrides.selectedPatientKey || metadata.patient_key || metadata.patientKey || '',
+            documentTitle: overrides.documentTitle || metadata.title || sourceMetadata.file_name || sourceMetadata.fileName || '',
+            documentType: documentType,
+            extractionMethod: overrides.extractionMethod || toolOutput.extraction_method || toolOutput.extractionMethod || '',
+            toolStatus: overrides.toolStatus || toolOutput.status || toolOutput.ingestion_status || toolOutput.ingestionStatus || '',
+            chunkCount: Number(
+                overrides.chunkCount
+                ?? toolOutput.number_of_chunks
+                ?? toolOutput.numberOfChunks
+                ?? sourceMetadata.chunk_count
+                ?? sourceMetadata.chunkCount
+                ?? metadata.chunk_count
+                ?? 0
+            ),
+            retrievedChunkCount: Number(
+                overrides.retrievedChunkCount
+                ?? retrieval.chunk_count
+                ?? retrieval.chunkCount
+                ?? 0
+            ),
+            missingDataCount: Number.isFinite(overrides.missingDataCount)
+                ? overrides.missingDataCount
+                : missingData.length,
+            guardrailTriggered: Boolean(
+                overrides.guardrailTriggered
+                || safety.prompt_injection_detected
+                || safety.promptInjectionDetected
+            ),
+            documentGuardProvider: overrides.documentGuardProvider || documentGuard.guard_provider || documentGuard.guardProvider || '',
+            medicalEntityCount: Number(
+                overrides.medicalEntityCount
+                ?? documentGuard.medical_entity_count
+                ?? documentGuard.medicalEntityCount
+                ?? 0
+            ),
+            confidence: Number(
+                overrides.confidence
+                ?? documentGuard.confidence
+                ?? 0
+            ),
+            rejectionReason: overrides.rejectionReason || documentGuard.rejection_reason || documentGuard.rejectionReason || '',
+            documentGuardDecision: overrides.documentGuardDecision || documentGuard.decision || '',
+            awsGuardEnabled: Boolean(overrides.awsGuardEnabled ?? documentGuard.aws_guard_enabled ?? documentGuard.awsGuardEnabled ?? false),
+            seededDemo: Boolean(overrides.seededDemo ?? metadata.seeded_demo ?? metadata.seededDemo),
+            ragGrounded: Boolean(overrides.ragGrounded ?? responseMeta.rag_grounded ?? false)
         };
     }
 
-    function emitLabPdfTelemetry(telemetry, eventName, input = {}) {
-        const payload = buildLabPdfTelemetryPayload(input);
-        if (telemetry && typeof telemetry.log === 'function') {
-            telemetry.log(String(eventName || 'copilot_lab_pdf_event'), payload);
+    function buildLabPdfTelemetryPayload(input = {}) {
+        return buildLabPdfSafeTelemetryPayload(input, input);
+    }
+
+    function buildLabPdfDemoTracePayload(responseOrToolOutput, overrides = {}) {
+        const toolOutput = resolveLabPdfToolOutput(responseOrToolOutput);
+        const responseMeta = responseOrToolOutput && typeof responseOrToolOutput === 'object' && responseOrToolOutput.meta && typeof responseOrToolOutput.meta === 'object'
+            ? responseOrToolOutput.meta
+            : {};
+        const metadata = toolOutput.document_metadata || toolOutput.documentMetadata || {};
+        const sourceMetadata = toolOutput.source_metadata || toolOutput.sourceMetadata || {};
+        const retrieval = toolOutput.retrieval && typeof toolOutput.retrieval === 'object'
+            ? toolOutput.retrieval
+            : {};
+        const safety = toolOutput.safety_metadata || toolOutput.safetyMetadata || {};
+        const documentGuard = toolOutput.document_guard || toolOutput.documentGuard || {};
+        const vectorized = Array.isArray(toolOutput.vectorized_result || toolOutput.vectorizedResult)
+            ? (toolOutput.vectorized_result || toolOutput.vectorizedResult)
+            : [];
+        const extractedFacts = Array.isArray(toolOutput.extracted_facts || toolOutput.extractedFacts)
+            ? (toolOutput.extracted_facts || toolOutput.extractedFacts)
+            : [];
+        const abnormalFindings = Array.isArray(toolOutput.abnormal_findings || toolOutput.abnormalFindings)
+            ? (toolOutput.abnormal_findings || toolOutput.abnormalFindings)
+            : [];
+        const missingData = Array.isArray(toolOutput.missing_data || toolOutput.missingData)
+            ? (toolOutput.missing_data || toolOutput.missingData)
+            : [];
+
+        const vectorSummary = vectorized.map(function (record) {
+            const embedding = Array.isArray(record.embedding) ? record.embedding : [];
+            return {
+                id: record.id || '',
+                fileName: record.file_name || record.fileName || metadata.title || '',
+                chunkIndex: record.chunk_index ?? record.chunkIndex ?? null,
+                sourcePage: record.source_page ?? record.sourcePage ?? null,
+                embeddingDimensions: embedding.length > 0 ? embedding.length : Number(record.embeddingDimensions || 0),
+                embeddingPreview: embedding.slice(0, 4)
+            };
+        });
+
+        const seededDemo = Boolean(metadata.seeded_demo || metadata.seededDemo);
+        const syntheticFactsSummary = seededDemo
+            ? extractedFacts.map(function (fact) {
+                return {
+                    name: fact.name || '',
+                    value: fact.value || '',
+                    interpretation: fact.interpretation || fact.flag || ''
+                };
+            })
+            : [];
+
+        return {
+            summaryRows: [
+                { step: 'Attached PDF', status: toolOutput.status || toolOutput.ingestion_status || toolOutput.ingestionStatus || 'ok' },
+                { step: 'Text extraction', status: toolOutput.extraction_method || toolOutput.extractionMethod || 'unknown' },
+                { step: 'Chunking', status: `${toolOutput.number_of_chunks || toolOutput.numberOfChunks || 0} chunks` },
+                { step: 'Vectorization', status: `${vectorSummary.length} vector records` },
+                { step: 'Retrieval', status: `${retrieval.chunk_count || retrieval.chunkCount || 0} chunks retrieved` },
+                { step: 'Clinician review', status: 'required' }
+            ],
+            pipelineSummary: {
+                requestId: overrides.requestId || responseMeta.request_id || '',
+                role: overrides.role || responseOrToolOutput.role || '',
+                mode: overrides.mode || responseOrToolOutput.mode || 'lab_pdf_ingestion',
+                selectedPatientKey: overrides.selectedPatientKey || metadata.patient_key || metadata.patientKey || '',
+                documentTitle: metadata.title || overrides.documentTitle || '',
+                documentType: metadata.document_type || metadata.documentType || sourceMetadata.source_type || sourceMetadata.sourceType || 'lab_pdf',
+                extractionMethod: toolOutput.extraction_method || toolOutput.extractionMethod || '',
+                ingestionStatus: toolOutput.ingestion_status || toolOutput.ingestionStatus || toolOutput.status || '',
+                documentGuardDecision: documentGuard.decision || '',
+                documentGuardProvider: documentGuard.guard_provider || documentGuard.guardProvider || '',
+                extractedFactCount: extractedFacts.length,
+                abnormalCount: abnormalFindings.length,
+                missingDataCount: missingData.length
+            },
+            vectorSummary: vectorSummary,
+            retrievalSummary: {
+                chunkIds: retrieval.chunk_ids || retrieval.chunkIds || [],
+                chunkCount: retrieval.chunk_count || retrieval.chunkCount || 0
+            },
+            safetySummary: {
+                draftOnly: true,
+                reviewRequired: true,
+                noChartWrite: true,
+                promptInjectionDetected: Boolean(safety.prompt_injection_detected || safety.promptInjectionDetected),
+                medicalDocumentGate: {
+                    decision: documentGuard.decision || '',
+                    provider: documentGuard.guard_provider || documentGuard.guardProvider || '',
+                    textractStatus: documentGuard.textract_status || documentGuard.textractStatus || '',
+                    comprehendStatus: documentGuard.comprehend_status || documentGuard.comprehendStatus || '',
+                    medicalEntityCount: Number(documentGuard.medical_entity_count || documentGuard.medicalEntityCount || 0)
+                },
+                untrustedDocumentText: true,
+                seededDemo: seededDemo,
+                ragGrounded: Boolean(overrides.ragGrounded ?? responseMeta.rag_grounded ?? false)
+            },
+            syntheticFactsSummary: syntheticFactsSummary
+        };
+    }
+
+    function demoLogsEnabled() {
+        const runtimeRoot = typeof globalThis !== 'undefined' ? globalThis : {};
+        if (runtimeRoot.OPENEMR_COPILOT_DEMO_LOGS === true) {
+            return true;
         }
-        return payload;
+
+        try {
+            if (runtimeRoot.localStorage && runtimeRoot.localStorage.getItem('openemr_copilot_demo_logs') === 'true') {
+                return true;
+            }
+        } catch (error) {
+        }
+
+        return true;
+    }
+
+    function logLabPdfDemoTrace(label, data = {}) {
+        if (!demoLogsEnabled() || typeof console === 'undefined' || typeof console.groupCollapsed !== 'function') {
+            return;
+        }
+
+        console.groupCollapsed(`[Lab PDF Ingestion Demo] ${String(label || 'Pipeline trace')}`);
+        if (typeof console.table === 'function' && Array.isArray(data.summaryRows) && data.summaryRows.length > 0) {
+            console.table(data.summaryRows);
+        }
+        console.info('Pipeline summary', data.pipelineSummary || {});
+        console.info('Vector summary', data.vectorSummary || []);
+        console.info('Retrieval summary', data.retrievalSummary || {});
+        console.info('Safety summary', data.safetySummary || {});
+        if (Array.isArray(data.syntheticFactsSummary) && data.syntheticFactsSummary.length > 0) {
+            console.info('Synthetic demo facts only — not real PHI', data.syntheticFactsSummary);
+        }
+        console.groupEnd();
+    }
+
+    function resolveTelemetry(telemetry) {
+        if (telemetry && typeof telemetry.log === 'function') {
+            return telemetry;
+        }
+
+        const runtimeRoot = typeof globalThis !== 'undefined' ? globalThis : {};
+        if (runtimeRoot.CopilotTelemetry && typeof runtimeRoot.CopilotTelemetry.log === 'function') {
+            return runtimeRoot.CopilotTelemetry;
+        }
+
+        if (runtimeRoot.window && runtimeRoot.window.CopilotTelemetry && typeof runtimeRoot.window.CopilotTelemetry.log === 'function') {
+            return runtimeRoot.window.CopilotTelemetry;
+        }
+
+        if (runtimeRoot.window && runtimeRoot.window.top && runtimeRoot.window.top.CopilotTelemetry && typeof runtimeRoot.window.top.CopilotTelemetry.log === 'function') {
+            return runtimeRoot.window.top.CopilotTelemetry;
+        }
+
+        return null;
+    }
+
+    function logLabPdfEvent(eventName, payload = {}, telemetry) {
+        const resolvedTelemetry = resolveTelemetry(telemetry);
+        const safePayload = buildLabPdfSafeTelemetryPayload(payload, payload);
+        if (!resolvedTelemetry || typeof resolvedTelemetry.log !== 'function') {
+            if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+                console.warn('[Medical Co-Pilot Audit] lab PDF telemetry unavailable', {
+                    eventName: String(eventName || 'copilot_lab_pdf_event')
+                });
+            }
+            return safePayload;
+        }
+
+        resolvedTelemetry.log(String(eventName || 'copilot_lab_pdf_event'), safePayload);
+        return safePayload;
+    }
+
+    function emitLabPdfTelemetry(telemetry, eventName, input = {}) {
+        return logLabPdfEvent(eventName, input, telemetry);
     }
 
     function buildAttachmentDescriptor(fileLike, options = {}) {
@@ -587,15 +1250,19 @@
                 kind: 'seeded_demo',
                 fileName: SEEDED_FILE_NAME,
                 displayLabel: `Attached: ${SEEDED_FILE_NAME}`,
-                mimeType: 'application/pdf'
+                mimeType: 'application/pdf',
+                documentType: 'lab_pdf'
             };
         }
 
+        const fileName = String(fileLike && fileLike.name ? fileLike.name : 'attached-document.pdf');
+
         return {
             kind: 'uploaded_file',
-            fileName: String(fileLike && fileLike.name ? fileLike.name : 'attached-lab-report.pdf'),
-            displayLabel: `Attached: ${String(fileLike && fileLike.name ? fileLike.name : 'attached-lab-report.pdf')}`,
-            mimeType: String(fileLike && (fileLike.type || fileLike.mimeType) ? (fileLike.type || fileLike.mimeType) : 'application/pdf')
+            fileName: fileName,
+            displayLabel: `Attached: ${fileName}`,
+            mimeType: String(fileLike && (fileLike.type || fileLike.mimeType) ? (fileLike.type || fileLike.mimeType) : 'application/pdf'),
+            documentType: detectDocumentType(fileName)
         };
     }
 
@@ -609,20 +1276,35 @@
         SEEDED_MISSING_DATA: SEEDED_MISSING_DATA,
         SEEDED_TEXT: SEEDED_TEXT,
         buildAttachmentDescriptor: buildAttachmentDescriptor,
+        buildLabPdfDemoTracePayload: buildLabPdfDemoTracePayload,
+        buildLabPdfSafeTelemetryPayload: buildLabPdfSafeTelemetryPayload,
         buildExtractionReviewResult: buildExtractionReviewResult,
         buildLabPdfTelemetryPayload: buildLabPdfTelemetryPayload,
         buildSeededFallbackDocument: buildSeededFallbackDocument,
+        buildSeededIntakeFallbackDocument: buildSeededIntakeFallbackDocument,
         buildSyntheticMarcusFacts: buildSyntheticMarcusFacts,
         chunkLabPdfText: chunkLabPdfText,
         countAbnormalFacts: countAbnormalFacts,
+        detectDocumentType: detectDocumentType,
+        detectMedicalGuardDocumentType: detectMedicalGuardDocumentType,
         detectPromptInjectionText: detectPromptInjectionText,
         emitLabPdfTelemetry: emitLabPdfTelemetry,
+        evaluateMedicalDocumentGuard: evaluateMedicalDocumentGuard,
+        extractIntakeFactsFromText: extractIntakeFactsFromText,
         extractLabFactsFromText: extractLabFactsFromText,
         extractPrintableTextFromPdfBuffer: extractPrintableTextFromPdfBuffer,
         extractTextOrSeedFallback: extractTextOrSeedFallback,
         isLikelySyntheticMarcusJohnsonPdf: isLikelySyntheticMarcusJohnsonPdf,
         isPdfLike: isPdfLike,
+        logLabPdfDemoTrace: logLabPdfDemoTrace,
+        logLabPdfEvent: logLabPdfEvent,
+        MEDICAL_GUARD_ACCEPTED_CLASSES: MEDICAL_GUARD_ACCEPTED_CLASSES,
+        MEDICAL_GUARD_REJECTED_CLUES: MEDICAL_GUARD_REJECTED_CLUES,
         normalizeWhitespace: normalizeWhitespace,
-        parseRecognizedLabLine: parseRecognizedLabLine
+        parseRecognizedLabLine: parseRecognizedLabLine,
+        INTAKE_REVIEW_NOTICE: INTAKE_REVIEW_NOTICE,
+        SEEDED_INTAKE_FILE_NAME: SEEDED_INTAKE_FILE_NAME,
+        SEEDED_INTAKE_MISSING_DATA: SEEDED_INTAKE_MISSING_DATA,
+        SEEDED_INTAKE_TEXT: SEEDED_INTAKE_TEXT
     };
 }));

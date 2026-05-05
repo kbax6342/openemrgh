@@ -365,10 +365,9 @@ $visitReviewVersion = file_exists(__DIR__ . '/copilot_visit_review.js') ? (strin
                                 type="button"
                                 id="copilot-lab-pdf-attach"
                                 class="copilot-attach-button"
-                                aria-label="<?php echo attr(xl('Attach lab PDF')); ?>"
-                                title="<?php echo attr(xl('Attach lab PDF')); ?>"
+                                aria-label="<?php echo attr(xl('Attach PDF')); ?>"
+                                title="<?php echo attr(xl('Attach PDF')); ?>"
                             >
-                                <span class="copilot-attach-glyph" aria-hidden="true">&#128206;</span>
                                 <span><?php echo xlt('Attach PDF'); ?></span>
                             </button>
                             <div id="copilot-lab-pdf-chip" class="copilot-attachment-chip" hidden>
@@ -377,12 +376,21 @@ $visitReviewVersion = file_exists(__DIR__ . '/copilot_visit_review.js') ? (strin
                                     type="button"
                                     id="copilot-lab-pdf-remove"
                                     class="copilot-attachment-remove"
-                                    aria-label="<?php echo attr(xl('Remove attached lab PDF')); ?>"
-                                    title="<?php echo attr(xl('Remove attached lab PDF')); ?>"
+                                    aria-label="<?php echo attr(xl('Remove attached PDF')); ?>"
+                                    title="<?php echo attr(xl('Remove attached PDF')); ?>"
                                 >
                                     <span aria-hidden="true">&times;</span>
                                 </button>
                             </div>
+                            <button
+                                type="button"
+                                id="copilot-lab-evidence-clear"
+                                class="copilot-attach-button"
+                                aria-label="<?php echo attr(xl('Clear Lab Evidence')); ?>"
+                                title="<?php echo attr(xl('Clear uploaded lab evidence for the selected demo patient')); ?>"
+                            >
+                                <span><?php echo xlt('Clear Lab Evidence'); ?></span>
+                            </button>
                         </div>
                         <label class="copilot-visually-hidden" for="copilot-input"><?php echo xlt('Medical Co-Pilot prompt'); ?></label>
                         <textarea
@@ -391,7 +399,8 @@ $visitReviewVersion = file_exists(__DIR__ . '/copilot_visit_review.js') ? (strin
                             rows="1"
                             placeholder="<?php echo attr(xl('Ask about the chart or enter a clinical support prompt...')); ?>"
                         ></textarea>
-                        <p id="copilot-lab-pdf-status" class="copilot-lab-pdf-status"><?php echo xlt('Attach a lab PDF for draft-only clinician review.'); ?></p>
+                        <div id="copilot-upload-notice" class="copilot-upload-notice" aria-live="polite" hidden></div>
+                        <p id="copilot-lab-pdf-status" class="copilot-lab-pdf-status"><?php echo xlt('Attach a PDF for draft-only clinician review.'); ?></p>
                     </div>
                     <div class="copilot-composer-actions">
                         <button type="submit" id="copilot-send" class="copilot-send-button">
@@ -452,6 +461,8 @@ const labPdfAttachButton = document.getElementById('copilot-lab-pdf-attach');
 const labPdfChip = document.getElementById('copilot-lab-pdf-chip');
 const labPdfChipText = document.getElementById('copilot-lab-pdf-chip-text');
 const labPdfRemoveButton = document.getElementById('copilot-lab-pdf-remove');
+const labEvidenceClearButton = document.getElementById('copilot-lab-evidence-clear');
+const uploadNotice = document.getElementById('copilot-upload-notice');
 const labPdfStatus = document.getElementById('copilot-lab-pdf-status');
 
 const actionCatalog = Object.fromEntries(
@@ -473,11 +484,13 @@ const state = {
     labPdf: {
         file: null,
         descriptor: null,
-        useDemoSeed: false
+        useDemoSeed: false,
+        requestId: null
     }
 };
 
 const copiedStateTimers = new Map();
+let uploadNoticeTimer = null;
 
 function createId(prefix) {
     if (window.crypto && typeof window.crypto.randomUUID === 'function') {
@@ -570,12 +583,21 @@ function ensureTelemetryHost(targetWindow) {
         'documentType',
         'documentSource',
         'extractionMethod',
+        'requestedDocumentTypes',
+        'matchedSourceTitles',
         'chunkCount',
         'retrievedChunkCount',
         'retrievedChunkIds',
         'uploadedAt',
         'guardrailTriggered',
         'missingDataCount',
+        'documentGuardProvider',
+        'medicalEntityCount',
+        'confidence',
+        'rejectionReason',
+        'documentGuardDecision',
+        'awsGuardEnabled',
+        'seededDemo',
         'ragGrounded',
         'sourceCount',
         'sourceTitles',
@@ -1228,6 +1250,49 @@ function setLabPdfStatus(message, tone = 'neutral') {
     labPdfStatus.dataset.tone = tone;
 }
 
+function clearUploadNotice() {
+    if (!uploadNotice) {
+        return;
+    }
+
+    if (uploadNoticeTimer) {
+        window.clearTimeout(uploadNoticeTimer);
+        uploadNoticeTimer = null;
+    }
+
+    uploadNotice.hidden = true;
+    uploadNotice.textContent = '';
+    uploadNotice.dataset.tone = 'neutral';
+}
+
+function setUploadNotice(message, tone = 'neutral', options = {}) {
+    if (!uploadNotice) {
+        return;
+    }
+
+    const text = String(message || '').trim();
+    if (!text) {
+        clearUploadNotice();
+        return;
+    }
+
+    if (uploadNoticeTimer) {
+        window.clearTimeout(uploadNoticeTimer);
+        uploadNoticeTimer = null;
+    }
+
+    uploadNotice.hidden = false;
+    uploadNotice.textContent = text;
+    uploadNotice.dataset.tone = tone;
+
+    const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 5200;
+    if (options.persist !== true) {
+        uploadNoticeTimer = window.setTimeout(() => {
+            clearUploadNotice();
+        }, timeoutMs);
+    }
+}
+
 function currentPatientName() {
     const option = patientSelect?.options?.[patientSelect.selectedIndex];
     if (!option || !patientSelect.value) {
@@ -1244,11 +1309,11 @@ function labPdfIngestionHelper() {
 }
 
 function emitLabPdfAuditEvent(eventName, payload = {}) {
-    if (!CopilotTelemetry) {
-        return null;
+    const helper = labPdfIngestionHelper();
+    if (helper && typeof helper.logLabPdfEvent === 'function') {
+        return helper.logLabPdfEvent(eventName, payload, CopilotTelemetry);
     }
 
-    const helper = labPdfIngestionHelper();
     if (helper && typeof helper.emitLabPdfTelemetry === 'function') {
         return helper.emitLabPdfTelemetry(CopilotTelemetry, eventName, payload);
     }
@@ -1258,16 +1323,195 @@ function emitLabPdfAuditEvent(eventName, payload = {}) {
         role: payload.role || state.activeRole || null,
         mode: payload.mode || 'lab_pdf_ingestion',
         selectedPatientKey: payload.selectedPatientKey || currentSelectedPatientKey(),
-        fileName: payload.fileName || null,
+        documentTitle: payload.documentTitle || payload.fileName || null,
+        documentType: payload.documentType || 'lab_pdf',
         extractionMethod: payload.extractionMethod || null,
-        labValueCount: Number.isFinite(payload.labValueCount) ? payload.labValueCount : 0,
-        abnormalCount: Number.isFinite(payload.abnormalCount) ? payload.abnormalCount : 0,
+        toolStatus: payload.toolStatus || payload.status || null,
+        chunkCount: Number.isFinite(payload.chunkCount) ? payload.chunkCount : 0,
+        retrievedChunkCount: Number.isFinite(payload.retrievedChunkCount) ? payload.retrievedChunkCount : 0,
         missingDataCount: Number.isFinite(payload.missingDataCount) ? payload.missingDataCount : 0,
-        status: payload.status || null
+        guardrailTriggered: Boolean(payload.guardrailTriggered),
+        documentGuardProvider: payload.documentGuardProvider || null,
+        medicalEntityCount: Number.isFinite(payload.medicalEntityCount) ? payload.medicalEntityCount : 0,
+        confidence: Number.isFinite(payload.confidence) ? payload.confidence : 0,
+        rejectionReason: payload.rejectionReason || null,
+        documentGuardDecision: payload.documentGuardDecision || null,
+        awsGuardEnabled: Boolean(payload.awsGuardEnabled),
+        seededDemo: Boolean(payload.seededDemo),
+        ragGrounded: Boolean(payload.ragGrounded)
     };
+
+    if (!CopilotTelemetry || typeof CopilotTelemetry.log !== 'function') {
+        console.warn('[Medical Co-Pilot Audit] lab PDF telemetry unavailable', {
+            eventName: String(eventName || 'copilot_lab_pdf_event')
+        });
+        return safePayload;
+    }
 
     CopilotTelemetry.log(String(eventName || 'copilot_lab_pdf_event'), safePayload);
     return safePayload;
+}
+
+function emitLabEvidenceClearAuditEvent(eventName, payload = {}) {
+    const safePayload = {
+        requestId: payload.requestId || null,
+        role: payload.role || state.activeRole || null,
+        mode: payload.mode || 'lab_pdf_ingestion',
+        selectedPatientKey: payload.selectedPatientKey || currentSelectedPatientKey(),
+        documentTitle: payload.documentTitle || null,
+        documentType: normalizeAttachmentDocumentType(payload.documentType || 'lab_pdf'),
+        toolStatus: payload.toolStatus || null,
+        removedLabFiles: Number.isFinite(payload.removedLabFiles) ? payload.removedLabFiles : 0,
+        removedLabChunks: Number.isFinite(payload.removedLabChunks) ? payload.removedLabChunks : 0,
+        removedLabExtractions: Number.isFinite(payload.removedLabExtractions) ? payload.removedLabExtractions : 0,
+        remainingIntakeForms: Number.isFinite(payload.remainingIntakeForms) ? payload.remainingIntakeForms : 0
+    };
+
+    if (!CopilotTelemetry || typeof CopilotTelemetry.log !== 'function') {
+        console.warn('[Medical Co-Pilot Audit] lab evidence clear telemetry unavailable', {
+            eventName: String(eventName || 'copilot_lab_evidence_clear')
+        });
+        console.info('[OpenEMR Copilot] Lab evidence clear summary', safePayload);
+        return safePayload;
+    }
+
+    CopilotTelemetry.log(String(eventName || 'copilot_lab_evidence_clear'), safePayload);
+    return safePayload;
+}
+
+function clearLabEvidenceClientStorage(selectedPatientKey) {
+    const candidatePatterns = [
+        /openemr_copilot_lab_pdf/i,
+        /openemr_copilot_uploaded_lab/i,
+        /openemr_copilot_lab_evidence/i,
+        /labpdf_request/i
+    ];
+    let removedCount = 0;
+
+    [window.localStorage, window.sessionStorage].forEach((storage) => {
+        try {
+            if (!storage) {
+                return;
+            }
+            const keys = [];
+            for (let index = 0; index < storage.length; index += 1) {
+                const key = storage.key(index);
+                if (key) {
+                    keys.push(key);
+                }
+            }
+            keys.forEach((key) => {
+                const matchesPattern = candidatePatterns.some((pattern) => pattern.test(key));
+                const matchesPatient = !selectedPatientKey || key.includes(selectedPatientKey);
+                if (matchesPattern && matchesPatient) {
+                    storage.removeItem(key);
+                    removedCount += 1;
+                }
+            });
+        } catch (error) {
+        }
+    });
+
+    return removedCount;
+}
+
+function normalizeAttachmentDocumentType(documentType) {
+    return documentType === 'intake_form' || documentType === 'lab_pdf' || documentType === 'unknown'
+        ? documentType
+        : 'unknown';
+}
+
+function detectRequestedUploadedDocumentTypes(prompt) {
+    const value = String(prompt || '').toLowerCase();
+    const requestedTypes = [];
+    if (/\b(lab pdf|lab results|uploaded lab|lab report|a1c|glucose|ldl|creatinine|egfr)\b/.test(value)) {
+        requestedTypes.push('lab_results');
+    }
+    if (/\b(intake|intake form|questionnaire|reason for visit|medication adherence|insurance update|care preferences)\b/.test(value)) {
+        requestedTypes.push('intake_form');
+    }
+    return Array.from(new Set(requestedTypes));
+}
+
+function matchedUploadedSourceTitles(toolOutput) {
+    const sourceCoverage = toolOutput && typeof toolOutput === 'object' && toolOutput.sourceCoverage && typeof toolOutput.sourceCoverage === 'object'
+        ? toolOutput.sourceCoverage
+        : {};
+    const matchedSources = Array.isArray(sourceCoverage.matched_sources)
+        ? sourceCoverage.matched_sources
+        : (Array.isArray(sourceCoverage.matchedSources) ? sourceCoverage.matchedSources : []);
+    return Array.from(new Set(matchedSources.map((source) => {
+        if (!source || typeof source !== 'object') {
+            return '';
+        }
+        return String(source.display_file_name || source.displayFileName || source.original_file_name || source.originalFileName || '').trim();
+    }).filter(Boolean)));
+}
+
+function logUploadedDocumentRetrievalEvent(eventName, payload = {}) {
+    if (!CopilotTelemetry || typeof CopilotTelemetry.log !== 'function') {
+        return;
+    }
+
+    CopilotTelemetry.log(String(eventName || 'copilot_document_retrieval_event'), {
+        requestId: payload.requestId || null,
+        role: payload.role || state.activeRole || null,
+        mode: payload.mode || state.activeMode || null,
+        selectedPatientKey: payload.selectedPatientKey || currentSelectedPatientKey(),
+        requestedDocumentTypes: Array.isArray(payload.requestedDocumentTypes) ? payload.requestedDocumentTypes.slice(0, 4) : [],
+        matchedSourceTitles: Array.isArray(payload.matchedSourceTitles) ? payload.matchedSourceTitles.slice(0, 6) : [],
+        sourceCount: Number.isFinite(payload.sourceCount) ? payload.sourceCount : 0
+    });
+}
+
+function emitAttachmentReviewLlmAuditEvent(eventName, payload = {}) {
+    if (!CopilotTelemetry || typeof CopilotTelemetry.log !== 'function') {
+        return;
+    }
+
+    CopilotTelemetry.log(String(eventName || 'copilot_attachment_review_llm_event'), {
+        requestId: payload.requestId || null,
+        role: payload.role || state.activeRole || null,
+        mode: payload.mode || state.activeMode || null,
+        selectedPatientKey: payload.selectedPatientKey || currentSelectedPatientKey(),
+        documentTitle: payload.documentTitle || null,
+        documentType: payload.documentType || null,
+        toolStatus: payload.toolStatus || null,
+        sourceCount: Number.isFinite(payload.sourceCount) ? payload.sourceCount : 0,
+        provider: payload.provider || null,
+        model: payload.model || null,
+        openaiConfigured: Boolean(payload.openaiConfigured),
+        promptTokens: Number.isFinite(payload.promptTokens) ? payload.promptTokens : null,
+        completionTokens: Number.isFinite(payload.completionTokens) ? payload.completionTokens : null,
+        totalTokens: Number.isFinite(payload.totalTokens) ? payload.totalTokens : null,
+        fallbackReason: payload.fallbackReason || null,
+        openaiErrorCategory: payload.openaiErrorCategory || null,
+        openaiHttpStatus: Number.isFinite(payload.openaiHttpStatus) ? payload.openaiHttpStatus : null,
+        openaiErrorMessageSafe: payload.openaiErrorMessageSafe || null,
+        ragGrounded: Boolean(payload.ragGrounded)
+    });
+}
+
+function attachmentWorkflowLabel(documentType) {
+    const normalizedType = normalizeAttachmentDocumentType(documentType);
+    if (normalizedType === 'intake_form') {
+        return 'intake form';
+    }
+    if (normalizedType === 'lab_pdf') {
+        return 'lab PDF';
+    }
+    return 'PDF';
+}
+
+function attachmentWorkflowContextLabel(documentType) {
+    const normalizedType = normalizeAttachmentDocumentType(documentType);
+    if (normalizedType === 'intake_form') {
+        return 'intake-form context';
+    }
+    if (normalizedType === 'lab_pdf') {
+        return 'lab context';
+    }
+    return 'document context';
 }
 
 function hasActiveLabPdfAttachment() {
@@ -1279,26 +1523,36 @@ function refreshLabPdfAttachmentUi() {
         const hasDescriptor = Boolean(state.labPdf.descriptor);
         labPdfChip.hidden = !hasDescriptor;
         if (hasDescriptor && labPdfChipText) {
-            labPdfChipText.textContent = state.labPdf.descriptor.displayLabel || 'Attached lab PDF';
+            labPdfChipText.textContent = state.labPdf.descriptor.displayLabel || 'Attached PDF';
         }
     }
 
     if (!hasActiveLabPdfAttachment()) {
-        setLabPdfStatus('Attach a lab PDF for draft-only clinician review.');
+        setLabPdfStatus('Attach a PDF for draft-only clinician review.');
     }
 }
 
 function clearLabPdfAttachment(options = {}) {
     const previousDescriptor = state.labPdf.descriptor;
+    const previousRequestId = state.labPdf.requestId;
     state.labPdf.file = null;
     state.labPdf.descriptor = null;
     state.labPdf.useDemoSeed = false;
+    state.labPdf.requestId = null;
 
     if (labPdfInput) {
         labPdfInput.value = '';
     }
 
     refreshLabPdfAttachmentUi();
+    if (options.keepUploadNotice) {
+        setUploadNotice(options.keepUploadNotice, options.noticeTone || 'neutral', {
+            persist: options.persistUploadNotice === true,
+            timeoutMs: options.noticeTimeoutMs
+        });
+    } else {
+        clearUploadNotice();
+    }
     updateSendState();
     if (options.keepStatusMessage) {
         setLabPdfStatus(options.keepStatusMessage, options.tone || 'neutral');
@@ -1306,11 +1560,15 @@ function clearLabPdfAttachment(options = {}) {
 
     if (options.emitTelemetry !== false && previousDescriptor) {
         emitLabPdfAuditEvent('copilot_lab_pdf_removed', {
+            requestId: previousRequestId,
             role: state.activeRole,
-            mode: state.activeMode,
+            mode: 'lab_pdf_ingestion',
             selectedPatientKey: currentSelectedPatientKey(),
-            fileName: previousDescriptor.fileName || null,
-            status: 'removed'
+            documentTitle: previousDescriptor.fileName || null,
+            documentType: normalizeAttachmentDocumentType(previousDescriptor.documentType),
+            toolStatus: 'removed',
+            seededDemo: previousDescriptor.kind === 'seeded_demo',
+            ragGrounded: false
         });
     }
 }
@@ -1319,6 +1577,7 @@ function applyLabPdfAttachmentDescriptor(descriptor, options = {}) {
     state.labPdf.file = options.file || null;
     state.labPdf.useDemoSeed = Boolean(options.useDemoSeed);
     state.labPdf.descriptor = descriptor || null;
+    state.labPdf.requestId = options.requestId || state.labPdf.requestId || null;
     refreshLabPdfAttachmentUi();
     updateSendState();
 }
@@ -1331,13 +1590,19 @@ function setUploadedLabPdfAttachment(file) {
 
     if (!isPdf) {
         clearLabPdfAttachment({ emitTelemetry: false });
-        setLabPdfStatus('Please select a PDF file for this lab-ingestion workflow.', 'error');
-        emitLabPdfAuditEvent('copilot_lab_pdf_extraction_failed', {
+        setLabPdfStatus('Please select a PDF file for this document-ingestion workflow.', 'error');
+        setUploadNotice('This does not appear to be a supported PDF upload. Please select a PDF file.', 'error', {
+            timeoutMs: 5400
+        });
+        emitLabPdfAuditEvent('copilot_lab_pdf_ingestion_failed', {
             role: state.activeRole,
             mode: 'lab_pdf_ingestion',
             selectedPatientKey: currentSelectedPatientKey(),
-            fileName: file?.name || null,
-            status: 'invalid_file_type'
+            documentTitle: file?.name || null,
+            documentType: 'unknown',
+            toolStatus: 'invalid_file_type',
+            seededDemo: false,
+            ragGrounded: false
         });
         return false;
     }
@@ -1346,23 +1611,45 @@ function setUploadedLabPdfAttachment(file) {
         ? helper.buildAttachmentDescriptor(file)
         : {
             kind: 'uploaded_file',
-            fileName: file.name || 'attached-lab-report.pdf',
-            displayLabel: `Attached: ${file.name || 'attached-lab-report.pdf'}`,
-            mimeType: file.type || 'application/pdf'
+            fileName: file.name || 'attached-document.pdf',
+            displayLabel: `Attached: ${file.name || 'attached-document.pdf'}`,
+            mimeType: file.type || 'application/pdf',
+            documentType: /\b(intake|intake-form|patient-intake|questionnaire|form)\b/i.test(file?.name || '') ? 'intake_form' : 'lab_pdf'
         };
+    const attachmentRequestId = createId('request');
+    const documentType = normalizeAttachmentDocumentType(descriptor.documentType);
 
     applyLabPdfAttachmentDescriptor(descriptor, {
         file,
-        useDemoSeed: false
+        useDemoSeed: false,
+        requestId: attachmentRequestId
     });
-    setLabPdfStatus(`Attached ${descriptor.fileName}. Send a prompt to ingest and retrieve lab context for clinician review.`, 'success');
+    setLabPdfStatus(`Attached ${descriptor.fileName}. Send a prompt to ingest and retrieve ${attachmentWorkflowContextLabel(documentType)} for clinician review.`, 'success');
+    setUploadNotice('PDF attached. Medical document validation will run before ingestion.', 'success', {
+        timeoutMs: 4200
+    });
 
-    emitLabPdfAuditEvent('copilot_lab_pdf_selected', {
+    emitLabPdfAuditEvent('copilot_lab_pdf_attached', {
+        requestId: attachmentRequestId,
         role: state.activeRole,
         mode: 'lab_pdf_ingestion',
         selectedPatientKey: currentSelectedPatientKey(),
-        fileName: descriptor.fileName || null,
-        status: 'selected'
+        documentTitle: descriptor.fileName || null,
+        documentType: documentType,
+        toolStatus: 'attached',
+        seededDemo: descriptor.kind === 'seeded_demo',
+        ragGrounded: false
+    });
+    emitLabPdfAuditEvent('ingestion_document_classified', {
+        requestId: attachmentRequestId,
+        role: state.activeRole,
+        mode: 'lab_pdf_ingestion',
+        selectedPatientKey: currentSelectedPatientKey(),
+        documentTitle: descriptor.fileName || null,
+        documentType: documentType,
+        toolStatus: documentType,
+        seededDemo: descriptor.kind === 'seeded_demo',
+        ragGrounded: false
     });
 
     return true;
@@ -1382,6 +1669,9 @@ function updateSendState() {
     }
     if (labPdfRemoveButton) {
         labPdfRemoveButton.disabled = state.loading || !hasActiveLabPdfAttachment();
+    }
+    if (labEvidenceClearButton) {
+        labEvidenceClearButton.disabled = state.loading || !currentSelectedPatientKey();
     }
 }
 
@@ -1505,72 +1795,38 @@ function logResponseMetadataIfNeeded(message) {
     message.metadataLogged = true;
 }
 
-function isLabPdfSavePrompt(prompt) {
-    const normalized = String(prompt || '').trim().toLowerCase();
-    return [
-        'save',
-        'save pdf',
-        'save the pdf',
-        'show vector',
-        'show vectorized result',
-        'show json',
-        'show json object',
-        'show me the vectorized result',
-        'show me a vectorized result',
-        'show me the json object',
-        'show me a vectorized result and a json object',
-        'show me a vectorized result and json object'
-    ].includes(normalized);
-}
-
 function logLabPdfDataToConsole(prompt, toolOutput, options = {}) {
-    if (!toolOutput || typeof toolOutput !== 'object' || !isLabPdfSavePrompt(prompt)) {
+    if (!toolOutput || typeof toolOutput !== 'object') {
         return;
     }
 
-    const sourceType = toolOutput.sourceMetadata?.sourceType || '';
-    const isLabPdfPayload = sourceType === 'lab_pdf' || toolOutput.tool === 'attach_and_vectorize_lab_pdf';
-    if (!isLabPdfPayload) {
+    const sourceType = toolOutput.sourceMetadata?.sourceType || toolOutput.documentMetadata?.documentType || '';
+    const isAttachmentPayload = ['lab_pdf', 'intake_form'].includes(sourceType) || toolOutput.tool === 'attach_and_vectorize_lab_pdf';
+    if (!isAttachmentPayload) {
         return;
     }
 
-    const vectorizedResult = Array.isArray(toolOutput.vectorizedResult) ? toolOutput.vectorizedResult : [];
-    const jsonObject = {
+    const helper = labPdfIngestionHelper();
+    if (!helper || typeof helper.buildLabPdfDemoTracePayload !== 'function' || typeof helper.logLabPdfDemoTrace !== 'function') {
+        return;
+    }
+
+    const demoTracePayload = helper.buildLabPdfDemoTracePayload({
+        tool_output: toolOutput,
+        role: options.role || null,
+        mode: options.mode || null,
+        meta: {
+            request_id: options.requestId || null,
+            rag_grounded: Boolean(options.ragGrounded)
+        }
+    }, {
         requestId: options.requestId || null,
         role: options.role || null,
         mode: options.mode || null,
-        patientKey: options.selectedPatientKey || null,
-        documentMetadata: toolOutput.documentMetadata || {},
-        sourceMetadata: toolOutput.sourceMetadata || {},
-        extractedTextPreview: toolOutput.extractedTextPreview || '',
-        extractedFacts: Array.isArray(toolOutput.extractedFacts) ? toolOutput.extractedFacts : [],
-        abnormalFindings: Array.isArray(toolOutput.abnormalFindings) ? toolOutput.abnormalFindings : [],
-        missingData: Array.isArray(toolOutput.missingData) ? toolOutput.missingData : [],
-        retrieval: toolOutput.retrieval || {},
-        vectorizedResult,
-        safetyMetadata: toolOutput.safetyMetadata || {}
-    };
-
-    if (typeof console.groupCollapsed === 'function') {
-        console.groupCollapsed('[OpenEMR Copilot] Saved Lab PDF Data');
-        console.log('vectorizedResult', vectorizedResult);
-        console.log('jsonObject', jsonObject);
-        if (typeof console.table === 'function' && vectorizedResult.length > 0) {
-            console.table(vectorizedResult.map((item) => ({
-                id: item.id || null,
-                fileName: item.fileName || null,
-                chunkIndex: item.chunkIndex ?? null,
-                sourcePage: item.sourcePage ?? null,
-                embeddingDimensions: Array.isArray(item.embedding) ? item.embedding.length : 0,
-                score: item.score ?? null
-            })));
-        }
-        console.groupEnd();
-        return;
-    }
-
-    console.log('[OpenEMR Copilot] vectorizedResult', vectorizedResult);
-    console.log('[OpenEMR Copilot] jsonObject', jsonObject);
+        selectedPatientKey: options.selectedPatientKey || null,
+        ragGrounded: Boolean(options.ragGrounded)
+    });
+    helper.logLabPdfDemoTrace('Pipeline trace', demoTracePayload);
 }
 
 function createMessageTimeElement(message) {
@@ -1621,6 +1877,8 @@ function normalizeSourceEntry(value) {
         'documents / notes': ['Documents / Notes', 'documents'],
         'attached lab pdf': ['Attached Lab PDF', 'documents'],
         'uploaded lab pdf': ['Uploaded Lab PDF', 'documents'],
+        'attached intake form': ['Attached Intake Form', 'documents'],
+        'uploaded intake form': ['Uploaded Intake Form', 'documents'],
         'insurance note': ['Insurance Note', 'insurance'],
         'immunization review': ['Immunization Review', 'immunizations'],
         'care preferences': ['Care Preferences', 'care_preferences'],
@@ -2404,7 +2662,7 @@ function buildAssistantActionRow(message) {
 
 function inferPromptMode(prompt) {
     const value = prompt.toLowerCase();
-    if (/(lab pdf ingestion|lab pdf|attach.*lab pdf|upload.*lab pdf|ingest.*lab pdf|extract.*lab pdf|pdf lab results)/.test(value)) {
+    if (/(lab pdf ingestion|lab pdf|attach.*lab pdf|upload.*lab pdf|ingest.*lab pdf|extract.*lab pdf|pdf lab results|uploaded lab evidence|uploaded evidence|attached lab evidence)/.test(value)) {
         return 'lab_pdf_ingestion';
     }
     if (/(summarize latest ambient encounter only|latest ambient encounter only|latest ambient encounter|ambient encounter only|summarize the latest ai-assisted visit review|latest approved ambient encounter)/.test(value)) {
@@ -2555,6 +2813,17 @@ function buildCopilotFormDataPayload(payload, options = {}) {
     return formData;
 }
 
+function buildClearLabEvidencePayload(requestId, resolvedRole, resolvedPatientId) {
+    return {
+        action: 'clear_lab_evidence',
+        patient_id: resolvedPatientId || null,
+        role: resolvedRole,
+        mode: 'lab_pdf_ingestion',
+        request_id: requestId,
+        csrf_token_form: copilotConfig.csrfToken
+    };
+}
+
 async function fetchAssistantApiResponse(payload, requestId) {
     const isFormDataPayload = typeof FormData !== 'undefined' && payload instanceof FormData;
     const response = await fetch(copilotConfig.apiUrl, {
@@ -2578,8 +2847,91 @@ async function fetchAssistantApiResponse(payload, requestId) {
     return data;
 }
 
+async function requestClearLabEvidence() {
+    const selectedPatientKey = currentSelectedPatientKey();
+    const resolvedPatientId = patientSelect ? (patientSelect.value || '') : '';
+    const resolvedRole = state.activeRole;
+
+    if (!selectedPatientKey || !resolvedPatientId) {
+        setLabPdfStatus('Select a demo patient before clearing uploaded lab evidence.', 'warning');
+        return;
+    }
+
+    const confirmed = window.confirm('Clear uploaded lab PDF evidence for this demo session? Marcus Johnson\'s other chart data will stay unchanged.');
+    if (!confirmed) {
+        return;
+    }
+
+    const requestId = createId('request');
+    emitLabEvidenceClearAuditEvent('copilot_lab_evidence_clear_requested', {
+        requestId,
+        role: resolvedRole,
+        mode: 'lab_pdf_ingestion',
+        selectedPatientKey,
+        documentType: 'lab_pdf',
+        toolStatus: 'clear_requested'
+    });
+
+    state.loading = true;
+    updateSendState();
+
+    try {
+        const response = await fetchAssistantApiResponse(
+            buildClearLabEvidencePayload(requestId, resolvedRole, resolvedPatientId),
+            requestId
+        );
+
+        const counts = response.counts && typeof response.counts === 'object' ? response.counts : {};
+        if (normalizeAttachmentDocumentType(state.labPdf.descriptor?.documentType) === 'lab_pdf') {
+            clearLabPdfAttachment({ emitTelemetry: false });
+        }
+        const removedClientStorageEntries = clearLabEvidenceClientStorage(selectedPatientKey);
+        setLabPdfStatus('Uploaded lab evidence cleared.', 'success');
+
+        const auditPayload = emitLabEvidenceClearAuditEvent('copilot_lab_evidence_cleared', {
+            requestId,
+            role: resolvedRole,
+            mode: 'lab_pdf_ingestion',
+            selectedPatientKey,
+            documentType: 'lab_pdf',
+            toolStatus: 'cleared',
+            removedLabFiles: Number(counts.removedLabFiles || 0),
+            removedLabChunks: Number(counts.removedLabChunks || 0),
+            removedLabExtractions: Number(counts.removedLabExtractions || 0),
+            remainingIntakeForms: Number(counts.remainingIntakeForms || 0)
+        });
+        emitLabEvidenceClearAuditEvent('rag_lab_chunks_cleared', {
+            ...auditPayload,
+            toolStatus: 'rag_lab_chunks_cleared'
+        });
+        emitLabEvidenceClearAuditEvent('lab_extraction_state_reset', {
+            ...auditPayload,
+            toolStatus: 'lab_extraction_state_reset'
+        });
+
+        console.info('[OpenEMR Copilot] Clear Lab Evidence summary', {
+            requestId,
+            selectedPatientKey,
+            removedLabFiles: Number(counts.removedLabFiles || 0),
+            removedLabChunks: Number(counts.removedLabChunks || 0),
+            removedLabExtractions: Number(counts.removedLabExtractions || 0),
+            remainingIntakeForms: Number(counts.remainingIntakeForms || 0),
+            removedClientStorageEntries
+        });
+    } catch (error) {
+        setLabPdfStatus(error.message || 'Unable to clear uploaded lab evidence right now.', 'error');
+    } finally {
+        state.loading = false;
+        updateSendState();
+    }
+}
+
 async function requestAssistantSupervisorResponse(payload, requestContext) {
     if (requestContext.hasLabPdfAttachment || (typeof FormData !== 'undefined' && payload instanceof FormData)) {
+        return null;
+    }
+
+    if ((requestContext.mode || '') === 'lab_pdf_ingestion') {
         return null;
     }
 
@@ -2651,7 +3003,9 @@ async function requestAssistantResponse(prompt, options = {}) {
         hasLabPdfAttachment
     });
     const resolvedPatientId = options.patientIdOverride ?? updatePatientSelectionFromPrompt(trimmedPrompt);
-    const requestId = createId('request');
+    const requestId = hasLabPdfAttachment && state.labPdf.requestId
+        ? state.labPdf.requestId
+        : createId('request');
     const selectedPatientKey = selectedPatientKeyForValue(resolvedPatientId || '');
     const contextScope = contextScopeFor(resolvedRole, resolvedPatientId);
     const ambientVisitContext = buildAmbientVisitContextForRequest(selectedPatientKey, resolvedRole);
@@ -2659,8 +3013,20 @@ async function requestAssistantResponse(prompt, options = {}) {
     const labPdfAttachment = hasLabPdfAttachment ? {
         descriptor: state.labPdf.descriptor ? { ...state.labPdf.descriptor } : null,
         file: state.labPdf.file instanceof File ? state.labPdf.file : null,
-        useDemoSeed: Boolean(state.labPdf.useDemoSeed)
+        useDemoSeed: Boolean(state.labPdf.useDemoSeed),
+        requestId: state.labPdf.requestId || requestId
     } : null;
+    const requestedUploadedDocumentTypes = detectRequestedUploadedDocumentTypes(trimmedPrompt);
+    if (hasLabPdfAttachment && labPdfAttachment?.descriptor?.documentType === 'intake_form' && !requestedUploadedDocumentTypes.includes('intake_form')) {
+        requestedUploadedDocumentTypes.push('intake_form');
+    }
+    if (hasLabPdfAttachment && labPdfAttachment?.descriptor?.documentType === 'lab_pdf' && !requestedUploadedDocumentTypes.includes('lab_results')) {
+        requestedUploadedDocumentTypes.push('lab_results');
+    }
+    const tracksUploadedDocumentRetrieval = resolvedMode === 'lab_pdf_ingestion'
+        || requestedUploadedDocumentTypes.length > 0
+        || /\b(uploaded|attached) (lab|labs|pdf|intake|document)/i.test(trimmedPrompt);
+    const tracksAttachmentReviewLlm = tracksUploadedDocumentRetrieval || hasLabPdfAttachment;
     const startedAt = new Date().toISOString();
     const startedPerf = window.performance && typeof window.performance.now === 'function'
         ? window.performance.now()
@@ -2668,7 +3034,8 @@ async function requestAssistantResponse(prompt, options = {}) {
     const historyPayload = buildHistoryPayload();
 
     if (hasLabPdfAttachment && !resolvedPatientId) {
-        addAssistantMessage('Select a demo patient before ingesting a lab PDF so the extracted chunks can be grounded to the correct chart context.', {
+        const attachmentDocumentType = normalizeAttachmentDocumentType(state.labPdf.descriptor?.documentType);
+        addAssistantMessage(`Select a demo patient before ingesting a ${attachmentWorkflowLabel(attachmentDocumentType)} so the extracted chunks can be grounded to the correct chart context.`, {
             mode: resolvedMode,
             staffRole: resolvedRole,
             patientId: '',
@@ -2679,13 +3046,16 @@ async function requestAssistantResponse(prompt, options = {}) {
             requestPrompt: trimmedPrompt
         });
 
-        emitLabPdfAuditEvent('copilot_lab_pdf_extraction_failed', {
+        emitLabPdfAuditEvent('copilot_lab_pdf_ingestion_failed', {
             requestId,
             role: resolvedRole,
             mode: resolvedMode,
             selectedPatientKey,
-            fileName: state.labPdf.descriptor?.fileName || null,
-            status: 'patient_required'
+            documentTitle: state.labPdf.descriptor?.fileName || null,
+            documentType: attachmentDocumentType,
+            toolStatus: 'patient_required',
+            seededDemo: Boolean(state.labPdf.useDemoSeed),
+            ragGrounded: false
         });
 
         return;
@@ -2742,13 +3112,17 @@ async function requestAssistantResponse(prompt, options = {}) {
         }
 
         if (hasLabPdfAttachment) {
-            emitLabPdfAuditEvent('copilot_lab_pdf_extraction_failed', {
+            const attachmentDocumentType = normalizeAttachmentDocumentType(labPdfAttachment?.descriptor?.documentType);
+            emitLabPdfAuditEvent('copilot_lab_pdf_ingestion_failed', {
                 requestId,
                 role: resolvedRole,
                 mode: resolvedMode,
                 selectedPatientKey,
-                fileName: labPdfAttachment?.descriptor?.fileName || null,
-                status: preflightGuardrails.blockedReason || 'role_blocked'
+                documentTitle: labPdfAttachment?.descriptor?.fileName || null,
+                documentType: attachmentDocumentType,
+                toolStatus: preflightGuardrails.blockedReason || 'role_blocked',
+                seededDemo: Boolean(labPdfAttachment?.useDemoSeed),
+                ragGrounded: false
             });
         }
 
@@ -2806,17 +3180,76 @@ async function requestAssistantResponse(prompt, options = {}) {
     updateSendState();
     renderMessages(true);
 
-    if (CopilotTelemetry) {
-        if (hasLabPdfAttachment && labPdfAttachment?.descriptor) {
-            emitLabPdfAuditEvent('copilot_lab_pdf_ingestion_started', {
+    if (hasLabPdfAttachment && labPdfAttachment?.descriptor) {
+        const attachmentDocumentType = normalizeAttachmentDocumentType(labPdfAttachment.descriptor.documentType);
+        emitLabPdfAuditEvent('copilot_upload_received', {
+            requestId,
+            role: resolvedRole,
+            mode: resolvedMode,
+            selectedPatientKey,
+            documentTitle: labPdfAttachment.descriptor.fileName || null,
+            documentType: attachmentDocumentType,
+            toolStatus: 'upload_received',
+            seededDemo: Boolean(labPdfAttachment.useDemoSeed),
+            ragGrounded: false
+        });
+        emitLabPdfAuditEvent('copilot_document_guard_started', {
+            requestId,
+            role: resolvedRole,
+            mode: resolvedMode,
+            selectedPatientKey,
+            documentTitle: labPdfAttachment.descriptor.fileName || null,
+            documentType: attachmentDocumentType,
+            toolStatus: 'guard_started',
+            seededDemo: Boolean(labPdfAttachment.useDemoSeed),
+            ragGrounded: false
+        });
+        emitLabPdfAuditEvent('copilot_lab_pdf_ingestion_started', {
+            requestId,
+            role: resolvedRole,
+            mode: resolvedMode,
+            selectedPatientKey,
+            documentTitle: labPdfAttachment.descriptor.fileName || null,
+            documentType: attachmentDocumentType,
+            toolStatus: 'ingestion_started',
+            seededDemo: Boolean(labPdfAttachment.useDemoSeed),
+            ragGrounded: false
+        });
+        if (attachmentDocumentType === 'intake_form') {
+            emitLabPdfAuditEvent('intake_extraction_started', {
                 requestId,
                 role: resolvedRole,
                 mode: resolvedMode,
                 selectedPatientKey,
-                fileName: labPdfAttachment.descriptor.fileName || null,
-                status: 'ingestion_started'
+                documentTitle: labPdfAttachment.descriptor.fileName || null,
+                documentType: attachmentDocumentType,
+                toolStatus: 'intake_extraction_started',
+                seededDemo: Boolean(labPdfAttachment.useDemoSeed),
+                ragGrounded: false
             });
         }
+    }
+
+    if (tracksUploadedDocumentRetrieval) {
+        logUploadedDocumentRetrievalEvent('copilot_document_retrieval_started', {
+            requestId,
+            role: resolvedRole,
+            mode: resolvedMode,
+            selectedPatientKey,
+            requestedDocumentTypes: requestedUploadedDocumentTypes,
+            sourceCount: 0
+        });
+        logUploadedDocumentRetrievalEvent('copilot_requested_document_types_detected', {
+            requestId,
+            role: resolvedRole,
+            mode: resolvedMode,
+            selectedPatientKey,
+            requestedDocumentTypes: requestedUploadedDocumentTypes,
+            sourceCount: 0
+        });
+    }
+
+    if (CopilotTelemetry) {
         CopilotTelemetry.log('copilot_context_loaded', {
             requestId,
             role: resolvedRole,
@@ -2854,11 +3287,54 @@ async function requestAssistantResponse(prompt, options = {}) {
                 useSeededLabPdf: Boolean(labPdfAttachment?.useDemoSeed)
             })
             : requestPayloadObject;
+        const attachmentReviewDocumentType = hasLabPdfAttachment
+            ? normalizeAttachmentDocumentType(labPdfAttachment?.descriptor?.documentType)
+            : (requestedUploadedDocumentTypes.includes('intake_form')
+                ? 'intake_form'
+                : (requestedUploadedDocumentTypes.includes('lab_results') ? 'lab_pdf' : null));
+        const attachmentReviewDocumentTitle = labPdfAttachment?.descriptor?.fileName || null;
+
+        if (tracksAttachmentReviewLlm) {
+            emitAttachmentReviewLlmAuditEvent('copilot_llm_provider_check_started', {
+                requestId,
+                role: resolvedRole,
+                mode: resolvedMode,
+                selectedPatientKey,
+                documentTitle: attachmentReviewDocumentTitle,
+                documentType: attachmentReviewDocumentType,
+                toolStatus: 'provider_check_started',
+                sourceCount: 0,
+                ragGrounded: false
+            });
+            emitAttachmentReviewLlmAuditEvent('copilot_attachment_review_llm_prompt_built', {
+                requestId,
+                role: resolvedRole,
+                mode: resolvedMode,
+                selectedPatientKey,
+                documentTitle: attachmentReviewDocumentTitle,
+                documentType: attachmentReviewDocumentType,
+                toolStatus: 'prompt_built',
+                sourceCount: 0,
+                ragGrounded: false
+            });
+            emitAttachmentReviewLlmAuditEvent('copilot_attachment_review_llm_call_started', {
+                requestId,
+                role: resolvedRole,
+                mode: resolvedMode,
+                selectedPatientKey,
+                documentTitle: attachmentReviewDocumentTitle,
+                documentType: attachmentReviewDocumentType,
+                toolStatus: 'llm_call_started',
+                sourceCount: 0,
+                ragGrounded: false
+            });
+        }
 
         if (hasLabPdfAttachment) {
+            const attachmentDocumentType = normalizeAttachmentDocumentType(labPdfAttachment?.descriptor?.documentType);
             clearLabPdfAttachment({
                 emitTelemetry: false,
-                keepStatusMessage: `Uploading ${labPdfAttachment?.descriptor?.fileName || 'the attached lab PDF'} for draft-only clinician review...`,
+                keepStatusMessage: `Uploading ${labPdfAttachment?.descriptor?.fileName || `the attached ${attachmentWorkflowLabel(attachmentDocumentType)}`} for draft-only clinician review...`,
                 tone: 'neutral'
             });
         }
@@ -2880,26 +3356,67 @@ async function requestAssistantResponse(prompt, options = {}) {
         clearLoadingMessage();
 
         updateModeSelection(data.mode || resolvedMode);
+        const meta = data.meta || {};
         if (data.tool_output && typeof data.tool_output === 'object') {
             const toolOutput = data.tool_output;
+            const toolDocumentType = normalizeAttachmentDocumentType(toolOutput.sourceMetadata?.sourceType || toolOutput.documentMetadata?.documentType);
+            const matchedSourceCount = matchedUploadedSourceTitles(toolOutput).length;
+            const documentGuard = toolOutput.documentGuard && typeof toolOutput.documentGuard === 'object'
+                ? toolOutput.documentGuard
+                : {};
+            const documentGuardDecision = String(documentGuard.decision || '');
+            const documentGuardMessage = String(documentGuard.rejectionReason || toolOutput.safeMessage || '').trim();
             if (toolOutput.status === 'ocr_required') {
                 setLabPdfStatus(toolOutput.safeMessage || 'The attached PDF needs OCR or manual verification before relying on extracted lab facts.', 'warning');
+                setUploadNotice(toolOutput.safeMessage || 'The attached PDF needs OCR or manual verification before relying on extracted facts.', 'warning', {
+                    timeoutMs: 5600
+                });
+            } else if (toolOutput.status === 'document_guard_rejected') {
+                setLabPdfStatus(toolOutput.safeMessage || 'This does not appear to be a medical document. Please upload a lab result, intake form, discharge summary, medication list, insurance/claim document, or clinical note.', 'error');
+                setUploadNotice(documentGuardMessage || 'This does not appear to be a medical document. Please upload a supported medical PDF.', 'error', {
+                    timeoutMs: 6200
+                });
+            } else if (toolOutput.status === 'document_guard_review_required') {
+                setLabPdfStatus(toolOutput.safeMessage || 'Document type could not be verified. Review required before ingestion.', 'warning');
+                setUploadNotice(documentGuardMessage || 'Document type could not be verified. Review required before ingestion.', 'warning', {
+                    timeoutMs: 6200
+                });
             } else if (toolOutput.status === 'extraction_review_required') {
-                setLabPdfStatus(toolOutput.safeMessage || 'PDF text extraction did not produce reliable lab rows. Clinician must verify the source PDF.', 'warning');
+                setLabPdfStatus(toolOutput.safeMessage || (toolDocumentType === 'intake_form'
+                    ? 'Intake form extraction did not produce reliable intake fields. Clinician must verify the source PDF.'
+                    : 'PDF text extraction did not produce reliable lab rows. Clinician must verify the source PDF.'), 'warning');
+                setUploadNotice(toolOutput.safeMessage || 'Extraction review is required before relying on the uploaded PDF.', 'warning', {
+                    timeoutMs: 5600
+                });
             } else if (toolOutput.status === 'invalid_file_type' || toolOutput.status === 'role_blocked') {
-                setLabPdfStatus(toolOutput.safeMessage || 'The lab PDF workflow was blocked for this request.', 'error');
-            } else if (toolOutput.sourceMetadata?.sourceType === 'lab_pdf' || (data.mode || resolvedMode) === 'lab_pdf_ingestion') {
-                setLabPdfStatus(toolOutput.safeMessage || 'Lab PDF context ingested and retrieved for clinician review.', 'success');
+                setLabPdfStatus(toolOutput.safeMessage || `The ${attachmentWorkflowLabel(toolDocumentType)} workflow was blocked for this request.`, 'error');
+                setUploadNotice(toolOutput.safeMessage || `The ${attachmentWorkflowLabel(toolDocumentType)} workflow was blocked for this request.`, 'error', {
+                    timeoutMs: 5600
+                });
+            } else if (matchedSourceCount > 1 || toolOutput.sourceMetadata?.sourceType === 'multi_document') {
+                setLabPdfStatus(toolOutput.safeMessage || 'Uploaded lab and intake document context retrieved for clinician review.', 'success');
+                if (documentGuardDecision === 'allowed') {
+                    setUploadNotice('Medical document detected. Ready for ingestion.', 'success', {
+                        timeoutMs: 4200
+                    });
+                }
+            } else if (toolDocumentType === 'intake_form' || toolDocumentType === 'lab_pdf' || (data.mode || resolvedMode) === 'lab_pdf_ingestion') {
+                setLabPdfStatus(toolOutput.safeMessage || `${toolDocumentType === 'intake_form' ? 'Intake form' : 'Lab PDF'} context ingested and retrieved for clinician review.`, 'success');
+                if (documentGuardDecision === 'allowed') {
+                    setUploadNotice('Medical document detected. Ready for ingestion.', 'success', {
+                        timeoutMs: 4200
+                    });
+                }
             }
 
             logLabPdfDataToConsole(trimmedPrompt, toolOutput, {
                 requestId,
                 role: data.role || resolvedRole,
                 mode: data.mode || resolvedMode,
-                selectedPatientKey
+                selectedPatientKey,
+                ragGrounded: Boolean(meta.rag_grounded)
             });
         }
-        const meta = data.meta || {};
         if (meta.agent_trace && window.OpenEMRCopilotAgents && typeof window.OpenEMRCopilotAgents.logTrace === 'function') {
             window.OpenEMRCopilotAgents.logTrace(meta.agent_trace, console);
         }
@@ -2943,6 +3460,110 @@ async function requestAssistantResponse(prompt, options = {}) {
             patientKey: selectedPatientKey,
             ragGrounded: Boolean(meta.rag_grounded)
         });
+        const matchedSourceTitles = data.tool_output && typeof data.tool_output === 'object'
+            ? matchedUploadedSourceTitles(data.tool_output)
+            : [];
+        if (tracksAttachmentReviewLlm) {
+            const helper = labPdfIngestionHelper();
+            const llmDocumentTitle = matchedSourceTitles.length === 1
+                ? matchedSourceTitles[0]
+                : (labPdfAttachment?.descriptor?.fileName || null);
+            const llmDocumentType = labPdfAttachment?.descriptor?.documentType === 'intake_form'
+                ? 'intake_form'
+                : ((requestedUploadedDocumentTypes.includes('intake_form') && !requestedUploadedDocumentTypes.includes('lab_results'))
+                    ? 'intake_form'
+                    : 'lab_pdf');
+            const llmAuditPayload = helper && typeof helper.buildLabPdfSafeTelemetryPayload === 'function'
+                ? helper.buildLabPdfSafeTelemetryPayload({
+                    role: data.role || resolvedRole,
+                    mode: data.mode || resolvedMode,
+                    meta,
+                    tool_output: data.tool_output || {}
+                }, {
+                    requestId,
+                    role: data.role || resolvedRole,
+                    mode: data.mode || resolvedMode,
+                    selectedPatientKey,
+                    documentTitle: llmDocumentTitle,
+                    documentType: llmDocumentType,
+                    ragGrounded: Boolean(meta.rag_grounded)
+                })
+                : {
+                    requestId,
+                    role: data.role || resolvedRole,
+                    mode: data.mode || resolvedMode,
+                    selectedPatientKey,
+                    documentTitle: llmDocumentTitle,
+                    documentType: llmDocumentType,
+                    toolStatus: meta.engine || 'fallback',
+                    ragGrounded: Boolean(meta.rag_grounded)
+                };
+
+            if (meta.openai_configured) {
+                emitAttachmentReviewLlmAuditEvent('copilot_llm_provider_available', {
+                    ...llmAuditPayload,
+                    toolStatus: 'provider_available',
+                    sourceCount: sourcePayload.sources.length,
+                    provider: meta.provider || 'openai',
+                    model: meta.model || null,
+                    openaiConfigured: true
+                });
+            }
+            if (meta.engine === 'openai' && !meta.fallback_used) {
+                emitAttachmentReviewLlmAuditEvent('copilot_attachment_review_llm_call_succeeded', {
+                    ...llmAuditPayload,
+                    toolStatus: 'llm_call_succeeded',
+                    sourceCount: sourcePayload.sources.length,
+                    provider: meta.provider || 'openai',
+                    model: meta.model || null,
+                    openaiConfigured: Boolean(meta.openai_configured),
+                    promptTokens: meta.token_usage?.prompt_tokens ?? null,
+                    completionTokens: meta.token_usage?.completion_tokens ?? null,
+                    totalTokens: meta.token_usage?.total_tokens ?? null,
+                    ragGrounded: Boolean(meta.rag_grounded)
+                });
+            } else if (meta.fallback_used && (meta.fallback_reason === 'openai_error' || meta.openai_error_category)) {
+                emitAttachmentReviewLlmAuditEvent('copilot_attachment_review_llm_call_failed', {
+                    ...llmAuditPayload,
+                    toolStatus: 'llm_call_failed',
+                    sourceCount: sourcePayload.sources.length,
+                    provider: meta.provider || 'local_fallback',
+                    model: meta.model || null,
+                    openaiConfigured: Boolean(meta.openai_configured),
+                    fallbackReason: meta.fallback_reason || null,
+                    openaiErrorCategory: meta.openai_error_category || null,
+                    openaiHttpStatus: meta.openai_http_status ?? null,
+                    openaiErrorMessageSafe: meta.openai_error_message_safe || null,
+                    ragGrounded: Boolean(meta.rag_grounded)
+                });
+            }
+            if (meta.fallback_used) {
+                emitAttachmentReviewLlmAuditEvent('copilot_attachment_review_fallback_used', {
+                    ...llmAuditPayload,
+                    toolStatus: 'fallback_used',
+                    sourceCount: sourcePayload.sources.length,
+                    provider: meta.provider || 'local_fallback',
+                    model: meta.model || null,
+                    openaiConfigured: Boolean(meta.openai_configured),
+                    fallbackReason: meta.fallback_reason || 'demo_mode',
+                    openaiErrorCategory: meta.openai_error_category || null,
+                    openaiHttpStatus: meta.openai_http_status ?? null,
+                    openaiErrorMessageSafe: meta.openai_error_message_safe || null,
+                    ragGrounded: Boolean(meta.rag_grounded)
+                });
+            }
+        }
+        if (tracksUploadedDocumentRetrieval && matchedSourceTitles.length > 0) {
+            logUploadedDocumentRetrievalEvent('copilot_uploaded_sources_matched', {
+                requestId,
+                role: data.role || resolvedRole,
+                mode: data.mode || resolvedMode,
+                selectedPatientKey,
+                requestedDocumentTypes: requestedUploadedDocumentTypes,
+                matchedSourceTitles,
+                sourceCount: matchedSourceTitles.length
+            });
+        }
         const assistantMessage = addAssistantMessage(guardrailsResult.finalResponse || data.answer || copilotConfig.apiFailureMessage, {
             mode: data.mode || resolvedMode,
             staffRole: data.role || resolvedRole,
@@ -2964,6 +3585,175 @@ async function requestAssistantResponse(prompt, options = {}) {
                 latest_ambient_visit_found: sourcePayload.latestAmbientVisitFound
             }
         });
+        if (tracksUploadedDocumentRetrieval) {
+            logUploadedDocumentRetrievalEvent('copilot_sources_used_finalized', {
+                requestId,
+                role: data.role || resolvedRole,
+                mode: data.mode || resolvedMode,
+                selectedPatientKey,
+                requestedDocumentTypes: requestedUploadedDocumentTypes,
+                matchedSourceTitles: sourcePayload.sourceTitles,
+                sourceCount: sourcePayload.sourceTitles.length
+            });
+        }
+
+        if (data.tool_output && typeof data.tool_output === 'object' && (((data.mode || resolvedMode) === 'lab_pdf_ingestion') || ['lab_pdf', 'intake_form'].includes(data.tool_output.sourceMetadata?.sourceType || ''))) {
+            const toolOutput = data.tool_output;
+            const helper = labPdfIngestionHelper();
+            const promptInjectionDetected = Boolean(toolOutput.safetyMetadata?.promptInjectionDetected);
+            const toolDocumentType = normalizeAttachmentDocumentType(toolOutput.sourceMetadata?.sourceType || toolOutput.documentMetadata?.documentType);
+            const documentGuard = toolOutput.documentGuard && typeof toolOutput.documentGuard === 'object'
+                ? toolOutput.documentGuard
+                : {};
+            const labPdfTelemetryPayload = helper && typeof helper.buildLabPdfSafeTelemetryPayload === 'function'
+                ? helper.buildLabPdfSafeTelemetryPayload({
+                    tool_output: toolOutput,
+                    meta,
+                    role: data.role || resolvedRole,
+                    mode: data.mode || resolvedMode
+                }, {
+                    requestId,
+                    role: data.role || resolvedRole,
+                    mode: data.mode || resolvedMode,
+                    selectedPatientKey,
+                    ragGrounded: Boolean(meta.rag_grounded)
+                })
+                : {
+                    requestId,
+                    role: data.role || resolvedRole,
+                    mode: data.mode || resolvedMode,
+                    selectedPatientKey,
+                    documentTitle: toolOutput.sourceMetadata?.fileName || toolOutput.documentMetadata?.title || null,
+                    documentType: toolDocumentType,
+                    extractionMethod: toolOutput.extractionMethod || null,
+                    toolStatus: String(toolOutput.status || ''),
+                    chunkCount: Number.isFinite(toolOutput.sourceMetadata?.chunkCount) ? toolOutput.sourceMetadata.chunkCount : 0,
+                    retrievedChunkCount: Number.isFinite(toolOutput.retrieval?.chunkCount) ? toolOutput.retrieval.chunkCount : 0,
+                    missingDataCount: Array.isArray(toolOutput.missingData) ? toolOutput.missingData.length : 0,
+                    guardrailTriggered: promptInjectionDetected,
+                    seededDemo: Boolean(toolOutput.documentMetadata?.seededDemo),
+                    ragGrounded: Boolean(meta.rag_grounded)
+                };
+            const toolStatus = String(labPdfTelemetryPayload.toolStatus || '');
+            const documentGuardPayload = {
+                ...labPdfTelemetryPayload,
+                documentGuardProvider: documentGuard.guardProvider || null,
+                medicalEntityCount: Number.isFinite(documentGuard.medicalEntityCount) ? documentGuard.medicalEntityCount : 0,
+                confidence: Number.isFinite(documentGuard.confidence) ? documentGuard.confidence : 0,
+                rejectionReason: documentGuard.rejectionReason || null,
+                documentGuardDecision: documentGuard.decision || null,
+                awsGuardEnabled: Boolean(documentGuard.awsGuardEnabled)
+            };
+            const textractStatus = String(documentGuard.textractStatus || '');
+            const comprehendStatus = String(documentGuard.comprehendStatus || '');
+            const documentGuardDecision = String(documentGuard.decision || '');
+
+            if (documentGuardDecision || textractStatus || comprehendStatus) {
+                emitLabPdfAuditEvent('copilot_document_guard_started', {
+                    ...documentGuardPayload,
+                    toolStatus: 'guard_started'
+                });
+                if (textractStatus && textractStatus !== 'not_run') {
+                    emitLabPdfAuditEvent('copilot_textract_started', {
+                        ...documentGuardPayload,
+                        toolStatus: 'textract_started'
+                    });
+                    emitLabPdfAuditEvent(
+                        textractStatus === 'succeeded' ? 'copilot_textract_succeeded' : 'copilot_textract_failed',
+                        {
+                            ...documentGuardPayload,
+                            toolStatus: textractStatus
+                        }
+                    );
+                }
+                if (comprehendStatus && comprehendStatus !== 'not_run') {
+                    emitLabPdfAuditEvent('copilot_comprehend_medical_started', {
+                        ...documentGuardPayload,
+                        toolStatus: 'comprehend_medical_started'
+                    });
+                    if (comprehendStatus === 'succeeded') {
+                        emitLabPdfAuditEvent('copilot_comprehend_medical_succeeded', {
+                            ...documentGuardPayload,
+                            toolStatus: 'comprehend_medical_succeeded'
+                        });
+                    }
+                }
+                if (documentGuardDecision === 'allowed') {
+                    emitLabPdfAuditEvent('copilot_document_guard_allowed', {
+                        ...documentGuardPayload,
+                        toolStatus: 'guard_allowed'
+                    });
+                } else if (documentGuardDecision === 'rejected') {
+                    emitLabPdfAuditEvent('copilot_document_guard_rejected', {
+                        ...documentGuardPayload,
+                        toolStatus: 'guard_rejected'
+                    });
+                    emitLabPdfAuditEvent('copilot_vectorization_blocked', {
+                        ...documentGuardPayload,
+                        toolStatus: 'vectorization_blocked'
+                    });
+                } else if (documentGuardDecision === 'review_required') {
+                    emitLabPdfAuditEvent('copilot_document_guard_review_required', {
+                        ...documentGuardPayload,
+                        toolStatus: 'guard_review_required'
+                    });
+                    emitLabPdfAuditEvent('copilot_vectorization_blocked', {
+                        ...documentGuardPayload,
+                        toolStatus: 'vectorization_blocked'
+                    });
+                }
+            }
+
+            if (toolStatus === 'invalid_file_type' || toolStatus === 'role_blocked' || toolStatus === 'document_guard_rejected' || toolStatus === 'document_guard_review_required') {
+                emitLabPdfAuditEvent('copilot_lab_pdf_ingestion_failed', labPdfTelemetryPayload);
+            } else {
+                emitLabPdfAuditEvent('ingestion_document_classified', {
+                    ...labPdfTelemetryPayload,
+                    toolStatus: toolDocumentType
+                });
+                emitLabPdfAuditEvent('copilot_lab_pdf_text_extracted', {
+                    ...labPdfTelemetryPayload,
+                    toolStatus: toolStatus || 'text_extracted'
+                });
+                emitLabPdfAuditEvent('copilot_lab_pdf_chunked', {
+                    ...labPdfTelemetryPayload,
+                    toolStatus: 'chunked'
+                });
+                emitLabPdfAuditEvent('copilot_lab_pdf_vectorized', {
+                    ...labPdfTelemetryPayload,
+                    toolStatus: 'vectorized'
+                });
+                emitLabPdfAuditEvent('copilot_lab_pdf_retrieval_started', {
+                    ...labPdfTelemetryPayload,
+                    toolStatus: 'retrieval_started'
+                });
+                emitLabPdfAuditEvent('copilot_lab_pdf_retrieval_completed', {
+                    ...labPdfTelemetryPayload,
+                    toolStatus: 'retrieval_completed'
+                });
+                emitLabPdfAuditEvent('rag_context_retrieved', {
+                    ...labPdfTelemetryPayload,
+                    toolStatus: 'retrieval_completed'
+                });
+                emitLabPdfAuditEvent('copilot_lab_pdf_review_required', {
+                    ...labPdfTelemetryPayload,
+                    toolStatus: toolStatus === '' ? 'review_required' : toolStatus
+                });
+                if (toolDocumentType === 'intake_form') {
+                    emitLabPdfAuditEvent('intake_extraction_completed', {
+                        ...labPdfTelemetryPayload,
+                        toolStatus: toolStatus === '' ? 'intake_extraction_completed' : toolStatus
+                    });
+                }
+                if (promptInjectionDetected) {
+                    emitLabPdfAuditEvent('copilot_lab_pdf_guardrail_triggered', {
+                        ...labPdfTelemetryPayload,
+                        toolStatus: 'prompt_injection_detected',
+                        guardrailTriggered: true
+                    });
+                }
+            }
+        }
 
         if (CopilotTelemetry) {
             const responseLength = getAssistantMessagePlainText(assistantMessage).length;
@@ -3029,44 +3819,14 @@ async function requestAssistantResponse(prompt, options = {}) {
                     restrictionType: meta.restriction_type || guardrailsResult.blockedReason || 'role_guardrail'
                 });
             }
-
-            if (data.tool_output && typeof data.tool_output === 'object' && (((data.mode || resolvedMode) === 'lab_pdf_ingestion') || data.tool_output.sourceMetadata?.sourceType === 'lab_pdf')) {
-                const toolOutput = data.tool_output;
-                const missingDataCount = Array.isArray(toolOutput.missingData) ? toolOutput.missingData.length : 0;
-                const toolStatus = String(toolOutput.status || '');
-                const labPdfTelemetryPayload = {
-                    requestId,
-                    role: data.role || resolvedRole,
-                    mode: data.mode || resolvedMode,
-                    selectedPatientKey,
-                    fileName: toolOutput.sourceMetadata?.fileName || toolOutput.documentMetadata?.title || null,
-                    extractionMethod: toolOutput.extractionMethod || null,
-                    labValueCount: Array.isArray(toolOutput.extractedFacts) ? toolOutput.extractedFacts.length : 0,
-                    abnormalCount: Array.isArray(toolOutput.abnormalFindings) ? toolOutput.abnormalFindings.length : 0,
-                    missingDataCount,
-                    status: toolStatus,
-                    toolOutput
-                };
-
-                if (toolStatus === 'invalid_file_type' || toolStatus === 'role_blocked') {
-                    emitLabPdfAuditEvent('copilot_lab_pdf_extraction_failed', labPdfTelemetryPayload);
-                } else if (toolStatus === 'ocr_required' || toolStatus === 'extraction_review_required') {
-                    emitLabPdfAuditEvent('copilot_lab_pdf_review_required', labPdfTelemetryPayload);
-                } else {
-                    emitLabPdfAuditEvent('copilot_lab_pdf_extracted', labPdfTelemetryPayload);
-                }
-
-                if (missingDataCount > 0) {
-                    emitLabPdfAuditEvent('copilot_lab_pdf_missing_data_detected', labPdfTelemetryPayload);
-                }
-            }
         }
     } catch (error) {
         clearLoadingMessage();
         if (labPdfAttachment?.descriptor) {
             applyLabPdfAttachmentDescriptor(labPdfAttachment.descriptor, {
                 file: labPdfAttachment.file,
-                useDemoSeed: labPdfAttachment.useDemoSeed
+                useDemoSeed: labPdfAttachment.useDemoSeed,
+                requestId: labPdfAttachment.requestId || requestId
             });
             setLabPdfStatus(`Attachment kept: ${labPdfAttachment.descriptor.fileName}. Retry when ready.`, 'warning');
         }
@@ -3079,6 +3839,39 @@ async function requestAssistantResponse(prompt, options = {}) {
             requestId,
             requestPrompt: trimmedPrompt
         });
+
+        if (labPdfAttachment?.descriptor) {
+            const attachmentDocumentType = normalizeAttachmentDocumentType(labPdfAttachment.descriptor.documentType);
+            emitLabPdfAuditEvent('copilot_lab_pdf_ingestion_failed', {
+                requestId,
+                role: resolvedRole,
+                mode: resolvedMode,
+                selectedPatientKey,
+                documentTitle: labPdfAttachment.descriptor.fileName || null,
+                documentType: attachmentDocumentType,
+                toolStatus: error.errorCategory || 'request_failed',
+                seededDemo: Boolean(labPdfAttachment.useDemoSeed),
+                ragGrounded: false
+            });
+        }
+
+        if (tracksAttachmentReviewLlm) {
+            emitAttachmentReviewLlmAuditEvent('copilot_attachment_review_llm_call_failed', {
+                requestId,
+                role: resolvedRole,
+                mode: resolvedMode,
+                selectedPatientKey,
+                documentTitle: labPdfAttachment?.descriptor?.fileName || null,
+                documentType: labPdfAttachment?.descriptor?.documentType || null,
+                toolStatus: 'llm_call_failed',
+                provider: 'local_fallback',
+                model: null,
+                openaiConfigured: false,
+                fallbackReason: error.errorCategory || 'request_failed',
+                openaiErrorCategory: error.errorCategory || 'request_failed',
+                ragGrounded: false
+            });
+        }
 
         if (CopilotTelemetry) {
             const endedPerf = window.performance && typeof window.performance.now === 'function'
@@ -3093,16 +3886,6 @@ async function requestAssistantResponse(prompt, options = {}) {
                 errorCategory: error.errorCategory || 'request_failed',
                 fallbackUsed: Boolean(error.fallbackUsed)
             });
-            if (labPdfAttachment?.descriptor) {
-                emitLabPdfAuditEvent('copilot_lab_pdf_extraction_failed', {
-                    requestId,
-                    role: resolvedRole,
-                    mode: resolvedMode,
-                    selectedPatientKey,
-                    fileName: labPdfAttachment.descriptor.fileName || null,
-                    status: error.errorCategory || 'request_failed'
-                });
-            }
         }
     } finally {
         state.loading = false;
@@ -3598,7 +4381,7 @@ patientSelect.addEventListener('change', () => {
     updateContextText();
     if (hasActiveLabPdfAttachment()) {
         clearLabPdfAttachment({
-            keepStatusMessage: 'Attachment cleared because the selected patient changed. Reattach the lab PDF for the new patient if needed.',
+            keepStatusMessage: 'Attachment cleared because the selected patient changed. Reattach the PDF for the new patient if needed.',
             tone: 'warning'
         });
     }
@@ -3613,7 +4396,7 @@ roleSelect.addEventListener('change', (event) => {
     updateRoleSelection(event.target.value, { emitTelemetry: true });
     if (hasActiveLabPdfAttachment()) {
         clearLabPdfAttachment({
-            keepStatusMessage: 'Attachment cleared because the staff role changed. Reattach the lab PDF if this workflow is still appropriate.',
+            keepStatusMessage: 'Attachment cleared because the staff role changed. Reattach the PDF if this workflow is still appropriate.',
             tone: 'warning'
         });
     }
@@ -3708,6 +4491,12 @@ if (labPdfRemoveButton) {
             keepStatusMessage: 'Lab PDF attachment removed from the prompt.',
             tone: 'neutral'
         });
+    });
+}
+
+if (labEvidenceClearButton) {
+    labEvidenceClearButton.addEventListener('click', () => {
+        void requestClearLabEvidence();
     });
 }
 

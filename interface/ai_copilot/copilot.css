@@ -2183,11 +2183,6 @@ body.copilot-embedded.body_top {
     box-shadow: none;
 }
 
-.copilot-attach-glyph {
-    font-size: 1rem;
-    line-height: 1;
-}
-
 .copilot-attachment-chip {
     display: inline-flex;
     align-items: center;
@@ -2258,6 +2253,36 @@ body.copilot-embedded.body_top {
 
 .copilot-input::placeholder {
     color: #8a93ab;
+}
+
+.copilot-upload-notice {
+    margin: 6px 4px 0 8px;
+    padding: 8px 10px;
+    border: 1px solid rgba(107, 92, 255, 0.16);
+    border-radius: 12px;
+    background: rgba(107, 92, 255, 0.08);
+    color: var(--copilot-purple-deep);
+    font-size: 0.78rem;
+    font-weight: 700;
+    line-height: 1.35;
+}
+
+.copilot-upload-notice[data-tone="success"] {
+    border-color: rgba(31, 122, 70, 0.18);
+    background: rgba(31, 122, 70, 0.09);
+    color: #1f7a46;
+}
+
+.copilot-upload-notice[data-tone="warning"] {
+    border-color: rgba(143, 91, 0, 0.18);
+    background: rgba(255, 215, 128, 0.18);
+    color: #8f5b00;
+}
+
+.copilot-upload-notice[data-tone="error"] {
+    border-color: rgba(164, 49, 49, 0.18);
+    background: rgba(255, 214, 214, 0.55);
+    color: #a43131;
 }
 
 .copilot-lab-pdf-status {

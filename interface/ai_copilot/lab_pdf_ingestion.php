@@ -1,10 +1,145 @@
 <?php
 
 require_once(__DIR__ . '/lab_pdf_vector_store.php');
+require_once(__DIR__ . '/medical_document_guard.php');
 
 const AI_COPILOT_LAB_PDF_TOOL_NAME = 'attach_and_vectorize_lab_pdf';
 const AI_COPILOT_LAB_PDF_REVIEW_NOTICE = 'This is a draft-only AI extraction for clinician review. It does not diagnose, update the chart, place orders, or replace verification of the original lab PDF.';
 const AI_COPILOT_LAB_PDF_SEEDED_FILE_NAME = 'marcus-johnson-labs-may-2026.pdf';
+const AI_COPILOT_INTAKE_FORM_SEEDED_FILE_NAME = 'marcus-johnson-intake-form.pdf';
+const AI_COPILOT_INTAKE_FORM_REVIEW_NOTICE = 'This is a draft-only AI extraction for clinician review. It does not diagnose, update the chart, place orders, or replace verification of the original intake form.';
+
+function aiCopilotMedicalGuardWorkflowSourceType(string $documentType): string
+{
+    return match (strtolower(trim($documentType))) {
+        'lab_results' => 'lab_pdf',
+        'intake_form' => 'intake_form',
+        'discharge_summary', 'medication_list', 'insurance_claim', 'clinical_note', 'visit_summary' => 'medical_document',
+        default => 'unknown',
+    };
+}
+
+function aiCopilotMedicalGuardReviewMessage(string $decision, string $documentType, string $rejectionReason = ''): string
+{
+    $rejectionReason = aiCopilotLabPdfNormalizeWhitespace($rejectionReason);
+    if ($rejectionReason !== '') {
+        return $rejectionReason;
+    }
+
+    if ($decision === 'rejected') {
+        return 'This does not appear to be a medical document. Please upload a lab result, intake form, discharge summary, medication list, insurance/claim document, or clinical note.';
+    }
+
+    if ($documentType === 'medical_document') {
+        return 'Medical document detected, but this demo ingestion workflow currently supports lab results and intake forms only. Review required before ingestion.';
+    }
+
+    return 'Document type could not be verified. Review required before ingestion.';
+}
+
+function aiCopilotMedicalGuardBuildPayload(array $guardResult): array
+{
+    $detectedEntitySummary = is_array($guardResult['detectedEntitySummary'] ?? null) ? $guardResult['detectedEntitySummary'] : [];
+    $highConfidenceEntityCount = isset($detectedEntitySummary['highConfidenceEntityCount']) && is_numeric($detectedEntitySummary['highConfidenceEntityCount'])
+        ? (int) $detectedEntitySummary['highConfidenceEntityCount']
+        : 0;
+    $medicalEntityCount = isset($detectedEntitySummary['medicalEntityCount']) && is_numeric($detectedEntitySummary['medicalEntityCount'])
+        ? (int) $detectedEntitySummary['medicalEntityCount']
+        : $highConfidenceEntityCount;
+
+    return [
+        'decision' => (string) ($guardResult['decision'] ?? 'review_required'),
+        'document_type' => (string) ($guardResult['documentType'] ?? 'unknown'),
+        'confidence' => isset($guardResult['confidence']) && is_numeric($guardResult['confidence']) ? round((float) $guardResult['confidence'], 4) : 0.0,
+        'extracted_text_preview' => (string) ($guardResult['extractedTextPreview'] ?? ''),
+        'detected_entity_summary' => $detectedEntitySummary,
+        'medical_entity_count' => $medicalEntityCount,
+        'high_confidence_entity_count' => $highConfidenceEntityCount,
+        'rejection_reason' => (string) ($guardResult['rejectionReason'] ?? ''),
+        'guard_provider' => (string) ($guardResult['guardProvider'] ?? 'local_validation_fallback'),
+        'extraction_method' => (string) ($guardResult['extractionMethod'] ?? 'not_run'),
+        'textract_status' => (string) ($guardResult['textractStatus'] ?? 'not_run'),
+        'comprehend_status' => (string) ($guardResult['comprehendStatus'] ?? 'not_run'),
+        'aws_guard_enabled' => !empty($guardResult['awsGuardEnabled']),
+        'audit_events' => is_array($guardResult['auditEvents'] ?? null) ? $guardResult['auditEvents'] : [],
+    ];
+}
+
+function aiCopilotMedicalGuardBuildBlockedOutput(
+    string $status,
+    array $guardResult,
+    string $fileName,
+    string $mimeType,
+    ?int $fileSize,
+    string $patientKey,
+    string $patientName,
+    string $uploadedAt,
+    string $requestId,
+    array $promptInjectionMatches = []
+): array {
+    $guardDocumentType = (string) ($guardResult['documentType'] ?? 'unknown');
+    $workflowSourceType = aiCopilotMedicalGuardWorkflowSourceType($guardDocumentType);
+    $documentClass = aiCopilotAttachmentNormalizeDocumentClass($guardDocumentType, $fileName, (string) ($guardResult['extractedTextPreview'] ?? ''));
+    $displayFileName = aiCopilotAttachmentBuildDisplayFileName($fileName, $documentClass, $patientName);
+    $sourceId = aiCopilotAttachmentBuildSourceId($patientKey, $documentClass, $fileName, $uploadedAt);
+    $decision = (string) ($guardResult['decision'] ?? 'review_required');
+    $safeMessage = aiCopilotMedicalGuardReviewMessage(
+        $decision,
+        $workflowSourceType,
+        (string) ($guardResult['rejectionReason'] ?? '')
+    );
+
+    $missingData = [];
+    if ($safeMessage !== '') {
+        $missingData[] = $safeMessage;
+    }
+    if ($workflowSourceType === 'medical_document') {
+        $missingData[] = 'Medical-document validation passed, but this demo ingestion workflow currently supports only lab results and intake forms for extraction and vectorization.';
+    }
+    if ($promptInjectionMatches !== []) {
+        $missingData[] = 'Instruction-like text was detected in the uploaded PDF and treated as untrusted document content rather than instructions.';
+    }
+    $missingData = array_values(array_unique(array_filter(array_map('aiCopilotLabPdfNormalizeWhitespace', $missingData), static fn($item) => $item !== '')));
+
+    return aiCopilotLabPdfBuildClientToolOutput([
+        'status' => $status,
+        'ingestion_status' => $decision === 'rejected' ? 'rejected' : 'review_required',
+        'safe_message' => $safeMessage,
+        'extraction_method' => (string) ($guardResult['extractionMethod'] ?? 'not_run'),
+        'extracted_text_preview' => (string) ($guardResult['extractedTextPreview'] ?? ''),
+        'document_metadata' => [
+            'title' => $displayFileName,
+            'mime_type' => $mimeType !== '' ? $mimeType : 'application/pdf',
+            'size' => $fileSize,
+            'document_type' => $documentClass,
+            'seeded_demo' => false,
+            'patient_key' => $patientKey,
+            'patient_name' => $patientName,
+            'uploaded_at' => $uploadedAt,
+            'original_file_name' => $fileName,
+            'display_file_name' => $displayFileName,
+            'source_id' => $sourceId,
+        ],
+        'source_metadata' => [
+            'file_name' => $displayFileName,
+            'original_file_name' => $fileName,
+            'display_file_name' => $displayFileName,
+            'uploaded_at' => $uploadedAt,
+            'source_type' => $workflowSourceType,
+            'document_type' => $documentClass,
+            'source_label' => $workflowSourceType === 'intake_form'
+                ? 'Uploaded intake form'
+                : ($workflowSourceType === 'medical_document' ? 'Uploaded medical document' : 'Uploaded PDF'),
+            'chunk_count' => 0,
+            'request_id' => $requestId,
+            'source_id' => $sourceId,
+        ],
+        'missing_data' => $missingData,
+        'missing_data_flags' => $missingData,
+        'prompt_injection_matches' => $promptInjectionMatches,
+        'document_guard' => aiCopilotMedicalGuardBuildPayload($guardResult),
+    ]);
+}
 
 function aiCopilotLabPdfNormalizeWhitespace(string $value): string
 {
@@ -46,6 +181,217 @@ function aiCopilotLabPdfSeededMissingData(): array
         'Ordering provider not clearly detected',
         'Collection time not clearly detected',
     ];
+}
+
+function aiCopilotIntakeSeededText(): string
+{
+    return implode("\n", [
+        'Synthetic demo data only',
+        'Document: Marcus Johnson intake form',
+        'Reason for visit: blood sugar management and medication questions',
+        'Medication adherence issue: sometimes misses evening Metformin',
+        'Allergies: no known drug allergies reported',
+        'Insurance update: patient says coverage changed recently',
+        'Care preference: written instructions and phone reminders',
+    ]);
+}
+
+function aiCopilotIntakeSeededMissingData(): array
+{
+    return [
+        'Current concerns were not clearly detected in the uploaded intake form.',
+    ];
+}
+
+function aiCopilotAttachmentDocumentTypeHints(): array
+{
+    return [
+        'intake_form' => [
+            'file_patterns' => [
+                '/\bintake\b/i',
+                '/\bintake-form\b/i',
+                '/\bpatient-intake\b/i',
+                '/\bquestionnaire\b/i',
+                '/\bform\b/i',
+            ],
+            'text_patterns' => [
+                '/\breason for visit\b/i',
+                '/\bcurrent concerns\b/i',
+                '/\bmedication notes\b/i',
+                '/\bmedication adherence\b/i',
+                '/\ballergies\b/i',
+                '/\binsurance update\b/i',
+                '/\bcare preferences\b/i',
+                '/\bpreferred contact\b/i',
+            ],
+        ],
+        'lab_pdf' => [
+            'file_patterns' => [
+                '/\blab\b/i',
+                '/\blabs\b/i',
+                '/\bresult\b/i',
+                '/\bdiagnostic\b/i',
+            ],
+            'text_patterns' => [
+                '/\ba1c\b/i',
+                '/\bglucose\b/i',
+                '/\bldl\b/i',
+                '/\bhdl\b/i',
+                '/\bcreatinine\b/i',
+                '/\begfr\b/i',
+                '/\bmg\/dL\b/i',
+                '/\bhigh\b/i',
+                '/\blow\b/i',
+                '/\bnormal\b/i',
+                '/%/',
+            ],
+        ],
+    ];
+}
+
+function aiCopilotAttachmentClassifyDocumentType(string $fileName, string $text = '', string $attachmentPurpose = ''): string
+{
+    $hints = aiCopilotAttachmentDocumentTypeHints();
+    $attachmentPurpose = strtolower(trim($attachmentPurpose));
+
+    foreach ($hints['intake_form']['file_patterns'] as $pattern) {
+        if (preg_match($pattern, $fileName) === 1) {
+            return 'intake_form';
+        }
+    }
+    foreach ($hints['intake_form']['text_patterns'] as $pattern) {
+        if (preg_match($pattern, $text) === 1) {
+            return 'intake_form';
+        }
+    }
+
+    foreach ($hints['lab_pdf']['file_patterns'] as $pattern) {
+        if (preg_match($pattern, $fileName) === 1) {
+            return 'lab_pdf';
+        }
+    }
+    foreach ($hints['lab_pdf']['text_patterns'] as $pattern) {
+        if (preg_match($pattern, $text) === 1) {
+            return 'lab_pdf';
+        }
+    }
+
+    if ($attachmentPurpose === 'lab_pdf_ingestion') {
+        return 'unknown';
+    }
+
+    return 'unknown';
+}
+
+function aiCopilotAttachmentSourceLabel(string $documentType): string
+{
+    return match ($documentType) {
+        'intake_form' => 'Uploaded intake form',
+        'lab_pdf' => 'Uploaded lab PDF',
+        default => 'Uploaded PDF',
+    };
+}
+
+function aiCopilotAttachmentSourceTitle(string $documentType): string
+{
+    return match ($documentType) {
+        'intake_form' => 'Attached Intake Form',
+        'lab_pdf' => 'Attached Lab PDF',
+        default => 'Attached PDF',
+    };
+}
+
+function aiCopilotAttachmentNormalizeDocumentClass(string $legacyDocumentType, string $fileName = '', string $text = ''): string
+{
+    $normalized = strtolower(trim($legacyDocumentType));
+    if ($normalized === 'intake_form') {
+        return 'intake_form';
+    }
+    if ($normalized === 'lab_pdf' || $normalized === 'lab_results') {
+        return 'lab_results';
+    }
+    if ($normalized === 'medical_document' || $normalized === 'other_medical') {
+        return 'medical_document';
+    }
+    if ($normalized === 'non_medical') {
+        return 'non_medical';
+    }
+
+    if (preg_match('/\b(reason for visit|current concerns|medication adherence|allergies|insurance update|care preferences|preferred contact)\b/i', $text) === 1) {
+        return 'intake_form';
+    }
+    if (preg_match('/\b(a1c|glucose|ldl|hdl|creatinine|egfr|mg\/dL|normal|high|low)\b/i', $text) === 1) {
+        return 'lab_results';
+    }
+    if (preg_match('/\b(intake|questionnaire|form)\b/i', $fileName) === 1) {
+        return 'intake_form';
+    }
+    if (preg_match('/\b(lab|labs|result|diagnostic)\b/i', $fileName) === 1) {
+        return 'lab_results';
+    }
+    if (preg_match('/\b(patient|visit|medical|clinical|encounter|medication|allerg)\b/i', $text . ' ' . $fileName) === 1) {
+        return 'medical_document';
+    }
+
+    return 'non_medical';
+}
+
+function aiCopilotAttachmentLegacySourceType(string $documentClass): string
+{
+    return match (strtolower(trim($documentClass))) {
+        'intake_form' => 'intake_form',
+        'lab_results', 'lab_pdf' => 'lab_pdf',
+        'medical_document', 'other_medical' => 'medical_document',
+        default => 'non_medical',
+    };
+}
+
+function aiCopilotAttachmentIsLabDocumentType(string $documentType): bool
+{
+    return in_array(strtolower(trim($documentType)), ['lab_pdf', 'lab_results'], true);
+}
+
+function aiCopilotAttachmentIsIntakeDocumentType(string $documentType): bool
+{
+    return strtolower(trim($documentType)) === 'intake_form';
+}
+
+function aiCopilotAttachmentBuildDisplayFileName(string $originalFileName, string $documentClass, string $patientName = ''): string
+{
+    $originalFileName = trim(basename($originalFileName));
+    $patientName = trim($patientName);
+    if ($patientName !== '') {
+        return match (strtolower(trim($documentClass))) {
+            'lab_results' => $patientName . ' Lab Results.pdf',
+            'intake_form' => $patientName . ' Intake Form.pdf',
+            'medical_document' => $patientName . ' Medical Document.pdf',
+            default => $originalFileName !== '' ? $originalFileName : ($patientName . ' Uploaded Document.pdf'),
+        };
+    }
+
+    if ($originalFileName === '') {
+        return match (strtolower(trim($documentClass))) {
+            'lab_results' => 'Uploaded Lab Results.pdf',
+            'intake_form' => 'Uploaded Intake Form.pdf',
+            'medical_document' => 'Uploaded Medical Document.pdf',
+            default => 'Uploaded Document.pdf',
+        };
+    }
+
+    $extension = pathinfo($originalFileName, PATHINFO_EXTENSION);
+    $baseName = pathinfo($originalFileName, PATHINFO_FILENAME);
+    $baseName = preg_replace('/\(\d+\)$/', '', (string) $baseName);
+    $baseName = preg_replace('/[_\-]+/', ' ', (string) $baseName);
+    $baseName = aiCopilotLabPdfNormalizeWhitespace((string) $baseName);
+    $extension = $extension !== '' ? '.' . strtolower($extension) : '';
+
+    return ($baseName !== '' ? $baseName : 'Uploaded Document') . ($extension !== '' ? $extension : '.pdf');
+}
+
+function aiCopilotAttachmentBuildSourceId(string $patientKey, string $documentClass, string $originalFileName, string $uploadedAt): string
+{
+    $seed = strtolower(trim($patientKey . '|' . $documentClass . '|' . basename($originalFileName) . '|' . $uploadedAt));
+    return 'source_' . substr(sha1($seed), 0, 16);
 }
 
 function aiCopilotLabPdfRecognizedTests(): array
@@ -160,6 +506,19 @@ function aiCopilotLabPdfIsSyntheticMarcusJohnsonPdf(string $fileName, string $te
         || (
             preg_match('/patient:\s*marcus johnson/', $normalizedText) === 1
             && preg_match('/\b(a1c|ldl|creatinine|egfr)\b/', $normalizedText) === 1
+        );
+}
+
+function aiCopilotIntakeIsSyntheticMarcusJohnsonForm(string $fileName, string $text = ''): bool
+{
+    $normalizedFileName = strtolower($fileName);
+    $normalizedText = strtolower($text);
+
+    return preg_match('/marcus[-_ ]johnson.*intake.*\.pdf/', $normalizedFileName) === 1
+        || (
+            preg_match('/\breason for visit\b/', $normalizedText) === 1
+            && preg_match('/\bmedication adherence\b|\bmedication notes\b/', $normalizedText) === 1
+            && preg_match('/\ballergies\b/', $normalizedText) === 1
         );
 }
 
@@ -289,6 +648,7 @@ function aiCopilotLabPdfBuildReviewRequiredOutput(
             'title' => $fileName,
             'mime_type' => 'application/pdf',
             'size' => $fileSize,
+            'document_type' => 'lab_pdf',
             'seeded_demo' => $seededDemo,
             'patient_key' => $patientKey,
             'patient_name' => $patientName,
@@ -306,6 +666,62 @@ function aiCopilotLabPdfBuildReviewRequiredOutput(
         'abnormal_findings' => [],
         'missing_data' => $missingData,
         'missing_data_flags' => $missingData,
+        'prompt_injection_matches' => $promptInjectionMatches,
+    ]);
+}
+
+function aiCopilotIntakeBuildReviewRequiredOutput(
+    string $fileName,
+    ?int $fileSize,
+    bool $seededDemo,
+    string $patientKey,
+    string $patientName,
+    string $uploadedAt,
+    string $requestId,
+    string $extractionMethod,
+    array $missingData = [],
+    array $promptInjectionMatches = []
+): array {
+    $reviewMessage = 'Intake form extraction did not produce reliable intake fields. Clinician must verify the source PDF.';
+    if ($promptInjectionMatches !== []) {
+        $missingData[] = 'Instruction-like text was detected in the uploaded intake form and treated as untrusted document content rather than instructions.';
+    }
+
+    $missingData = array_values(array_unique(array_filter(array_map('aiCopilotLabPdfNormalizeWhitespace', $missingData), static fn($item) => $item !== '')));
+
+    return aiCopilotLabPdfBuildClientToolOutput([
+        'status' => 'extraction_review_required',
+        'ingestion_status' => 'review_required',
+        'safe_message' => $reviewMessage,
+        'extraction_method' => $extractionMethod,
+        'document_metadata' => [
+            'title' => $fileName,
+            'mime_type' => 'application/pdf',
+            'size' => $fileSize,
+            'document_type' => 'intake_form',
+            'seeded_demo' => $seededDemo,
+            'patient_key' => $patientKey,
+            'patient_name' => $patientName,
+            'uploaded_at' => $uploadedAt,
+        ],
+        'source_metadata' => [
+            'file_name' => $fileName,
+            'uploaded_at' => $uploadedAt,
+            'source_type' => 'intake_form',
+            'source_label' => 'Uploaded intake form',
+            'chunk_count' => 0,
+            'request_id' => $requestId,
+        ],
+        'extracted_facts' => [],
+        'missing_data' => $missingData,
+        'missing_data_flags' => $missingData,
+        'intake_fields' => aiCopilotBuildIntakeFieldsPayload([], [
+            'missing' => $missingData,
+            'source_file' => $fileName,
+            'source_chunk_ids' => [],
+            'uploaded_timestamp' => $uploadedAt,
+            'ingestion_status' => 'review_required',
+        ]),
         'prompt_injection_matches' => $promptInjectionMatches,
     ]);
 }
@@ -529,6 +945,199 @@ function aiCopilotLabPdfExtractFacts(string $text, array $options = []): array
     ];
 }
 
+function aiCopilotIntakeFieldDefinitions(): array
+{
+    return [
+        'reasonForVisit' => [
+            'title' => 'Reason for Visit',
+            'patterns' => [
+                '/^reason for visit\s*:\s*(.+)$/i',
+                '/^visit reason\s*:\s*(.+)$/i',
+            ],
+        ],
+        'currentConcerns' => [
+            'title' => 'Current Concerns',
+            'patterns' => [
+                '/^current concerns\s*:\s*(.+)$/i',
+                '/^concerns\s*:\s*(.+)$/i',
+            ],
+        ],
+        'medicationAdherence' => [
+            'title' => 'Medication / Adherence Notes',
+            'patterns' => [
+                '/^medication adherence issue\s*:\s*(.+)$/i',
+                '/^medication adherence\s*:\s*(.+)$/i',
+                '/^medication notes\s*:\s*(.+)$/i',
+                '/^medication\/adherence notes\s*:\s*(.+)$/i',
+            ],
+        ],
+        'allergies' => [
+            'title' => 'Allergies',
+            'patterns' => [
+                '/^allergies\s*:\s*(.+)$/i',
+            ],
+        ],
+        'insuranceUpdate' => [
+            'title' => 'Insurance Update',
+            'patterns' => [
+                '/^insurance update\s*:\s*(.+)$/i',
+                '/^coverage update\s*:\s*(.+)$/i',
+            ],
+        ],
+        'carePreferences' => [
+            'title' => 'Care Preferences',
+            'patterns' => [
+                '/^care preferences\s*:\s*(.+)$/i',
+                '/^preferred contact\s*:\s*(.+)$/i',
+                '/^care preference\s*:\s*(.+)$/i',
+            ],
+        ],
+    ];
+}
+
+function aiCopilotIntakeMissingFieldMessage(string $fieldKey): string
+{
+    return match ($fieldKey) {
+        'reasonForVisit' => 'Reason for visit was not clearly detected in the uploaded intake form.',
+        'currentConcerns' => 'Current concerns were not clearly detected in the uploaded intake form.',
+        'medicationAdherence' => 'Medication / adherence notes were not clearly detected in the uploaded intake form.',
+        'allergies' => 'Allergies were not clearly detected in the uploaded intake form.',
+        'insuranceUpdate' => 'Insurance update was not clearly detected in the uploaded intake form.',
+        'carePreferences' => 'Care preferences were not clearly detected in the uploaded intake form.',
+        default => 'A required intake field was not clearly detected in the uploaded intake form.',
+    };
+}
+
+function aiCopilotIntakeExtractFields(string $text): array
+{
+    $lines = explode("\n", aiCopilotLabPdfNormalizeWhitespace($text));
+    $fields = [
+        'reasonForVisit' => '',
+        'currentConcerns' => '',
+        'medicationAdherence' => '',
+        'allergies' => '',
+        'insuranceUpdate' => '',
+        'carePreferences' => '',
+    ];
+    $missing = [];
+    $rejectedLines = [];
+
+    foreach ($lines as $line) {
+        $line = aiCopilotLabPdfNormalizeWhitespace($line);
+        if ($line === '' || aiCopilotLabPdfPromptInjectionLine($line)) {
+            continue;
+        }
+
+        if (preg_match('/^(patient|document|synthetic demo data only)\b/i', $line) === 1) {
+            continue;
+        }
+
+        $matched = false;
+        foreach (aiCopilotIntakeFieldDefinitions() as $fieldKey => $definition) {
+            foreach (($definition['patterns'] ?? []) as $pattern) {
+                if (preg_match((string) $pattern, $line, $matches) === 1) {
+                    $value = aiCopilotLabPdfNormalizeWhitespace((string) ($matches[1] ?? ''));
+                    if ($value !== '') {
+                        $fields[$fieldKey] = $value;
+                    }
+                    $matched = true;
+                    break 2;
+                }
+            }
+        }
+
+        if ($matched) {
+            continue;
+        }
+
+        if (preg_match('/^missing:?$/i', $line) === 1) {
+            continue;
+        }
+
+        if (preg_match('/^-\s+(.+)$/', $line, $missingMatches) === 1) {
+            $missing[] = aiCopilotLabPdfNormalizeWhitespace((string) $missingMatches[1]);
+            continue;
+        }
+
+        if (str_contains($line, ':') && preg_match('/[A-Za-z]/', $line) === 1) {
+            $rejectedLines[] = $line;
+        }
+    }
+
+    foreach (array_keys($fields) as $fieldKey) {
+        if ($fields[$fieldKey] === '') {
+            $missing[] = aiCopilotIntakeMissingFieldMessage($fieldKey);
+        }
+    }
+
+    $facts = [];
+    foreach (aiCopilotIntakeFieldDefinitions() as $fieldKey => $definition) {
+        $value = $fields[$fieldKey] ?? '';
+        if ($value === '') {
+            continue;
+        }
+
+        $facts[] = [
+            'key' => $fieldKey,
+            'name' => (string) ($definition['title'] ?? $fieldKey),
+            'label' => (string) ($definition['title'] ?? $fieldKey),
+            'value' => $value,
+            'interpretation' => '',
+            'source_label' => 'Uploaded Intake Form',
+        ];
+    }
+
+    return [
+        'fields' => $fields,
+        'facts' => $facts,
+        'missing' => array_values(array_unique(array_filter(array_map('trim', $missing), static fn($item) => $item !== ''))),
+        'rejected_lines' => array_values(array_unique(array_filter(array_map('trim', $rejectedLines), static fn($item) => $item !== ''))),
+        'valid_field_count' => count(array_filter($fields, static fn($value) => trim((string) $value) !== '')),
+    ];
+}
+
+function aiCopilotIntakeBuildGroundedText(array $summary): string
+{
+    $lines = [];
+    foreach (aiCopilotIntakeFieldDefinitions() as $fieldKey => $definition) {
+        $value = aiCopilotLabPdfNormalizeWhitespace((string) ($summary['fields'][$fieldKey] ?? ''));
+        if ($value === '') {
+            continue;
+        }
+
+        $lines[] = (string) ($definition['title'] ?? $fieldKey) . ': ' . $value;
+    }
+
+    if (!empty($summary['missing'])) {
+        $lines[] = 'Missing:';
+        foreach ($summary['missing'] as $item) {
+            $itemText = aiCopilotLabPdfNormalizeWhitespace((string) $item);
+            if ($itemText !== '') {
+                $lines[] = '- ' . $itemText;
+            }
+        }
+    }
+
+    return implode("\n", $lines);
+}
+
+function aiCopilotBuildIntakeFieldsPayload(array $fields, array $options = []): array
+{
+    return [
+        'reasonForVisit' => aiCopilotLabPdfNormalizeWhitespace((string) ($fields['reasonForVisit'] ?? '')),
+        'currentConcerns' => aiCopilotLabPdfNormalizeWhitespace((string) ($fields['currentConcerns'] ?? '')),
+        'medicationAdherence' => aiCopilotLabPdfNormalizeWhitespace((string) ($fields['medicationAdherence'] ?? '')),
+        'allergies' => aiCopilotLabPdfNormalizeWhitespace((string) ($fields['allergies'] ?? '')),
+        'insuranceUpdate' => aiCopilotLabPdfNormalizeWhitespace((string) ($fields['insuranceUpdate'] ?? '')),
+        'carePreferences' => aiCopilotLabPdfNormalizeWhitespace((string) ($fields['carePreferences'] ?? '')),
+        'missingOrAmbiguousData' => array_values(array_unique(array_filter(array_map('aiCopilotLabPdfNormalizeWhitespace', $options['missing'] ?? []), static fn($item) => $item !== ''))),
+        'sourceFile' => aiCopilotLabPdfNormalizeWhitespace((string) ($options['source_file'] ?? '')),
+        'sourceChunkIds' => array_values(array_filter(array_map('strval', $options['source_chunk_ids'] ?? []), static fn($item) => trim($item) !== '')),
+        'uploadedTimestamp' => aiCopilotLabPdfNormalizeWhitespace((string) ($options['uploaded_timestamp'] ?? '')),
+        'ingestionStatus' => aiCopilotLabPdfNormalizeWhitespace((string) ($options['ingestion_status'] ?? '')),
+    ];
+}
+
 function aiCopilotLabPdfBuildSafetyMetadata(array $options = []): array
 {
     $matches = is_array($options['prompt_injection_matches'] ?? null) ? $options['prompt_injection_matches'] : [];
@@ -562,6 +1171,9 @@ function aiCopilotLabPdfBuildVectorizedResult(array $items, int $limit = 6): arr
         $result[] = [
             'id' => (string) ($item['id'] ?? ''),
             'file_name' => (string) ($item['fileName'] ?? $item['file_name'] ?? ''),
+            'display_file_name' => (string) ($item['displayFileName'] ?? $metadata['displayFileName'] ?? $item['fileName'] ?? $item['file_name'] ?? ''),
+            'document_type' => (string) ($metadata['documentType'] ?? ''),
+            'source_id' => (string) ($metadata['sourceId'] ?? ''),
             'chunk_index' => is_numeric($chunkIndex) ? (int) $chunkIndex : null,
             'source_page' => is_numeric($sourcePage) ? (int) $sourcePage : null,
             'text_preview' => aiCopilotLabPdfPreview($chunkText, 160),
@@ -575,6 +1187,17 @@ function aiCopilotLabPdfBuildVectorizedResult(array $items, int $limit = 6): arr
 
 function aiCopilotLabPdfBuildClientToolOutput(array $input): array
 {
+    $documentMetadata = is_array($input['document_metadata'] ?? null) ? $input['document_metadata'] : [];
+    $sourceMetadata = is_array($input['source_metadata'] ?? null) ? $input['source_metadata'] : [];
+    $legacySourceType = (string) ($sourceMetadata['source_type'] ?? ($documentMetadata['source_type'] ?? 'lab_pdf'));
+    $documentType = aiCopilotAttachmentNormalizeDocumentClass(
+        (string) ($documentMetadata['document_type'] ?? $legacySourceType),
+        (string) ($documentMetadata['title'] ?? $sourceMetadata['file_name'] ?? ''),
+        (string) ($input['extracted_text_preview'] ?? '')
+    );
+    $originalFileName = (string) ($documentMetadata['original_file_name'] ?? $sourceMetadata['original_file_name'] ?? $documentMetadata['title'] ?? $sourceMetadata['file_name'] ?? '');
+    $displayFileName = (string) ($documentMetadata['display_file_name'] ?? $sourceMetadata['display_file_name'] ?? aiCopilotAttachmentBuildDisplayFileName($originalFileName, $documentType, (string) ($documentMetadata['patient_name'] ?? '')));
+    $sourceId = (string) ($sourceMetadata['source_id'] ?? $documentMetadata['source_id'] ?? aiCopilotAttachmentBuildSourceId((string) ($documentMetadata['patient_key'] ?? ''), $documentType, $originalFileName, (string) ($documentMetadata['uploaded_at'] ?? $sourceMetadata['uploaded_at'] ?? gmdate('c'))));
     $toolOutput = [
         'tool' => AI_COPILOT_LAB_PDF_TOOL_NAME,
         'status' => (string) ($input['status'] ?? 'ok'),
@@ -583,14 +1206,16 @@ function aiCopilotLabPdfBuildClientToolOutput(array $input): array
         'extraction_method' => (string) ($input['extraction_method'] ?? 'pdf_text'),
         'extracted_text_preview' => (string) ($input['extracted_text_preview'] ?? ''),
         'number_of_chunks' => isset($input['number_of_chunks']) && is_numeric($input['number_of_chunks']) ? (int) $input['number_of_chunks'] : 0,
-        'document_metadata' => is_array($input['document_metadata'] ?? null) ? $input['document_metadata'] : [],
-        'source_metadata' => is_array($input['source_metadata'] ?? null) ? $input['source_metadata'] : [],
+        'document_metadata' => $documentMetadata,
+        'source_metadata' => $sourceMetadata,
         'extracted_facts' => is_array($input['extracted_facts'] ?? null) ? $input['extracted_facts'] : [],
         'abnormal_findings' => is_array($input['abnormal_findings'] ?? null) ? $input['abnormal_findings'] : [],
         'missing_data' => is_array($input['missing_data'] ?? null) ? $input['missing_data'] : [],
         'missing_data_flags' => is_array($input['missing_data_flags'] ?? null) ? $input['missing_data_flags'] : [],
+        'intake_fields' => is_array($input['intake_fields'] ?? null) ? $input['intake_fields'] : [],
         'retrieval' => is_array($input['retrieval'] ?? null) ? $input['retrieval'] : [],
         'vectorized_result' => is_array($input['vectorized_result'] ?? null) ? $input['vectorized_result'] : [],
+        'document_guard' => is_array($input['document_guard'] ?? null) ? $input['document_guard'] : [],
         'safety' => [
             'draft_only' => true,
             'review_required' => true,
@@ -601,6 +1226,23 @@ function aiCopilotLabPdfBuildClientToolOutput(array $input): array
         ]),
     ];
 
+    $toolOutput['document_metadata']['document_type'] = $documentType;
+    $toolOutput['document_metadata']['original_file_name'] = $originalFileName;
+    $toolOutput['document_metadata']['display_file_name'] = $displayFileName;
+    $toolOutput['document_metadata']['source_id'] = $sourceId;
+    if (!isset($toolOutput['source_metadata']['source_type'])) {
+        $toolOutput['source_metadata']['source_type'] = aiCopilotAttachmentLegacySourceType($documentType);
+    }
+    if (!isset($toolOutput['source_metadata']['source_label'])) {
+        $toolOutput['source_metadata']['source_label'] = aiCopilotAttachmentSourceLabel($toolOutput['source_metadata']['source_type']);
+    }
+    $toolOutput['source_metadata']['document_type'] = $documentType;
+    $toolOutput['source_metadata']['original_file_name'] = $originalFileName;
+    $toolOutput['source_metadata']['display_file_name'] = $displayFileName;
+    $toolOutput['source_metadata']['source_id'] = $sourceId;
+    $toolOutput['source_coverage'] = is_array($input['source_coverage'] ?? null) ? $input['source_coverage'] : [];
+    $toolOutput['document_summaries'] = is_array($input['document_summaries'] ?? null) ? $input['document_summaries'] : [];
+
     return $toolOutput;
 }
 
@@ -609,6 +1251,9 @@ function aiCopilotLabPdfRetrieveRelevantChunks(array $options): array
     $patientKey = (string) ($options['patient_key'] ?? '');
     $prompt = (string) ($options['prompt'] ?? '');
     $fileName = (string) ($options['file_name'] ?? '');
+    $sourceType = (string) ($options['source_type'] ?? '');
+    $documentType = (string) ($options['document_type'] ?? '');
+    $sourceId = (string) ($options['source_id'] ?? '');
     $limit = isset($options['limit']) && is_numeric($options['limit']) ? max(1, (int) $options['limit']) : 4;
     if ($patientKey === '') {
         return [
@@ -621,6 +1266,9 @@ function aiCopilotLabPdfRetrieveRelevantChunks(array $options): array
     $ranked = aiCopilotLabPdfQueryVectorStore($prompt, [
         'patient_key' => $patientKey,
         'file_name' => $fileName,
+        'source_type' => $sourceType,
+        'document_type' => $documentType,
+        'source_id' => $sourceId,
         'limit' => $limit,
     ]);
 
@@ -634,11 +1282,18 @@ function aiCopilotLabPdfRetrieveRelevantChunks(array $options): array
             'id' => (string) ($record['id'] ?? ''),
             'chunk_text' => (string) ($record['chunkText'] ?? ''),
             'file_name' => (string) ($record['fileName'] ?? ''),
+            'display_file_name' => (string) ($record['displayFileName'] ?? $record['metadata']['displayFileName'] ?? $record['fileName'] ?? ''),
+            'original_file_name' => (string) ($record['metadata']['originalFileName'] ?? $record['fileName'] ?? ''),
+            'source_id' => (string) ($record['metadata']['sourceId'] ?? ''),
+            'document_type' => (string) ($record['metadata']['documentType'] ?? ''),
+            'source_type' => (string) ($record['metadata']['sourceType'] ?? ''),
             'score' => round((float) ($record['score'] ?? 0), 6),
             'source_page' => $record['metadata']['sourcePage'] ?? null,
             'uploaded_at' => (string) ($record['metadata']['uploadedAt'] ?? ''),
             'extraction_method' => (string) ($record['metadata']['extractionMethod'] ?? 'pdf_text'),
             'chunk_index' => isset($record['metadata']['chunkIndex']) && is_numeric($record['metadata']['chunkIndex']) ? (int) $record['metadata']['chunkIndex'] : null,
+            'ingestion_origin' => (string) ($record['metadata']['ingestionOrigin'] ?? 'uploaded_file'),
+            'seeded_demo' => !empty($record['metadata']['seededDemo']),
             'embedding' => is_array($record['embedding'] ?? null)
                 ? array_values(array_map(static fn($value) => (float) $value, $record['embedding']))
                 : [],
@@ -658,40 +1313,458 @@ function aiCopilotLabPdfPromptRequestsRetrieval(string $prompt, string $mode): b
         return true;
     }
 
-    return preg_match('/\b(lab|labs|lab report|pdf|a1c|ldl|creatinine|egfr|abnormal|collection time|ordering provider|source|missing data|uncertain|summarize this lab report)\b/i', $prompt) === 1;
+    return preg_match('/\b(lab|labs|lab report|pdf|a1c|ldl|creatinine|egfr|abnormal|collection time|ordering provider|reason for visit|current concerns|medication adherence|medication notes|allergies|insurance update|care preferences|preferred contact|intake form|questionnaire|source|missing data|uncertain|summarize this lab report)\b/i', $prompt) === 1;
+}
+
+function aiCopilotLabPdfPromptExplicitlyRequestsChartContext(string $prompt): bool
+{
+    return preg_match('/\b(chart context|patient chart|chart only|use the chart|from the chart|visit history|core chart data)\b/i', $prompt) === 1;
+}
+
+function aiCopilotLabPdfPromptTargetsUploadedEvidence(string $prompt): bool
+{
+    return preg_match('/\b(uploaded evidence|uploaded lab evidence|uploaded intake form|uploaded lab|uploaded pdf|uploaded documents|attached pdf|attached lab|attached intake form|lab pdf|lab results|lab report|intake form|source pdf)\b/i', $prompt) === 1;
+}
+
+function aiCopilotLabPdfRequestedDocumentTypes(string $prompt, string $mode, array $existingToolOutput = []): array
+{
+    $requestedTypes = [];
+    if (preg_match('/\b(lab pdf|lab results|uploaded lab|lab report|a1c|glucose|ldl|creatinine|egfr|abnormal labs?)\b/i', $prompt) === 1) {
+        $requestedTypes[] = 'lab_results';
+    }
+    if (preg_match('/\b(intake|intake form|questionnaire|reason for visit|current concerns|medication adherence|insurance update|care preferences)\b/i', $prompt) === 1) {
+        $requestedTypes[] = 'intake_form';
+    }
+
+    $existingCoverage = is_array($existingToolOutput['source_coverage'] ?? null) ? $existingToolOutput['source_coverage'] : [];
+    foreach (($existingCoverage['requested_document_types'] ?? []) as $requestedType) {
+        $normalizedType = aiCopilotAttachmentNormalizeDocumentClass((string) $requestedType);
+        if ($normalizedType !== 'non_medical') {
+            $requestedTypes[] = $normalizedType;
+        }
+    }
+
+    $existingSourceType = aiCopilotLabPdfNormalizeWhitespace((string) ($existingToolOutput['source_metadata']['source_type'] ?? $existingToolOutput['document_metadata']['document_type'] ?? ''));
+    if ($requestedTypes === [] && aiCopilotAttachmentIsIntakeDocumentType($existingSourceType)) {
+        $requestedTypes[] = 'intake_form';
+    } elseif ($requestedTypes === [] && aiCopilotAttachmentIsLabDocumentType($existingSourceType)) {
+        $requestedTypes[] = 'lab_results';
+    }
+
+    if ($requestedTypes === [] && $mode === 'lab_pdf_ingestion' && aiCopilotLabPdfPromptTargetsUploadedEvidence($prompt)) {
+        $requestedTypes[] = 'lab_results';
+    }
+
+    return array_values(array_unique(array_filter($requestedTypes, static fn($item) => $item !== '')));
+}
+
+function aiCopilotAttachmentRequestedDocumentLabel(string $documentType): string
+{
+    return match ($documentType) {
+        'lab_results' => 'an uploaded lab results PDF',
+        'intake_form' => 'the intake form',
+        'medical_document' => 'an uploaded medical document',
+        default => 'an uploaded document',
+    };
+}
+
+function aiCopilotAttachmentBuildMissingRequestedSourceMessage(array $matchedSources, array $missingDocumentTypes, string $patientName = ''): string
+{
+    $patientName = trim($patientName);
+    if ($missingDocumentTypes === []) {
+        return '';
+    }
+
+    $matchedLabels = [];
+    foreach ($matchedSources as $source) {
+        $matchedType = (string) ($source['document_type'] ?? '');
+        if ($matchedType === 'lab_results') {
+            $matchedLabels[] = 'the uploaded lab results PDF';
+        } elseif ($matchedType === 'intake_form') {
+            $matchedLabels[] = 'the intake form';
+        }
+    }
+    $matchedLabels = array_values(array_unique($matchedLabels));
+    $missingLabels = array_values(array_unique(array_map('aiCopilotAttachmentRequestedDocumentLabel', $missingDocumentTypes)));
+
+    if (count($matchedLabels) === 1 && count($missingLabels) === 1) {
+        return 'I found ' . $matchedLabels[0] . ', but I do not see ' . $missingLabels[0] . ' for ' . ($patientName !== '' ? $patientName : 'the selected demo patient') . '.';
+    }
+
+    return 'I could not find all requested uploaded document types for ' . ($patientName !== '' ? $patientName : 'the selected demo patient') . '. Missing: ' . implode(', ', $missingLabels) . '.';
+}
+
+function aiCopilotLabPdfRequestedSourceType(string $prompt, string $mode, array $existingToolOutput = []): string
+{
+    $existingSourceType = aiCopilotLabPdfNormalizeWhitespace((string) ($existingToolOutput['source_metadata']['source_type'] ?? $existingToolOutput['document_metadata']['document_type'] ?? ''));
+    if (in_array($existingSourceType, ['lab_pdf', 'intake_form'], true)) {
+        return $existingSourceType;
+    }
+
+    if (preg_match('/\b(reason for visit|current concerns|medication adherence|medication notes|allergies|insurance update|care preferences|preferred contact|intake form|questionnaire)\b/i', $prompt) === 1) {
+        return 'intake_form';
+    }
+
+    if (
+        $mode === 'lab_pdf_ingestion'
+        || aiCopilotLabPdfPromptTargetsUploadedEvidence($prompt)
+        || preg_match('/\b(lab|labs|a1c|glucose|ldl|hdl|creatinine|egfr|wbc|abnormal)\b/i', $prompt) === 1
+    ) {
+        return 'lab_pdf';
+    }
+
+    return '';
+}
+
+function aiCopilotLabPdfHasUploadedEvidence(string $patientKey): bool
+{
+    if ($patientKey === '') {
+        return false;
+    }
+
+    $counts = aiCopilotLabPdfCountVectorRecords([
+        'patient_key' => $patientKey,
+        'source_type' => 'lab_pdf',
+    ]);
+
+    return (int) ($counts['record_count'] ?? 0) > 0;
+}
+
+function aiCopilotLabPdfSummarizeRetrievedDocument(array $document, array $retrieval): array
+{
+    $documentType = aiCopilotAttachmentNormalizeDocumentClass((string) ($document['document_type'] ?? $document['source_type'] ?? ''));
+    $chunks = array_values(array_filter($retrieval['chunks'] ?? [], 'is_array'));
+    $chunkIds = array_values(array_filter(array_map(static fn($item) => is_array($item) ? (string) ($item['id'] ?? '') : '', $chunks), static fn($item) => $item !== ''));
+    $combinedText = implode("\n", array_values(array_filter(array_map(static fn($chunk) => is_array($chunk) ? (string) ($chunk['chunk_text'] ?? '') : '', $chunks))));
+
+    $summary = [
+        'source_id' => (string) ($document['source_id'] ?? ''),
+        'document_type' => $documentType,
+        'source_type' => (string) ($document['source_type'] ?? aiCopilotAttachmentLegacySourceType($documentType)),
+        'original_file_name' => (string) ($document['original_file_name'] ?? ''),
+        'display_file_name' => (string) ($document['display_file_name'] ?? $document['original_file_name'] ?? ''),
+        'uploaded_at' => (string) ($document['uploaded_at'] ?? ''),
+        'extraction_method' => (string) ($document['extraction_method'] ?? 'pdf_text'),
+        'chunk_ids' => $chunkIds,
+        'chunk_count' => count($chunks),
+        'seeded_demo' => !empty($document['seeded_demo']),
+        'ingestion_origin' => (string) ($document['ingestion_origin'] ?? 'uploaded_file'),
+        'retrieval' => $retrieval,
+        'extracted_facts' => [],
+        'abnormal_findings' => [],
+        'missing_data' => [],
+        'intake_fields' => [],
+    ];
+
+    if ($documentType === 'intake_form') {
+        $intakeSummary = aiCopilotIntakeExtractFields($combinedText);
+        $summary['extracted_facts'] = array_slice($intakeSummary['facts'] ?? [], 0, 12);
+        $summary['missing_data'] = array_values(array_unique($intakeSummary['missing'] ?? []));
+        $summary['intake_fields'] = aiCopilotBuildIntakeFieldsPayload($intakeSummary['fields'] ?? [], [
+            'missing' => $summary['missing_data'],
+            'source_file' => (string) ($summary['display_file_name'] !== '' ? $summary['display_file_name'] : $summary['original_file_name']),
+            'source_chunk_ids' => $chunkIds,
+            'uploaded_timestamp' => $summary['uploaded_at'],
+            'ingestion_status' => 'retrieved',
+        ]);
+        return $summary;
+    }
+
+    $factSummary = aiCopilotLabPdfExtractFacts($combinedText, [
+        'file_name' => (string) ($summary['display_file_name'] !== '' ? $summary['display_file_name'] : $summary['original_file_name']),
+    ]);
+    $summary['extracted_facts'] = array_slice($factSummary['facts'] ?? [], 0, 12);
+    $summary['abnormal_findings'] = array_slice($factSummary['abnormal'] ?? [], 0, 8);
+    $summary['missing_data'] = array_values(array_unique($factSummary['missing'] ?? []));
+    return $summary;
+}
+
+function aiCopilotLabPdfRetrieveRequestedDocumentCoverage(array $options): array
+{
+    $patientKey = (string) ($options['patient_key'] ?? '');
+    $patientName = (string) ($options['patient_name'] ?? '');
+    $prompt = (string) ($options['prompt'] ?? '');
+    $requestedDocumentTypes = array_values(array_unique(array_filter(array_map(static fn($item) => aiCopilotAttachmentNormalizeDocumentClass((string) $item), is_array($options['requested_document_types'] ?? null) ? $options['requested_document_types'] : []), static fn($item) => $item !== 'non_medical')));
+    $preferUploadedOnly = !empty($options['prefer_uploaded_only']);
+    $limitPerDocument = isset($options['limit_per_document']) && is_numeric($options['limit_per_document']) ? max(1, (int) $options['limit_per_document']) : 2;
+
+    $matchedSources = [];
+    $documentSummaries = [];
+    $missingRequestedTypes = [];
+    $chunks = [];
+    $seenChunkIds = [];
+
+    foreach ($requestedDocumentTypes as $requestedType) {
+        $documents = aiCopilotLabPdfListSourceDocuments([
+            'patient_key' => $patientKey,
+            'document_type' => $requestedType,
+            'ingestion_origin' => $preferUploadedOnly ? 'uploaded_file' : '',
+        ]);
+
+        if ($documents === [] && !$preferUploadedOnly) {
+            $documents = aiCopilotLabPdfListSourceDocuments([
+                'patient_key' => $patientKey,
+                'document_type' => $requestedType,
+            ]);
+        }
+
+        if ($documents === []) {
+            $missingRequestedTypes[] = $requestedType;
+            continue;
+        }
+
+        $document = $documents[0];
+        $matchedSources[] = $document;
+        $documentRetrieval = aiCopilotLabPdfRetrieveRelevantChunks([
+            'patient_key' => $patientKey,
+            'prompt' => $prompt !== '' ? $prompt : ((string) ($document['display_file_name'] ?? $document['original_file_name'] ?? '')),
+            'source_id' => (string) ($document['source_id'] ?? ''),
+            'document_type' => $requestedType,
+            'limit' => $limitPerDocument,
+        ]);
+        $documentSummary = aiCopilotLabPdfSummarizeRetrievedDocument($document, $documentRetrieval);
+        $documentSummaries[] = $documentSummary;
+
+        foreach (($documentRetrieval['chunks'] ?? []) as $chunk) {
+            if (!is_array($chunk)) {
+                continue;
+            }
+            $chunkId = (string) ($chunk['id'] ?? '');
+            if ($chunkId !== '' && isset($seenChunkIds[$chunkId])) {
+                continue;
+            }
+            if ($chunkId !== '') {
+                $seenChunkIds[$chunkId] = true;
+            }
+            $chunks[] = $chunk;
+        }
+    }
+
+    return [
+        'chunks' => $chunks,
+        'chunk_ids' => array_values(array_filter(array_map(static fn($item) => is_array($item) ? (string) ($item['id'] ?? '') : '', $chunks), static fn($item) => $item !== '')),
+        'chunk_count' => count($chunks),
+        'requested_document_types' => $requestedDocumentTypes,
+        'matched_sources' => $matchedSources,
+        'document_summaries' => $documentSummaries,
+        'missing_requested_document_types' => array_values(array_unique($missingRequestedTypes)),
+        'missing_requested_sources_message' => aiCopilotAttachmentBuildMissingRequestedSourceMessage($matchedSources, $missingRequestedTypes, $patientName),
+        'all_requested_document_types_attempted' => $requestedDocumentTypes !== [],
+    ];
 }
 
 function aiCopilotLabPdfBuildToolOutputFromRetrieval(array $retrieval, array $options = []): array
 {
+    $requestedDocumentTypes = array_values(array_unique(array_filter(array_map(static fn($item) => aiCopilotAttachmentNormalizeDocumentClass((string) $item), $retrieval['requested_document_types'] ?? []), static fn($item) => $item !== 'non_medical')));
+    $matchedSources = array_values(array_filter($retrieval['matched_sources'] ?? [], 'is_array'));
+    $documentSummaries = array_values(array_filter($retrieval['document_summaries'] ?? [], 'is_array'));
+    $patientKey = (string) ($options['patient_key'] ?? '');
+    $patientName = (string) ($options['patient_name'] ?? '');
+    $requestId = (string) ($options['request_id'] ?? '');
+
+    if ($documentSummaries !== [] || $matchedSources !== []) {
+        $sourceItems = $matchedSources !== [] ? $matchedSources : $documentSummaries;
+        $primarySource = is_array($sourceItems[0] ?? null) ? $sourceItems[0] : [];
+        $isMultiDocument = count($sourceItems) > 1 || count($requestedDocumentTypes) > 1;
+        $labFacts = [];
+        $abnormalFindings = [];
+        $missingData = [];
+        $intakeFields = [];
+
+        foreach ($documentSummaries as $summary) {
+            if ((string) ($summary['document_type'] ?? '') !== 'intake_form') {
+                foreach (($summary['extracted_facts'] ?? []) as $fact) {
+                    if (is_array($fact)) {
+                        $labFacts[] = $fact;
+                    }
+                }
+            }
+            $abnormalFindings = array_merge($abnormalFindings, is_array($summary['abnormal_findings'] ?? null) ? $summary['abnormal_findings'] : []);
+            $missingData = array_merge($missingData, is_array($summary['missing_data'] ?? null) ? $summary['missing_data'] : []);
+            if ($intakeFields === [] && !empty($summary['intake_fields'])) {
+                $intakeFields = is_array($summary['intake_fields']) ? $summary['intake_fields'] : [];
+            }
+        }
+
+        $sourceCoverage = [
+            'requested_document_types' => $requestedDocumentTypes,
+            'matched_sources' => array_map(static function (array $source): array {
+                return [
+                    'source_id' => (string) ($source['source_id'] ?? ''),
+                    'document_type' => (string) ($source['document_type'] ?? ''),
+                    'source_type' => (string) ($source['source_type'] ?? ''),
+                    'original_file_name' => (string) ($source['original_file_name'] ?? ''),
+                    'display_file_name' => (string) ($source['display_file_name'] ?? ''),
+                    'uploaded_at' => (string) ($source['uploaded_at'] ?? ''),
+                    'extraction_method' => (string) ($source['extraction_method'] ?? 'pdf_text'),
+                    'chunk_ids' => array_values(array_filter(array_map('strval', $source['chunk_ids'] ?? []), static fn($item) => trim($item) !== '')),
+                    'chunk_count' => isset($source['chunk_count']) && is_numeric($source['chunk_count']) ? (int) $source['chunk_count'] : count($source['chunk_ids'] ?? []),
+                    'seeded_demo' => !empty($source['seeded_demo']),
+                    'ingestion_origin' => (string) ($source['ingestion_origin'] ?? 'uploaded_file'),
+                ];
+            }, $matchedSources),
+            'missing_requested_document_types' => array_values(array_unique(array_filter(array_map('strval', $retrieval['missing_requested_document_types'] ?? []), static fn($item) => trim($item) !== ''))),
+            'missing_requested_sources_message' => (string) ($retrieval['missing_requested_sources_message'] ?? ''),
+            'all_requested_document_types_attempted' => !empty($retrieval['all_requested_document_types_attempted']),
+        ];
+
+        return aiCopilotLabPdfBuildClientToolOutput([
+            'status' => 'retrieved',
+            'ingestion_status' => 'retrieved',
+            'safe_message' => $isMultiDocument
+                ? 'Retrieved uploaded document context across the requested source documents for clinician review.'
+                : ('Retrieved previously ingested ' . (($primarySource['document_type'] ?? '') === 'intake_form' ? 'intake form' : 'lab results PDF') . ' context for clinician review.'),
+            'extraction_method' => (string) ($primarySource['extraction_method'] ?? 'pdf_text'),
+            'extracted_text_preview' => aiCopilotLabPdfPreview(implode("\n", array_values(array_filter(array_map(static fn($chunk) => is_array($chunk) ? (string) ($chunk['chunk_text'] ?? '') : '', $retrieval['chunks'] ?? []))))),
+            'number_of_chunks' => count($retrieval['chunks'] ?? []),
+            'document_metadata' => [
+                'title' => $isMultiDocument
+                    ? trim(($patientName !== '' ? $patientName . ' ' : '') . 'Uploaded Document Set')
+                    : (string) (($primarySource['display_file_name'] ?? $primarySource['original_file_name'] ?? 'Uploaded Document.pdf')),
+                'mime_type' => 'application/pdf',
+                'size' => null,
+                'document_type' => $isMultiDocument ? 'combined_documents' : (string) ($primarySource['document_type'] ?? 'lab_results'),
+                'seeded_demo' => !empty($primarySource['seeded_demo']),
+                'patient_key' => $patientKey,
+                'patient_name' => $patientName,
+                'uploaded_at' => (string) ($primarySource['uploaded_at'] ?? ''),
+                'original_file_name' => (string) ($primarySource['original_file_name'] ?? ''),
+                'display_file_name' => (string) (($primarySource['display_file_name'] ?? $primarySource['original_file_name'] ?? '')),
+                'source_id' => (string) ($primarySource['source_id'] ?? ''),
+                'requested_document_types' => $requestedDocumentTypes,
+            ],
+            'source_metadata' => [
+                'file_name' => (string) (($primarySource['display_file_name'] ?? $primarySource['original_file_name'] ?? '')),
+                'original_file_name' => (string) ($primarySource['original_file_name'] ?? ''),
+                'display_file_name' => (string) (($primarySource['display_file_name'] ?? $primarySource['original_file_name'] ?? '')),
+                'uploaded_at' => (string) ($primarySource['uploaded_at'] ?? ''),
+                'source_type' => $isMultiDocument ? 'multi_document' : (string) ($primarySource['source_type'] ?? aiCopilotAttachmentLegacySourceType((string) ($primarySource['document_type'] ?? 'lab_results'))),
+                'document_type' => $isMultiDocument ? 'combined_documents' : (string) ($primarySource['document_type'] ?? 'lab_results'),
+                'source_label' => $isMultiDocument ? 'Uploaded documents' : aiCopilotAttachmentSourceLabel((string) ($primarySource['source_type'] ?? aiCopilotAttachmentLegacySourceType((string) ($primarySource['document_type'] ?? 'lab_results')))),
+                'chunk_count' => count($retrieval['chunks'] ?? []),
+                'request_id' => $requestId,
+                'source_id' => (string) ($primarySource['source_id'] ?? ''),
+            ],
+            'extracted_facts' => array_slice($labFacts, 0, 12),
+            'abnormal_findings' => array_slice(array_values(array_unique(array_map('strval', $abnormalFindings))), 0, 8),
+            'missing_data' => array_values(array_unique(array_filter(array_map('strval', array_merge($missingData, [(string) ($retrieval['missing_requested_sources_message'] ?? '')])), static fn($item) => trim($item) !== ''))),
+            'missing_data_flags' => array_values(array_unique(array_filter(array_map('strval', array_merge($missingData, [(string) ($retrieval['missing_requested_sources_message'] ?? '')])), static fn($item) => trim($item) !== ''))),
+            'intake_fields' => $intakeFields,
+            'retrieval' => [
+                'chunk_ids' => $retrieval['chunk_ids'] ?? [],
+                'chunk_count' => $retrieval['chunk_count'] ?? 0,
+                'chunks' => $retrieval['chunks'] ?? [],
+            ],
+            'vectorized_result' => aiCopilotLabPdfBuildVectorizedResult($retrieval['chunks'] ?? []),
+            'source_coverage' => $sourceCoverage,
+            'document_summaries' => $documentSummaries,
+        ]);
+    }
+
     $combinedText = implode("\n", array_values(array_filter(array_map(static fn($chunk) => is_array($chunk) ? (string) ($chunk['chunk_text'] ?? '') : '', $retrieval['chunks'] ?? []))));
-    $factSummary = aiCopilotLabPdfExtractFacts($combinedText);
     $firstChunk = is_array($retrieval['chunks'][0] ?? null) ? $retrieval['chunks'][0] : [];
-    $documentTitle = (string) ($options['file_name'] ?? ($firstChunk['file_name'] ?? 'Uploaded lab PDF'));
+    $legacyDocumentType = aiCopilotAttachmentClassifyDocumentType(
+        (string) ($options['file_name'] ?? ($firstChunk['original_file_name'] ?? $firstChunk['file_name'] ?? '')),
+        $combinedText
+    );
+    $documentType = aiCopilotAttachmentNormalizeDocumentClass(
+        (string) ($firstChunk['document_type'] ?? $legacyDocumentType),
+        (string) ($options['file_name'] ?? ($firstChunk['original_file_name'] ?? $firstChunk['file_name'] ?? '')),
+        $combinedText
+    );
+    $documentTitle = (string) ($options['display_file_name'] ?? ($firstChunk['display_file_name'] ?? $options['file_name'] ?? ($firstChunk['file_name'] ?? aiCopilotAttachmentSourceTitle($legacyDocumentType))));
+    $originalFileName = (string) ($options['file_name'] ?? ($firstChunk['original_file_name'] ?? $firstChunk['file_name'] ?? $documentTitle));
     $uploadedAt = (string) ($options['uploaded_at'] ?? ($firstChunk['uploaded_at'] ?? ''));
+    $extractionMethod = (string) ($firstChunk['extraction_method'] ?? 'pdf_text');
+    $sourceId = (string) ($options['source_id'] ?? ($firstChunk['source_id'] ?? aiCopilotAttachmentBuildSourceId((string) ($options['patient_key'] ?? ''), $documentType, $originalFileName, $uploadedAt)));
+
+    if ($documentType === 'intake_form') {
+        $intakeSummary = aiCopilotIntakeExtractFields($combinedText);
+        $retrievalChunkIds = $retrieval['chunk_ids'] ?? [];
+        return aiCopilotLabPdfBuildClientToolOutput([
+            'status' => 'retrieved',
+            'ingestion_status' => 'retrieved',
+            'safe_message' => 'Retrieved previously ingested intake form context for clinician review.',
+            'extraction_method' => $extractionMethod,
+            'extracted_text_preview' => aiCopilotLabPdfPreview($combinedText),
+            'number_of_chunks' => isset($options['chunk_count']) && is_numeric($options['chunk_count']) ? (int) $options['chunk_count'] : count($retrieval['chunks'] ?? []),
+            'document_metadata' => [
+                'title' => $documentTitle,
+                'mime_type' => 'application/pdf',
+                'size' => null,
+                'document_type' => 'intake_form',
+                'seeded_demo' => !empty($options['seeded_demo']),
+                'patient_key' => (string) ($options['patient_key'] ?? ''),
+                'patient_name' => (string) ($options['patient_name'] ?? ''),
+                'uploaded_at' => $uploadedAt,
+                'original_file_name' => $originalFileName,
+                'display_file_name' => $documentTitle,
+                'source_id' => $sourceId,
+            ],
+            'source_metadata' => [
+                'file_name' => $documentTitle,
+                'original_file_name' => $originalFileName,
+                'display_file_name' => $documentTitle,
+                'uploaded_at' => $uploadedAt,
+                'source_type' => 'intake_form',
+                'document_type' => 'intake_form',
+                'source_label' => 'Uploaded intake form',
+                'chunk_count' => count($retrieval['chunks'] ?? []),
+                'request_id' => (string) ($options['request_id'] ?? ''),
+                'source_id' => $sourceId,
+            ],
+            'extracted_facts' => array_slice($intakeSummary['facts'], 0, 12),
+            'missing_data' => array_values(array_unique($intakeSummary['missing'])),
+            'missing_data_flags' => array_values(array_unique($intakeSummary['missing'])),
+            'intake_fields' => aiCopilotBuildIntakeFieldsPayload($intakeSummary['fields'], [
+                'missing' => $intakeSummary['missing'] ?? [],
+                'source_file' => $documentTitle,
+                'source_chunk_ids' => $retrievalChunkIds,
+                'uploaded_timestamp' => $uploadedAt,
+                'ingestion_status' => 'retrieved',
+            ]),
+            'retrieval' => [
+                'chunk_ids' => $retrievalChunkIds,
+                'chunk_count' => $retrieval['chunk_count'] ?? 0,
+                'chunks' => $retrieval['chunks'] ?? [],
+            ],
+            'vectorized_result' => aiCopilotLabPdfBuildVectorizedResult($retrieval['chunks'] ?? []),
+        ]);
+    }
+
+    $factSummary = aiCopilotLabPdfExtractFacts($combinedText);
 
     return aiCopilotLabPdfBuildClientToolOutput([
         'status' => 'retrieved',
         'ingestion_status' => 'retrieved',
         'safe_message' => 'Retrieved previously ingested lab PDF context for clinician review.',
-        'extraction_method' => (string) ($firstChunk['extraction_method'] ?? 'pdf_text'),
+        'extraction_method' => $extractionMethod,
         'extracted_text_preview' => aiCopilotLabPdfPreview($combinedText),
         'number_of_chunks' => isset($options['chunk_count']) && is_numeric($options['chunk_count']) ? (int) $options['chunk_count'] : count($retrieval['chunks'] ?? []),
         'document_metadata' => [
             'title' => $documentTitle,
             'mime_type' => 'application/pdf',
             'size' => null,
+            'document_type' => $documentType,
             'seeded_demo' => !empty($options['seeded_demo']),
             'patient_key' => (string) ($options['patient_key'] ?? ''),
             'patient_name' => (string) ($options['patient_name'] ?? ''),
             'uploaded_at' => $uploadedAt,
+            'original_file_name' => $originalFileName,
+            'display_file_name' => $documentTitle,
+            'source_id' => $sourceId,
         ],
         'source_metadata' => [
             'file_name' => $documentTitle,
+            'original_file_name' => $originalFileName,
+            'display_file_name' => $documentTitle,
             'uploaded_at' => $uploadedAt,
             'source_type' => 'lab_pdf',
+            'document_type' => $documentType,
             'source_label' => 'Uploaded lab PDF',
             'chunk_count' => count($retrieval['chunks'] ?? []),
             'request_id' => (string) ($options['request_id'] ?? ''),
+            'source_id' => $sourceId,
         ],
         'extracted_facts' => array_slice($factSummary['facts'], 0, 12),
         'abnormal_findings' => array_slice($factSummary['abnormal'], 0, 8),
@@ -715,21 +1788,29 @@ function attach_and_vectorize_lab_pdf(array $options): array
     $prompt = trim((string) ($options['prompt'] ?? ''));
     $useSeededDemo = !empty($options['use_seeded_demo']) || !empty($options['useSeededDemo']);
     $file = is_array($options['file'] ?? null) ? $options['file'] : null;
+    $attachmentPurpose = trim((string) ($options['attachment_purpose'] ?? 'lab_pdf_ingestion'));
     $uploadedAt = gmdate('c');
-    $fileName = $useSeededDemo ? AI_COPILOT_LAB_PDF_SEEDED_FILE_NAME : (string) ($file['name'] ?? 'attached-lab-report.pdf');
+    $fileName = $useSeededDemo ? AI_COPILOT_LAB_PDF_SEEDED_FILE_NAME : (string) ($file['name'] ?? 'attached-document.pdf');
     $mimeType = $useSeededDemo ? 'application/pdf' : (string) ($file['type'] ?? 'application/pdf');
     $fileSize = $useSeededDemo ? null : (isset($file['size']) && is_numeric($file['size']) ? (int) $file['size'] : null);
+    $documentType = $useSeededDemo ? 'lab_pdf' : aiCopilotAttachmentClassifyDocumentType($fileName, '', $attachmentPurpose);
+    $documentClass = aiCopilotAttachmentNormalizeDocumentClass($documentType, $fileName);
+    $sourceLabel = aiCopilotAttachmentSourceLabel($documentType);
+    $displayFileName = aiCopilotAttachmentBuildDisplayFileName($fileName, $documentClass, $patientName);
+    $sourceId = aiCopilotAttachmentBuildSourceId($patientKey, $documentClass, $fileName, $uploadedAt);
+    $ingestionOrigin = $useSeededDemo ? 'seeded_demo' : 'uploaded_file';
 
     if ($role !== 'doctor') {
         return aiCopilotLabPdfBuildClientToolOutput([
             'status' => 'role_blocked',
             'ingestion_status' => 'blocked',
-            'safe_message' => 'Lab PDF ingestion is restricted to the Doctor role in this demo workflow.',
+            'safe_message' => 'Document ingestion is restricted to the Doctor role in this demo workflow.',
             'extraction_method' => 'not_run',
             'document_metadata' => [
                 'title' => $fileName,
                 'mime_type' => 'application/pdf',
                 'size' => $fileSize,
+                'document_type' => $documentType,
                 'seeded_demo' => $useSeededDemo,
                 'patient_key' => $patientKey,
                 'patient_name' => $patientName,
@@ -738,13 +1819,13 @@ function attach_and_vectorize_lab_pdf(array $options): array
             'source_metadata' => [
                 'file_name' => $fileName,
                 'uploaded_at' => $uploadedAt,
-                'source_type' => 'lab_pdf',
-                'source_label' => 'Uploaded lab PDF',
+                'source_type' => $documentType,
+                'source_label' => $sourceLabel,
                 'chunk_count' => 0,
                 'request_id' => $requestId,
             ],
-            'missing_data' => ['Lab PDF ingestion requires a clinician review role.'],
-            'missing_data_flags' => ['Lab PDF ingestion requires a clinician review role.'],
+            'missing_data' => ['Document ingestion requires a clinician review role.'],
+            'missing_data_flags' => ['Document ingestion requires a clinician review role.'],
         ]);
     }
 
@@ -753,27 +1834,28 @@ function attach_and_vectorize_lab_pdf(array $options): array
             return aiCopilotLabPdfBuildClientToolOutput([
                 'status' => 'invalid_file_type',
                 'ingestion_status' => 'rejected',
-                'safe_message' => 'Please attach a PDF file for the lab-ingestion workflow.',
+                'safe_message' => 'Please attach a PDF file for the document-ingestion workflow.',
                 'extraction_method' => 'not_run',
-                'document_metadata' => [
-                    'title' => $fileName,
-                    'mime_type' => $mimeType !== '' ? $mimeType : 'application/octet-stream',
-                    'size' => $fileSize,
-                    'seeded_demo' => false,
-                    'patient_key' => $patientKey,
-                    'patient_name' => $patientName,
-                    'uploaded_at' => $uploadedAt,
-                ],
-                'source_metadata' => [
-                    'file_name' => $fileName,
-                    'uploaded_at' => $uploadedAt,
-                    'source_type' => 'lab_pdf',
-                    'source_label' => 'Uploaded lab PDF',
-                    'chunk_count' => 0,
-                    'request_id' => $requestId,
-                ],
-                'missing_data' => ['The uploaded file was not a PDF.'],
-                'missing_data_flags' => ['The uploaded file was not a PDF.'],
+            'document_metadata' => [
+                'title' => $fileName,
+                'mime_type' => $mimeType !== '' ? $mimeType : 'application/octet-stream',
+                'size' => $fileSize,
+                'document_type' => $documentType,
+                'seeded_demo' => false,
+                'patient_key' => $patientKey,
+                'patient_name' => $patientName,
+                'uploaded_at' => $uploadedAt,
+            ],
+            'source_metadata' => [
+                'file_name' => $fileName,
+                'uploaded_at' => $uploadedAt,
+                'source_type' => $documentType,
+                'source_label' => $sourceLabel,
+                'chunk_count' => 0,
+                'request_id' => $requestId,
+            ],
+            'missing_data' => ['The uploaded file was not a PDF.'],
+            'missing_data_flags' => ['The uploaded file was not a PDF.'],
             ]);
         }
     }
@@ -784,72 +1866,327 @@ function attach_and_vectorize_lab_pdf(array $options): array
     $missingData = [];
     $promptInjectionMatches = [];
     $factSummary = [];
+    $intakeSummary = [];
     $syntheticMarcusPdf = false;
+    $syntheticMarcusIntake = false;
+    $documentGuard = [];
 
     if ($useSeededDemo) {
         $text = aiCopilotLabPdfSeededText();
         $missingData = aiCopilotLabPdfSeededMissingData();
         $factSummary = aiCopilotLabPdfSeededFacts();
         $textForVectorization = aiCopilotLabPdfBuildGroundedFactText($factSummary);
+        $documentGuard = aiCopilotMedicalGuardBuildPayload([
+            'decision' => 'allowed',
+            'documentType' => 'lab_results',
+            'confidence' => 0.99,
+            'extractedTextPreview' => aiCopilotLabPdfPreview($text),
+            'detectedEntitySummary' => [
+                'totalEntities' => 4,
+                'highConfidenceEntityCount' => 4,
+                'highConfidenceEntities' => [
+                    ['text' => 'Hemoglobin A1c', 'category' => 'TEST_NAME', 'score' => 0.99],
+                    ['text' => 'LDL Cholesterol', 'category' => 'TEST_NAME', 'score' => 0.99],
+                ],
+                'categoryCounts' => ['TEST_NAME' => 4],
+                'averageScore' => 0.99,
+                'minimumScore' => 0.70,
+                'medicalEntityCount' => 4,
+            ],
+            'guardProvider' => 'seeded_demo_guard',
+            'extractionMethod' => 'seeded_demo_fallback',
+            'textractStatus' => 'not_run',
+            'comprehendStatus' => 'not_run',
+            'awsGuardEnabled' => false,
+            'auditEvents' => [
+                'copilot_document_guard_started',
+                'copilot_document_guard_allowed',
+            ],
+        ]);
     } else {
         $tmpName = (string) ($file['tmp_name'] ?? '');
         $binary = ($tmpName !== '' && is_file($tmpName)) ? file_get_contents($tmpName) : false;
+        $syntheticMarcusPdf = aiCopilotLabPdfIsSyntheticMarcusJohnsonPdf($fileName);
+        $syntheticMarcusIntake = aiCopilotIntakeIsSyntheticMarcusJohnsonForm($fileName);
+        aiCopilotMedicalGuardLog('copilot_upload_received', [
+            'request_id' => $requestId,
+            'role' => $role,
+            'patient_key' => $patientKey,
+            'file_name' => basename($fileName),
+        ]);
         if (!is_string($binary) || $binary === '') {
-            return aiCopilotLabPdfBuildReviewRequiredOutput(
-                $fileName,
-                $fileSize,
-                false,
-                $patientKey,
-                $patientName,
-                $uploadedAt,
-                $requestId,
-                'pdf_text_unavailable',
-                ['The uploaded PDF could not be read for reliable text extraction.']
-            );
+            if ($syntheticMarcusPdf) {
+                $text = aiCopilotLabPdfSeededText();
+                $extractionMethod = 'synthetic_marcus_demo';
+                $documentType = 'lab_pdf';
+                $sourceLabel = aiCopilotAttachmentSourceLabel($documentType);
+                $missingData = aiCopilotLabPdfSeededMissingData();
+                $factSummary = aiCopilotLabPdfSeededFacts();
+                $textForVectorization = aiCopilotLabPdfBuildGroundedFactText($factSummary);
+                $documentGuard = aiCopilotMedicalGuardBuildPayload([
+                    'decision' => 'allowed',
+                    'documentType' => 'lab_results',
+                    'confidence' => 0.99,
+                    'extractedTextPreview' => aiCopilotLabPdfPreview($text),
+                    'detectedEntitySummary' => [
+                        'totalEntities' => 4,
+                        'highConfidenceEntityCount' => 4,
+                        'highConfidenceEntities' => [
+                            ['text' => 'Hemoglobin A1c', 'category' => 'TEST_NAME', 'score' => 0.99],
+                            ['text' => 'LDL Cholesterol', 'category' => 'TEST_NAME', 'score' => 0.99],
+                        ],
+                        'categoryCounts' => ['TEST_NAME' => 4],
+                        'averageScore' => 0.99,
+                        'minimumScore' => 0.70,
+                        'medicalEntityCount' => 4,
+                    ],
+                    'guardProvider' => 'synthetic_demo_guard',
+                    'extractionMethod' => 'synthetic_marcus_demo',
+                    'textractStatus' => 'not_run',
+                    'comprehendStatus' => 'not_run',
+                    'awsGuardEnabled' => false,
+                    'auditEvents' => [
+                        'copilot_document_guard_started',
+                        'copilot_document_guard_allowed',
+                    ],
+                ]);
+            } elseif ($syntheticMarcusIntake) {
+                $text = aiCopilotIntakeSeededText();
+                $extractionMethod = 'synthetic_marcus_intake_demo';
+                $documentType = 'intake_form';
+                $sourceLabel = aiCopilotAttachmentSourceLabel($documentType);
+                $intakeSummary = aiCopilotIntakeExtractFields($text);
+                $missingData = array_values(array_unique(array_merge(
+                    aiCopilotIntakeSeededMissingData(),
+                    $intakeSummary['missing'] ?? []
+                )));
+                $textForVectorization = aiCopilotIntakeBuildGroundedText($intakeSummary);
+                $documentGuard = aiCopilotMedicalGuardBuildPayload([
+                    'decision' => 'allowed',
+                    'documentType' => 'intake_form',
+                    'confidence' => 0.99,
+                    'extractedTextPreview' => aiCopilotLabPdfPreview($text),
+                    'detectedEntitySummary' => [
+                        'totalEntities' => 5,
+                        'highConfidenceEntityCount' => 5,
+                        'highConfidenceEntities' => [
+                            ['text' => 'Reason for visit', 'category' => 'INTAKE_FIELD', 'score' => 0.99],
+                            ['text' => 'Medication adherence', 'category' => 'INTAKE_FIELD', 'score' => 0.99],
+                        ],
+                        'categoryCounts' => ['INTAKE_FIELD' => 5],
+                        'averageScore' => 0.99,
+                        'minimumScore' => 0.70,
+                        'medicalEntityCount' => 5,
+                    ],
+                    'guardProvider' => 'synthetic_demo_guard',
+                    'extractionMethod' => 'synthetic_marcus_intake_demo',
+                    'textractStatus' => 'not_run',
+                    'comprehendStatus' => 'not_run',
+                    'awsGuardEnabled' => false,
+                    'auditEvents' => [
+                        'copilot_document_guard_started',
+                        'copilot_document_guard_allowed',
+                    ],
+                ]);
+            } else {
+                $reviewOutput = $documentType === 'intake_form'
+                    ? aiCopilotIntakeBuildReviewRequiredOutput(
+                        $fileName,
+                        $fileSize,
+                        false,
+                        $patientKey,
+                        $patientName,
+                        $uploadedAt,
+                        $requestId,
+                        'pdf_text_unavailable',
+                        ['The uploaded intake form PDF could not be read for reliable text extraction.']
+                    )
+                    : aiCopilotLabPdfBuildReviewRequiredOutput(
+                        $fileName,
+                        $fileSize,
+                        false,
+                        $patientKey,
+                        $patientName,
+                        $uploadedAt,
+                        $requestId,
+                        'pdf_text_unavailable',
+                        ['The uploaded PDF could not be read for reliable text extraction.']
+                    );
+                $reviewOutput['document_guard'] = aiCopilotMedicalGuardBuildPayload([
+                    'decision' => 'review_required',
+                    'documentType' => 'unknown',
+                    'confidence' => 0.0,
+                    'extractedTextPreview' => '',
+                    'detectedEntitySummary' => [
+                        'totalEntities' => 0,
+                        'highConfidenceEntityCount' => 0,
+                        'highConfidenceEntities' => [],
+                        'averageScore' => 0.0,
+                        'minimumScore' => 0.70,
+                        'medicalEntityCount' => 0,
+                    ],
+                    'rejectionReason' => 'The uploaded PDF file was not available for medical-document validation.',
+                    'guardProvider' => 'local_validation_fallback',
+                    'extractionMethod' => 'pdf_text_unavailable',
+                    'textractStatus' => 'not_run',
+                    'comprehendStatus' => 'not_run',
+                    'awsGuardEnabled' => aiCopilotMedicalGuardEnabled(),
+                    'auditEvents' => [
+                        'copilot_document_guard_started',
+                        'copilot_document_guard_review_required',
+                        'copilot_vectorization_blocked',
+                    ],
+                ]);
+                return $reviewOutput;
+            }
         }
 
-        $extracted = aiCopilotLabPdfExtractTextFromBinary($binary);
-        $text = (string) ($extracted['text'] ?? '');
-        $extractionMethod = (string) ($extracted['extraction_method'] ?? 'pdf_text');
-        $promptInjectionMatches = aiCopilotLabPdfPromptInjectionMatches($text);
-        $syntheticMarcusPdf = aiCopilotLabPdfIsSyntheticMarcusJohnsonPdf($fileName, $text);
-        if ($syntheticMarcusPdf) {
-            $text = aiCopilotLabPdfSeededText();
-            $extractionMethod = 'synthetic_marcus_demo';
-            $missingData = aiCopilotLabPdfSeededMissingData();
-            $factSummary = aiCopilotLabPdfSeededFacts();
-            $textForVectorization = aiCopilotLabPdfBuildGroundedFactText($factSummary);
-        } else {
-            $factSummary = aiCopilotLabPdfExtractFacts($text, [
+        if (is_string($binary) && $binary !== '') {
+            $extracted = aiCopilotLabPdfExtractTextFromBinary($binary);
+            $provisionalText = (string) ($extracted['text'] ?? '');
+            $documentGuardResult = aiCopilotValidateMedicalDocumentGuard([
+                'request_id' => $requestId,
                 'file_name' => $fileName,
+                'mime_type' => $mimeType,
+                'file_size' => $fileSize,
+                'tmp_name' => $tmpName,
+                'patient_key' => $patientKey,
+                'patient_name' => $patientName,
+                'role' => $role,
+                'text' => $provisionalText,
+                'fallback_text' => $provisionalText,
             ]);
-            $textForVectorization = aiCopilotLabPdfBuildGroundedFactText($factSummary);
-            $missingData = array_values(array_unique(array_merge(
-                $missingData,
-                $factSummary['missing'] ?? []
-            )));
+            $documentGuard = aiCopilotMedicalGuardBuildPayload($documentGuardResult);
+            $guardDecision = (string) ($documentGuardResult['decision'] ?? 'review_required');
+            $guardWorkflowSourceType = aiCopilotMedicalGuardWorkflowSourceType((string) ($documentGuardResult['documentType'] ?? 'unknown'));
 
-            if (
-                $text === ''
-                || strlen($text) < 24
-                || empty($factSummary['valid_row_count'])
-            ) {
-                return aiCopilotLabPdfBuildReviewRequiredOutput(
+            if ($guardDecision !== 'allowed') {
+                return aiCopilotMedicalGuardBuildBlockedOutput(
+                    $guardDecision === 'rejected' ? 'document_guard_rejected' : 'document_guard_review_required',
+                    $documentGuardResult,
                     $fileName,
+                    $mimeType,
                     $fileSize,
-                    false,
                     $patientKey,
                     $patientName,
                     $uploadedAt,
                     $requestId,
-                    $extractionMethod !== '' ? $extractionMethod : 'pdf_text',
-                    array_merge(
-                        $missingData,
-                        !empty($factSummary['rejected_lines']) ? ['Detected extracted rows did not match reliable lab test patterns.'] : [],
-                        $text === '' || strlen($text) < 24 ? ['Extracted PDF text was insufficient for reliable lab parsing.'] : []
-                    ),
-                    $promptInjectionMatches
+                    []
                 );
+            }
+
+            if ($guardWorkflowSourceType === 'medical_document' || $guardWorkflowSourceType === 'unknown') {
+                $documentGuardResult['decision'] = 'review_required';
+                $documentGuardResult['rejectionReason'] = 'Medical document detected, but this demo ingestion workflow currently supports lab results and intake forms only. Review required before ingestion.';
+                return aiCopilotMedicalGuardBuildBlockedOutput(
+                    'document_guard_review_required',
+                    $documentGuardResult,
+                    $fileName,
+                    $mimeType,
+                    $fileSize,
+                    $patientKey,
+                    $patientName,
+                    $uploadedAt,
+                    $requestId,
+                    []
+                );
+            }
+
+            $text = aiCopilotMedicalGuardNormalizeText((string) ($documentGuardResult['extractedText'] ?? ''));
+            if ($text === '') {
+                $text = $provisionalText;
+            }
+            $extractionMethod = aiCopilotMedicalGuardNormalizeText((string) ($documentGuardResult['extractionMethod'] ?? ''));
+            if ($extractionMethod === '') {
+                $extractionMethod = (string) ($extracted['extraction_method'] ?? 'pdf_text');
+            }
+
+            $promptInjectionMatches = aiCopilotLabPdfPromptInjectionMatches($text);
+            $documentType = $guardWorkflowSourceType === 'intake_form' ? 'intake_form' : 'lab_pdf';
+            $sourceLabel = aiCopilotAttachmentSourceLabel($documentType);
+            $syntheticMarcusPdf = aiCopilotLabPdfIsSyntheticMarcusJohnsonPdf($fileName, $text);
+            $syntheticMarcusIntake = aiCopilotIntakeIsSyntheticMarcusJohnsonForm($fileName, $text);
+            if ($syntheticMarcusPdf) {
+                $text = aiCopilotLabPdfSeededText();
+                $extractionMethod = 'synthetic_marcus_demo';
+                $documentType = 'lab_pdf';
+                $sourceLabel = aiCopilotAttachmentSourceLabel($documentType);
+                $missingData = aiCopilotLabPdfSeededMissingData();
+                $factSummary = aiCopilotLabPdfSeededFacts();
+                $textForVectorization = aiCopilotLabPdfBuildGroundedFactText($factSummary);
+            } elseif ($syntheticMarcusIntake) {
+                $text = aiCopilotIntakeSeededText();
+                $extractionMethod = 'synthetic_marcus_intake_demo';
+                $documentType = 'intake_form';
+                $sourceLabel = aiCopilotAttachmentSourceLabel($documentType);
+                $intakeSummary = aiCopilotIntakeExtractFields($text);
+                $missingData = array_values(array_unique(array_merge(
+                    aiCopilotIntakeSeededMissingData(),
+                    $intakeSummary['missing'] ?? []
+                )));
+                $textForVectorization = aiCopilotIntakeBuildGroundedText($intakeSummary);
+            } elseif ($documentType === 'intake_form') {
+                $intakeSummary = aiCopilotIntakeExtractFields($text);
+                $textForVectorization = aiCopilotIntakeBuildGroundedText($intakeSummary);
+                $missingData = array_values(array_unique(array_merge(
+                    $missingData,
+                    $intakeSummary['missing'] ?? []
+                )));
+
+                if ($text === '' || strlen($text) < 24 || empty($intakeSummary['valid_field_count'])) {
+                    $reviewOutput = aiCopilotIntakeBuildReviewRequiredOutput(
+                        $fileName,
+                        $fileSize,
+                        false,
+                        $patientKey,
+                        $patientName,
+                        $uploadedAt,
+                        $requestId,
+                        $extractionMethod !== '' ? $extractionMethod : 'pdf_text',
+                        array_merge(
+                            $missingData,
+                            !empty($intakeSummary['rejected_lines']) ? ['Detected extracted rows did not match reliable intake field patterns.'] : [],
+                            $text === '' || strlen($text) < 24 ? ['Extracted PDF text was insufficient for reliable intake parsing.'] : []
+                        ),
+                        $promptInjectionMatches
+                    );
+                    $reviewOutput['document_guard'] = $documentGuard;
+                    return $reviewOutput;
+                }
+            } else {
+                $factSummary = aiCopilotLabPdfExtractFacts($text, [
+                    'file_name' => $fileName,
+                ]);
+                $textForVectorization = aiCopilotLabPdfBuildGroundedFactText($factSummary);
+                $missingData = array_values(array_unique(array_merge(
+                    $missingData,
+                    $factSummary['missing'] ?? []
+                )));
+
+                if (
+                    $text === ''
+                    || strlen($text) < 24
+                    || empty($factSummary['valid_row_count'])
+                ) {
+                    $reviewOutput = aiCopilotLabPdfBuildReviewRequiredOutput(
+                        $fileName,
+                        $fileSize,
+                        false,
+                        $patientKey,
+                        $patientName,
+                        $uploadedAt,
+                        $requestId,
+                        $extractionMethod !== '' ? $extractionMethod : 'pdf_text',
+                        array_merge(
+                            $missingData,
+                            !empty($factSummary['rejected_lines']) ? ['Detected extracted rows did not match reliable lab test patterns.'] : [],
+                            $text === '' || strlen($text) < 24 ? ['Extracted PDF text was insufficient for reliable lab parsing.'] : []
+                        ),
+                        $promptInjectionMatches
+                    );
+                    $reviewOutput['document_guard'] = $documentGuard;
+                    return $reviewOutput;
+                }
             }
         }
     }
@@ -858,15 +2195,24 @@ function attach_and_vectorize_lab_pdf(array $options): array
         $missingData[] = 'Instruction-like text was detected in the uploaded PDF and treated as untrusted document content rather than instructions.';
     }
 
-    if ($factSummary === []) {
+    if ($documentType === 'lab_pdf' && $factSummary === []) {
         $factSummary = aiCopilotLabPdfExtractFacts($text, [
             'file_name' => $fileName,
             'use_synthetic_marcus' => $syntheticMarcusPdf || $useSeededDemo,
         ]);
     }
-    if ($textForVectorization === '') {
-        $textForVectorization = aiCopilotLabPdfBuildGroundedFactText($factSummary);
+    if ($documentType === 'intake_form' && $intakeSummary === []) {
+        $intakeSummary = aiCopilotIntakeExtractFields($text);
     }
+    if ($documentType === 'lab_pdf' && $textForVectorization === '') {
+        $textForVectorization = aiCopilotLabPdfBuildGroundedFactText($factSummary);
+    } elseif ($documentType === 'intake_form' && $textForVectorization === '') {
+        $textForVectorization = aiCopilotIntakeBuildGroundedText($intakeSummary);
+    }
+
+    $documentClass = aiCopilotAttachmentNormalizeDocumentClass($documentType, $fileName, $textForVectorization !== '' ? $textForVectorization : $text);
+    $displayFileName = aiCopilotAttachmentBuildDisplayFileName($fileName, $documentClass, $patientName);
+    $sourceId = aiCopilotAttachmentBuildSourceId($patientKey, $documentClass, $fileName, $uploadedAt);
 
     $chunks = aiCopilotLabPdfChunkText($textForVectorization !== '' ? $textForVectorization : $text);
     $records = [];
@@ -876,23 +2222,93 @@ function attach_and_vectorize_lab_pdf(array $options): array
             'patient_key' => $patientKey,
             'patient_display_name' => $patientName,
             'file_name' => $fileName,
+            'original_file_name' => $fileName,
+            'display_file_name' => $displayFileName,
             'chunk_text' => (string) ($chunk['chunk_text'] ?? ''),
             'chunk_index' => $chunk['chunk_index'] ?? 0,
             'source_page' => $chunk['source_page'] ?? null,
             'uploaded_at' => $uploadedAt,
             'role' => ucfirst($role),
             'extraction_method' => $extractionMethod,
+            'source_type' => $documentType,
+            'document_type' => $documentClass,
+            'source_label' => $sourceLabel,
+            'record_prefix' => $documentType === 'intake_form' ? 'intakeform' : 'labpdf',
+            'source_id' => $sourceId,
+            'seeded_demo' => $useSeededDemo || $syntheticMarcusPdf || $syntheticMarcusIntake,
+            'ingestion_origin' => $ingestionOrigin,
         ]);
     }
     aiCopilotLabPdfUpsertVectorRecords($records);
 
-    $missingData = array_values(array_unique(array_merge($missingData, $factSummary['missing'] ?? [])));
+    if ($documentType === 'lab_pdf') {
+        $missingData = array_values(array_unique(array_merge($missingData, $factSummary['missing'] ?? [])));
+    } else {
+        $missingData = array_values(array_unique(array_merge($missingData, $intakeSummary['missing'] ?? [])));
+    }
     $retrieval = aiCopilotLabPdfRetrieveRelevantChunks([
         'patient_key' => $patientKey,
         'prompt' => $prompt !== '' ? $prompt : ($textForVectorization !== '' ? $textForVectorization : $text),
         'file_name' => $fileName,
         'limit' => 4,
     ]);
+
+    if ($documentType === 'intake_form') {
+        $retrievalChunkIds = $retrieval['chunk_ids'] ?? [];
+        return aiCopilotLabPdfBuildClientToolOutput([
+            'status' => $syntheticMarcusIntake ? 'synthetic_demo_fallback' : 'ok',
+            'ingestion_status' => 'ingested',
+            'safe_message' => $syntheticMarcusIntake
+                ? 'Using deterministic Marcus Johnson demo intake-form extraction through the same ingestion and retrieval pipeline.'
+                : 'Intake form ingested and vectorized for draft-only clinician review.',
+            'extraction_method' => $extractionMethod,
+            'extracted_text_preview' => aiCopilotLabPdfPreview($textForVectorization !== '' ? $textForVectorization : $text),
+            'number_of_chunks' => count($chunks),
+            'document_metadata' => [
+                'title' => $displayFileName,
+                'mime_type' => 'application/pdf',
+                'size' => $fileSize,
+                'document_type' => $documentClass,
+                'seeded_demo' => $syntheticMarcusIntake,
+                'patient_key' => $patientKey,
+                'patient_name' => $patientName,
+                'uploaded_at' => $uploadedAt,
+                'original_file_name' => $fileName,
+                'display_file_name' => $displayFileName,
+                'source_id' => $sourceId,
+            ],
+            'source_metadata' => [
+                'file_name' => $displayFileName,
+                'original_file_name' => $fileName,
+                'display_file_name' => $displayFileName,
+                'uploaded_at' => $uploadedAt,
+                'source_type' => 'intake_form',
+                'document_type' => $documentClass,
+                'source_label' => 'Uploaded intake form',
+                'chunk_count' => count($chunks),
+                'request_id' => $requestId,
+                'source_id' => $sourceId,
+            ],
+            'extracted_facts' => array_slice($intakeSummary['facts'] ?? [], 0, 12),
+            'missing_data' => $missingData,
+            'missing_data_flags' => $missingData,
+            'intake_fields' => aiCopilotBuildIntakeFieldsPayload($intakeSummary['fields'] ?? [], [
+                'missing' => $missingData,
+                'source_file' => $displayFileName,
+                'source_chunk_ids' => $retrievalChunkIds,
+                'uploaded_timestamp' => $uploadedAt,
+                'ingestion_status' => 'ingested',
+            ]),
+            'retrieval' => [
+                'chunk_ids' => $retrievalChunkIds,
+                'chunk_count' => $retrieval['chunk_count'] ?? 0,
+                'chunks' => $retrieval['chunks'] ?? [],
+            ],
+            'vectorized_result' => aiCopilotLabPdfBuildVectorizedResult($records),
+            'document_guard' => $documentGuard,
+            'prompt_injection_matches' => $promptInjectionMatches,
+        ]);
+    }
 
     return aiCopilotLabPdfBuildClientToolOutput([
         'status' => $useSeededDemo ? 'seeded_demo_fallback' : 'ok',
@@ -906,21 +2322,29 @@ function attach_and_vectorize_lab_pdf(array $options): array
         'extracted_text_preview' => aiCopilotLabPdfPreview($textForVectorization !== '' ? $textForVectorization : $text),
         'number_of_chunks' => count($chunks),
         'document_metadata' => [
-            'title' => $fileName,
+            'title' => $displayFileName,
             'mime_type' => 'application/pdf',
             'size' => $fileSize,
+            'document_type' => $documentClass,
             'seeded_demo' => $useSeededDemo || $syntheticMarcusPdf,
             'patient_key' => $patientKey,
             'patient_name' => $patientName,
             'uploaded_at' => $uploadedAt,
+            'original_file_name' => $fileName,
+            'display_file_name' => $displayFileName,
+            'source_id' => $sourceId,
         ],
         'source_metadata' => [
-            'file_name' => $fileName,
+            'file_name' => $displayFileName,
+            'original_file_name' => $fileName,
+            'display_file_name' => $displayFileName,
             'uploaded_at' => $uploadedAt,
             'source_type' => 'lab_pdf',
+            'document_type' => $documentClass,
             'source_label' => 'Uploaded lab PDF',
             'chunk_count' => count($chunks),
             'request_id' => $requestId,
+            'source_id' => $sourceId,
         ],
         'extracted_facts' => array_slice($factSummary['facts'], 0, 12),
         'abnormal_findings' => array_slice($factSummary['abnormal'], 0, 8),
@@ -932,6 +2356,7 @@ function attach_and_vectorize_lab_pdf(array $options): array
             'chunks' => $retrieval['chunks'] ?? [],
         ],
         'vectorized_result' => aiCopilotLabPdfBuildVectorizedResult($records),
+        'document_guard' => $documentGuard,
         'prompt_injection_matches' => $promptInjectionMatches,
     ]);
 }
@@ -944,26 +2369,42 @@ function aiCopilotAttachRetrievedLabPdfContext(array $context, string $prompt, s
 
     $existingToolOutput = is_array($context['attached_lab_pdf_tool_output'] ?? null) ? $context['attached_lab_pdf_tool_output'] : [];
     $existingStatus = (string) ($existingToolOutput['status'] ?? '');
-    if (in_array($existingStatus, ['invalid_file_type', 'ocr_required', 'role_blocked', 'extraction_review_required'], true)) {
+    if (in_array($existingStatus, ['invalid_file_type', 'ocr_required', 'role_blocked', 'extraction_review_required', 'document_guard_rejected', 'document_guard_review_required'], true)) {
         return $context;
     }
 
     $patientKey = (string) ($context['patient']['pubpid'] ?? '');
-    $retrieval = aiCopilotLabPdfRetrieveRelevantChunks([
-        'patient_key' => $patientKey,
-        'prompt' => $prompt,
-        'limit' => 4,
-    ]);
+    $patientName = (string) ($context['patient']['name'] ?? '');
+    $requestedDocumentTypes = aiCopilotLabPdfRequestedDocumentTypes($prompt, $mode, $existingToolOutput);
+    if ($requestedDocumentTypes !== []) {
+        $retrieval = aiCopilotLabPdfRetrieveRequestedDocumentCoverage([
+            'patient_key' => $patientKey,
+            'patient_name' => $patientName,
+            'prompt' => $prompt,
+            'requested_document_types' => $requestedDocumentTypes,
+            'prefer_uploaded_only' => aiCopilotLabPdfPromptTargetsUploadedEvidence($prompt),
+            'limit_per_document' => 2,
+        ]);
+    } else {
+        $sourceType = aiCopilotLabPdfRequestedSourceType($prompt, $mode, $existingToolOutput);
+        $retrieval = aiCopilotLabPdfRetrieveRelevantChunks([
+            'patient_key' => $patientKey,
+            'prompt' => $prompt,
+            'source_type' => $sourceType,
+            'limit' => 4,
+        ]);
+    }
+
     if (($retrieval['chunk_count'] ?? 0) <= 0) {
         return $context;
     }
 
     $context['retrieved_lab_pdf_context'] = $retrieval;
     $toolOutput = $existingToolOutput;
-    if ($toolOutput === []) {
+    if ($toolOutput === [] || $requestedDocumentTypes !== []) {
         $toolOutput = aiCopilotLabPdfBuildToolOutputFromRetrieval($retrieval, [
             'patient_key' => $patientKey,
-            'patient_name' => (string) ($context['patient']['name'] ?? ''),
+            'patient_name' => $patientName,
             'request_id' => $requestId,
         ]);
     } else {
@@ -974,6 +2415,16 @@ function aiCopilotAttachRetrievedLabPdfContext(array $context, string $prompt, s
         ];
         if (!isset($toolOutput['source_metadata']['chunk_count'])) {
             $toolOutput['source_metadata']['chunk_count'] = count($retrieval['chunks'] ?? []);
+        }
+        if (!empty($retrieval['matched_sources']) || !empty($retrieval['requested_document_types'])) {
+            $toolOutput['source_coverage'] = [
+                'requested_document_types' => $retrieval['requested_document_types'] ?? [],
+                'matched_sources' => $retrieval['matched_sources'] ?? [],
+                'missing_requested_document_types' => $retrieval['missing_requested_document_types'] ?? [],
+                'missing_requested_sources_message' => $retrieval['missing_requested_sources_message'] ?? '',
+                'all_requested_document_types_attempted' => !empty($retrieval['all_requested_document_types_attempted']),
+            ];
+            $toolOutput['document_summaries'] = $retrieval['document_summaries'] ?? [];
         }
     }
 
