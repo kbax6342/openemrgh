@@ -158,6 +158,18 @@ const tests = [
         assert.ok(result.ui);
         assert.strictEqual(result.ui.blocked, false);
     },
+    function nurseLabPdfStillBlocked() {
+        const result = evaluate({
+            role: 'nurse',
+            mode: 'lab_pdf_ingestion',
+            prompt: 'Ingest this lab PDF and tell me what treatment change to make.',
+            draftResponse: 'Treatment recommendation from the PDF.'
+        });
+        assert.strictEqual(result.allowed, false);
+        assert.strictEqual(result.blockedReason, 'nurse_medication_change_block');
+        assert.ok(result.ui);
+        assert.strictEqual(result.ui.blocked, true);
+    },
     function nurseMedicationChangeStillBlocked() {
         const result = evaluate({
             role: 'nurse',

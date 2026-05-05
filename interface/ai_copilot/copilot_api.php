@@ -163,6 +163,105 @@ if ($action === 'send_reminder_email') {
     exit;
 }
 
+if ($action === 'attach_and_extract_lab_pdf') {
+    $message = aiCopilotNormalizePrompt($payload['message'] ?? '');
+    if ($message === '') {
+        $message = 'Ingest the attached lab PDF for clinician review only.';
+    }
+
+    $mode = 'lab_pdf_ingestion';
+    $chatHistory = aiCopilotNormalizeChatHistory($payload['chat_history'] ?? []);
+    $fullContext = !empty($patient)
+        ? aiCopilotBuildContext($patient, $mode)
+        : aiCopilotBuildGeneralContext($mode, $message);
+    $context = aiCopilotFilterContextForRole($fullContext, $role, $mode);
+    $context = aiCopilotAttachClientAmbientVisitContext($context, $payload['ambient_visit_context'] ?? null, $role);
+    $context = aiCopilotAttachClientAmbientVisitContext($context, $payload['ambient_context']['latestApprovedVisit'] ?? null, $role);
+    $context = aiCopilotAttachClientLabPdfContext($context, $payload['lab_pdf_context'] ?? null, $role);
+    $context = aiCopilotAttachUploadedLabPdfContext($context, $uploadedLabPdf, $useSeededLabPdf, $payload, $role, $mode, $message, $requestId);
+    $context = aiCopilotAttachRetrievedLabPdfContext($context, $message, $role, $mode, $requestId);
+    $sources = aiCopilotBuildSources($context, $mode);
+    $clientLabPdfToolOutput = aiCopilotLabPdfToolOutputForClient(is_array($context['attached_lab_pdf_tool_output'] ?? null) ? $context['attached_lab_pdf_tool_output'] : []);
+    $permissionResponse = aiCopilotMaybeBuildRolePermissionResponse($role, $mode, $message, $context);
+    if ($permissionResponse !== []) {
+        $meta = aiCopilotBuildResponseMeta(
+            $requestId,
+            $role,
+            $mode,
+            $context,
+            $permissionResponse,
+            [
+                'restricted_by_role' => true,
+                'restriction_type' => $permissionResponse['restriction_type'] ?? 'role_guardrail',
+                'fallback_used' => false,
+                'engine' => 'guardrail',
+                'provider' => 'guardrail',
+                'model' => null,
+                'openai_configured' => $openAiConfigured,
+                'rag_grounded' => aiCopilotShouldMarkRagGroundedForRequest($mode, $message, $context),
+            ],
+            $requestStartedAt
+        );
+        aiCopilotJsonResponse(200, [
+            'ok' => true,
+            'mode' => $mode,
+            'role' => $role,
+            'patient' => !empty($context['patient']['name']) ? $context['patient']['name'] : null,
+            'answer' => $permissionResponse['answer'],
+            'sections' => $permissionResponse['sections'],
+            'tags' => $permissionResponse['tags'],
+            'sources' => $sources,
+            'safety_note' => aiCopilotRoleSafetyNote($role),
+            'engine' => 'guardrail',
+            'provider' => 'guardrail',
+            'tool_output' => $clientLabPdfToolOutput !== [] ? $clientLabPdfToolOutput : null,
+            'meta' => $meta,
+        ]);
+        exit;
+    }
+
+    $draft = aiCopilotGenerateDraft($requestId, $role, $mode, $message, $chatHistory, $context, $validModes[$mode]);
+    $meta = aiCopilotBuildResponseMeta(
+        $requestId,
+        $role,
+        $mode,
+        $context,
+        $draft,
+        [
+            'restricted_by_role' => false,
+            'fallback_used' => ($draft['engine'] ?? '') === 'fallback',
+            'fallback_reason' => $draft['fallback_reason'] ?? null,
+            'engine' => $draft['engine'] ?? 'fallback',
+            'provider' => $draft['provider'] ?? (($draft['engine'] ?? '') === 'openai' ? 'openai' : 'local_fallback'),
+            'model' => $draft['model'] ?? null,
+            'openai_configured' => (bool) ($draft['openai_configured'] ?? $openAiConfigured),
+            'error_category' => $draft['error_category'] ?? null,
+            'openai_error_category' => $draft['openai_error_category'] ?? null,
+            'openai_http_status' => $draft['openai_http_status'] ?? null,
+            'openai_error_message_safe' => $draft['openai_error_message_safe'] ?? null,
+            'rag_grounded' => aiCopilotShouldMarkRagGroundedForRequest($mode, $message, $context),
+        ],
+        $requestStartedAt
+    );
+
+    aiCopilotJsonResponse(200, [
+        'ok' => true,
+        'mode' => $mode,
+        'role' => $role,
+        'patient' => !empty($context['patient']['name']) ? $context['patient']['name'] : null,
+        'answer' => $draft['answer'],
+        'sections' => $draft['sections'],
+        'tags' => $draft['tags'],
+        'sources' => $sources,
+        'safety_note' => aiCopilotRoleSafetyNote($role),
+        'engine' => $draft['engine'],
+        'provider' => $draft['provider'],
+        'tool_output' => $clientLabPdfToolOutput !== [] ? $clientLabPdfToolOutput : null,
+        'meta' => $meta,
+    ]);
+    exit;
+}
+
 $message = aiCopilotNormalizePrompt($payload['message'] ?? '');
 if ($message === '') {
     aiCopilotJsonResponse(400, [
@@ -460,7 +559,7 @@ function aiCopilotIsRagGrounded(string $mode, array $context): bool
 function aiCopilotResolveAction(mixed $value): string
 {
     $action = is_string($value) ? trim($value) : 'chat';
-    return in_array($action, ['chat', 'send_reminder_email', 'agent_tool'], true) ? $action : 'chat';
+    return in_array($action, ['chat', 'send_reminder_email', 'agent_tool', 'attach_and_extract_lab_pdf'], true) ? $action : 'chat';
 }
 
 function aiCopilotParseRequestPayload(): ?array
@@ -5300,6 +5399,11 @@ function aiCopilotBuildLabPdfIngestionResponse(array $context): array
         $draftSummaryItems = [
             'The attached PDF appears scanned or text-light. OCR or manual clinician verification of the original document is required before relying on extracted facts.',
         ];
+    } elseif ($status === 'extraction_review_required') {
+        $draftSummaryItems = [
+            aiCopilotCleanText((string) ($toolOutput['safe_message'] ?? 'PDF text extraction did not produce reliable lab rows. Clinician must verify the source PDF.')),
+            'No structured lab facts were promoted into the draft because the extracted rows were not reliable enough for source-grounded review.',
+        ];
     } elseif ($status === 'invalid_file_type') {
         $draftSummaryItems = [
             aiCopilotCleanText((string) ($toolOutput['safe_message'] ?? 'Please attach a PDF file for this workflow.')),
@@ -5309,11 +5413,15 @@ function aiCopilotBuildLabPdfIngestionResponse(array $context): array
     if ($findingItems === []) {
         $findingItems[] = $status === 'ocr_required'
             ? 'No structured lab facts were extracted because OCR or manual review is still required.'
-            : 'No structured lab facts were extracted or retrieved from the uploaded document.';
+            : ($status === 'extraction_review_required'
+                ? aiCopilotCleanText((string) ($toolOutput['safe_message'] ?? 'PDF text extraction did not produce reliable lab rows. Clinician must verify the source PDF.'))
+                : 'No structured lab facts were extracted or retrieved from the uploaded document.');
     }
 
     if ($abnormalItems === []) {
-        $abnormalItems[] = 'No explicit abnormal lab values were extracted or retrieved from the document context.';
+        $abnormalItems[] = $status === 'extraction_review_required'
+            ? 'No reliable abnormal lab values were extracted. Clinician must verify the original PDF.'
+            : 'No explicit abnormal lab values were extracted or retrieved from the document context.';
     }
 
     if ($missingItems === []) {
@@ -5324,7 +5432,7 @@ function aiCopilotBuildLabPdfIngestionResponse(array $context): array
     return aiCopilotBuildResponse(
         'Lab PDF Ingestion — Clinician Review Required',
         [
-            aiCopilotBuildSection('Extracted Lab Facts', array_slice($findingItems, 0, 10), $status === 'ocr_required' ? 'yellow' : 'neutral'),
+            aiCopilotBuildSection('Extracted Lab Facts', array_slice($findingItems, 0, 10), in_array($status, ['ocr_required', 'extraction_review_required'], true) ? 'yellow' : 'neutral'),
             aiCopilotBuildSection('Abnormal / Attention Needed', array_slice($abnormalItems, 0, 8), $abnormalItems !== [] ? 'yellow' : 'neutral'),
             aiCopilotBuildSection('Missing or Ambiguous Data', array_slice($missingItems, 0, 8), 'yellow'),
             aiCopilotBuildSection('Draft Clinical Summary', $draftSummaryItems),
