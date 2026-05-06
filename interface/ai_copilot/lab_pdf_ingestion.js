@@ -11,6 +11,7 @@
     const TOOL_NAME = 'attach_and_vectorize_lab_pdf';
     const ACCEPT_ATTRIBUTE = 'application/pdf,.pdf';
     const SEEDED_FILE_NAME = 'marcus-johnson-labs-may-2026.pdf';
+    const MVP_SYNTHETIC_LAB_RESULTS_FILE_NAME = 'marcus_johnson_synthetic_lab_results.pdf';
     const SEEDED_INTAKE_FILE_NAME = 'marcus-johnson-intake-form.pdf';
     const REVIEW_NOTICE = 'This is a draft-only AI extraction for clinician review. It does not diagnose, update the chart, place orders, or replace verification of the original lab PDF.';
     const INTAKE_REVIEW_NOTICE = 'This is a draft-only AI extraction for clinician review. It does not diagnose, update the chart, place orders, or replace verification of the original intake form.';
@@ -65,12 +66,39 @@
             }
         },
         {
+            key: 'random_glucose',
+            label: 'Random Glucose',
+            defaultUnit: 'mg/dL',
+            aliases: [/\brandom glucose\b/i, /\bglucose\b/i],
+            inferFlag(value) {
+                if (value < 70) {
+                    return 'low';
+                }
+                if (value >= 180) {
+                    return 'high';
+                }
+                return 'normal';
+            }
+        },
+        {
             key: 'ldl_cholesterol',
             label: 'LDL Cholesterol',
             defaultUnit: 'mg/dL',
             aliases: [/\bldl cholesterol\b/i, /\bldl\b/i],
             inferFlag(value) {
-                if (value >= 130) {
+                if (value >= 100) {
+                    return 'high';
+                }
+                return 'normal';
+            }
+        },
+        {
+            key: 'uacr',
+            label: 'Urine Albumin/Creatinine Ratio',
+            defaultUnit: 'mg/g',
+            aliases: [/\burine albumin\/creatinine ratio\b/i, /\buacr\b/i, /\balbumin\/creatinine ratio\b/i],
+            inferFlag(value) {
+                if (value > 30) {
                     return 'high';
                 }
                 return 'normal';
@@ -99,6 +127,156 @@
             inferFlag(value) {
                 if (value < 60) {
                     return 'low';
+                }
+                return 'normal';
+            }
+        },
+        {
+            key: 'wbc',
+            label: 'WBC',
+            defaultUnit: 'K/uL',
+            aliases: [/\bwbc\b/i, /\bwhite blood cells?\b/i],
+            inferFlag(value) {
+                if (value < 4) {
+                    return 'low';
+                }
+                if (value > 10.5) {
+                    return 'high';
+                }
+                return 'normal';
+            }
+        },
+        {
+            key: 'bun',
+            label: 'BUN',
+            defaultUnit: 'mg/dL',
+            aliases: [/\bbun\b/i, /\bblood urea nitrogen\b/i],
+            inferFlag(value) {
+                if (value < 7) {
+                    return 'low';
+                }
+                if (value > 20) {
+                    return 'high';
+                }
+                return 'normal';
+            }
+        },
+        {
+            key: 'sodium',
+            label: 'Sodium',
+            defaultUnit: 'mmol/L',
+            aliases: [/\bsodium\b/i],
+            inferFlag(value) {
+                if (value < 135) {
+                    return 'low';
+                }
+                if (value > 145) {
+                    return 'high';
+                }
+                return 'normal';
+            }
+        },
+        {
+            key: 'potassium',
+            label: 'Potassium',
+            defaultUnit: 'mmol/L',
+            aliases: [/\bpotassium\b/i],
+            inferFlag(value) {
+                if (value < 3.5) {
+                    return 'low';
+                }
+                if (value > 5.1) {
+                    return 'high';
+                }
+                return 'normal';
+            }
+        },
+        {
+            key: 'hemoglobin',
+            label: 'Hemoglobin',
+            defaultUnit: 'g/dL',
+            aliases: [/\bhemoglobin\b/i],
+            inferFlag(value) {
+                if (value < 13.0) {
+                    return 'low';
+                }
+                if (value > 17.5) {
+                    return 'high';
+                }
+                return 'normal';
+            }
+        },
+        {
+            key: 'platelets',
+            label: 'Platelets',
+            defaultUnit: 'K/uL',
+            aliases: [/\bplatelets?\b/i],
+            inferFlag(value) {
+                if (value < 150) {
+                    return 'low';
+                }
+                if (value > 450) {
+                    return 'high';
+                }
+                return 'normal';
+            }
+        },
+        {
+            key: 'crp',
+            label: 'CRP',
+            defaultUnit: 'mg/L',
+            aliases: [/\bcrp\b/i, /\bc-reactive protein\b/i],
+            inferFlag(value) {
+                if (value > 10) {
+                    return 'high';
+                }
+                return 'normal';
+            }
+        },
+        {
+            key: 'esr',
+            label: 'ESR',
+            defaultUnit: 'mm/hr',
+            aliases: [/\besr\b/i, /\berythrocyte sedimentation rate\b/i],
+            inferFlag(value) {
+                if (value > 20) {
+                    return 'high';
+                }
+                return 'normal';
+            }
+        },
+        {
+            key: 'total_cholesterol',
+            label: 'Total Cholesterol',
+            defaultUnit: 'mg/dL',
+            aliases: [/\btotal cholesterol\b/i],
+            inferFlag(value) {
+                if (value >= 200) {
+                    return 'high';
+                }
+                return 'normal';
+            }
+        },
+        {
+            key: 'hdl_cholesterol',
+            label: 'HDL Cholesterol',
+            defaultUnit: 'mg/dL',
+            aliases: [/\bhdl cholesterol\b/i, /\bhdl\b/i],
+            inferFlag(value) {
+                if (value < 40) {
+                    return 'low';
+                }
+                return 'normal';
+            }
+        },
+        {
+            key: 'triglycerides',
+            label: 'Triglycerides',
+            defaultUnit: 'mg/dL',
+            aliases: [/\btriglycerides?\b/i],
+            inferFlag(value) {
+                if (value >= 150) {
+                    return 'high';
                 }
                 return 'normal';
             }
@@ -156,11 +334,35 @@
         'hemoglobin a1c',
         'a1c',
         'glucose',
+        'random glucose',
         'ldl',
         'hdl',
+        'bun',
+        'sodium',
+        'potassium',
+        'hemoglobin',
+        'platelets',
+        'total cholesterol',
+        'triglycerides',
         'creatinine',
         'egfr',
+        'wbc',
+        'crp',
+        'esr',
+        'urine albumin/creatinine ratio',
+        'reference range',
+        'ordering provider',
+        'clinical laboratory',
+        'lab results',
+        'specimen',
+        'collected',
+        'reported',
         'mg/dl',
+        'mg/l',
+        'mg/g',
+        'k/ul',
+        'mm/hr',
+        'mmol/l',
         'member id',
         'claim',
         'payer',
@@ -174,7 +376,47 @@
     const MEDICAL_GUARD_DOCUMENT_HINTS = {
         lab_results: {
             filePatterns: [/\blab\b/i, /\blabs\b/i, /\bresult\b/i, /\bdiagnostic\b/i],
-            textPatterns: [/\ba1c\b/i, /\bglucose\b/i, /\bldl\b/i, /\bhdl\b/i, /\bcreatinine\b/i, /\begfr\b/i, /\bmg\/dL\b/i]
+            textPatterns: [
+                /\blab results?\b/i,
+                /\bclinical laboratory\b/i,
+                /\bclinical laboratory services\b/i,
+                /\bhemoglobin\s*a1c\b/i,
+                /\ba1c\b/i,
+                /\brandom glucose\b/i,
+                /\bglucose\b/i,
+                /\bldl\b/i,
+                /\bhdl\b/i,
+                /\bhemoglobin\b/i,
+                /\bplatelets?\b/i,
+                /\btotal cholesterol\b/i,
+                /\btriglycerides?\b/i,
+                /\bcreatinine\b/i,
+                /\begfr\b/i,
+                /\bbun\b/i,
+                /\bsodium\b/i,
+                /\bpotassium\b/i,
+                /\bwbc\b/i,
+                /\bcrp\b/i,
+                /\besr\b/i,
+                /\burine albumin\/creatinine ratio\b/i,
+                /\breference range\b/i,
+                /\bspecimen\b/i,
+                /\bcollected\b/i,
+                /\breported\b/i,
+                /\bordering provider\b/i,
+                /\bmg\/dL\b/i,
+                /\bmg\/L\b/i,
+                /\bg\/dL\b/i,
+                /\bmmol\/L\b/i,
+                /\bK\/uL\b/i,
+                /\bmg\/g\b/i,
+                /\bmm\/hr\b/i,
+                /%/,
+                /\bhigh\b/i,
+                /\blow\b/i,
+                /\bnormal\b/i,
+                /\b[HL]\b/
+            ]
         },
         intake_form: {
             filePatterns: [/\bintake\b/i, /\bquestionnaire\b/i, /\bform\b/i],
@@ -201,6 +443,14 @@
             textPatterns: [/\bvisit summary\b/i, /\bfollow-up\b/i, /\bnext steps\b/i]
         }
     };
+
+    const SYNTHETIC_DEMO_LABEL_PATTERNS = [
+        /\bsynthetic demo data only\b/i,
+        /\bsynthetic demo data\b/i,
+        /\bnot a real medical record\b/i,
+        /\bsynthetic lab results\b/i,
+        /\bsynthetic intake form\b/i
+    ];
 
     const INTAKE_FIELD_DEFINITIONS = {
         reasonForVisit: {
@@ -251,12 +501,36 @@
         const normalized = unit
             .replace(/\s+/g, '')
             .replace(/mg\/dl/i, 'mg/dL')
+            .replace(/mg\/l/i, 'mg/L')
+            .replace(/mmol\/l/i, 'mmol/L')
+            .replace(/k\/ul/i, 'K/uL')
+            .replace(/mg\/g/i, 'mg/g')
+            .replace(/mm\/hr/i, 'mm/hr')
+            .replace(/g\/dl/i, 'g/dL')
             .replace(/ml\/min\/1\.73m2/i, 'mL/min/1.73m2');
         if (/^%$/.test(normalized)) {
             return '%';
         }
         if (/^mg\/dL$/i.test(normalized)) {
             return 'mg/dL';
+        }
+        if (/^mg\/L$/i.test(normalized)) {
+            return 'mg/L';
+        }
+        if (/^mmol\/L$/i.test(normalized)) {
+            return 'mmol/L';
+        }
+        if (/^K\/uL$/i.test(normalized)) {
+            return 'K/uL';
+        }
+        if (/^mg\/g$/i.test(normalized)) {
+            return 'mg/g';
+        }
+        if (/^mm\/hr$/i.test(normalized)) {
+            return 'mm/hr';
+        }
+        if (/^g\/dL$/i.test(normalized)) {
+            return 'g/dL';
         }
         if (/^mL\/min\/1\.73m2$/i.test(normalized)) {
             return 'mL/min/1.73m2';
@@ -306,22 +580,30 @@
     function detectMedicalGuardDocumentType(fileName, text = '') {
         const normalizedFileName = String(fileName || '');
         const normalizedText = String(text || '');
+        let bestType = 'unknown';
+        let bestScore = 0;
 
         for (const documentType of Object.keys(MEDICAL_GUARD_DOCUMENT_HINTS)) {
             const hints = MEDICAL_GUARD_DOCUMENT_HINTS[documentType];
+            let score = 0;
             for (const pattern of hints.filePatterns) {
                 if (pattern.test(normalizedFileName)) {
-                    return documentType;
+                    score += 2;
                 }
             }
             for (const pattern of hints.textPatterns) {
                 if (pattern.test(normalizedText)) {
-                    return documentType;
+                    score += 1;
                 }
+            }
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestType = documentType;
             }
         }
 
-        return 'unknown';
+        return bestScore > 0 ? bestType : 'unknown';
     }
 
     function summarizeMedicalGuardHints(text, minimumScore = 0.70) {
@@ -355,6 +637,10 @@
         const minimumScore = Number.isFinite(Number(input.minimumScore)) ? Number(input.minimumScore) : 0.70;
         const documentType = detectMedicalGuardDocumentType(fileName, text);
         const detectedEntitySummary = summarizeMedicalGuardHints(text, minimumScore);
+        const syntheticDemoLabels = detectSyntheticDemoLabels(text);
+        const isSyntheticDemoData = syntheticDemoLabels.length > 0;
+        const labEvidence = buildLabEvidenceSummary(text);
+        const intakeEvidence = buildIntakeEvidenceSummary(text);
         const rejectedClues = MEDICAL_GUARD_REJECTED_CLUES.filter(function (clue) {
             return `${fileName}\n${text}`.toLowerCase().includes(clue.toLowerCase());
         });
@@ -367,14 +653,27 @@
                 Math.max(detectedEntitySummary.averageScore || 0, rejectedClues.length > 0 ? 0.25 : 0.45)
                     + (documentTypeRecognized ? 0.18 : 0)
                     + (Math.min(highConfidenceEntityCount, 6) * 0.04)
+                    + (Math.min(labEvidence.score, 8) * 0.03)
+                    + (Math.min(intakeEvidence.score, 6) * 0.03)
                     - (rejectedClues.length > 0 ? 0.25 : 0)
             )
         );
         const summary = {
             ...detectedEntitySummary,
             rejectedClues,
-            medicalEntityCount: highConfidenceEntityCount
+            medicalEntityCount: highConfidenceEntityCount,
+            labEvidenceScore: labEvidence.score,
+            labEvidenceSignals: labEvidence.matchedSignals,
+            structuredLabRowCount: labEvidence.structuredRowCount,
+            intakeEvidenceScore: intakeEvidence.score,
+            syntheticDemoLabels: syntheticDemoLabels
         };
+        const textExtractionStatus = text ? 'success' : 'failed';
+        const strongLabEvidence = documentType === 'lab_results' && (labEvidence.structuredRowCount >= 2 || labEvidence.score >= 6);
+        const strongIntakeEvidence = documentType === 'intake_form' && intakeEvidence.validFieldCount >= 3;
+        const chartWriteStatus = rejectedClues.length >= 2 && highConfidenceEntityCount < minimumEntities && !strongLabEvidence && !strongIntakeEvidence
+            ? 'rejected'
+            : 'requires_clinician_review';
 
         if (!text) {
             return {
@@ -383,39 +682,67 @@
                 confidence: 0,
                 extractedTextPreview: '',
                 detectedEntitySummary: summary,
-                rejectionReason: 'No reliable text was available for medical-document validation.'
+                rejectionReason: 'No reliable text was available for medical-document validation.',
+                textExtractionStatus: textExtractionStatus,
+                medicalValidationStatus: 'review_required',
+                chartWriteStatus: 'requires_clinician_review',
+                isSyntheticDemoData: isSyntheticDemoData,
+                reviewRequired: true,
+                syntheticDemoLabels: syntheticDemoLabels,
+                labEvidenceScore: labEvidence.score
             };
         }
 
-        if (rejectedClues.length >= 2 && highConfidenceEntityCount < minimumEntities) {
+        if (rejectedClues.length >= 2 && highConfidenceEntityCount < minimumEntities && labEvidence.score < 2 && intakeEvidence.score < 2) {
             return {
                 decision: 'rejected',
                 documentType: 'unknown',
                 confidence: Number(confidence.toFixed(4)),
                 extractedTextPreview: text.slice(0, 220),
                 detectedEntitySummary: summary,
-                rejectionReason: 'The uploaded PDF appears to be a non-medical document based on business or unrelated document language.'
+                rejectionReason: 'The uploaded PDF appears to be a non-medical document based on business or unrelated document language.',
+                textExtractionStatus: textExtractionStatus,
+                medicalValidationStatus: 'rejected',
+                chartWriteStatus: 'rejected',
+                isSyntheticDemoData: isSyntheticDemoData,
+                reviewRequired: true,
+                syntheticDemoLabels: syntheticDemoLabels,
+                labEvidenceScore: labEvidence.score
             };
         }
 
-        if (documentTypeRecognized && highConfidenceEntityCount >= minimumEntities && confidence >= minimumScore) {
+        if (strongLabEvidence || strongIntakeEvidence || (documentTypeRecognized && highConfidenceEntityCount >= minimumEntities && confidence >= minimumScore)) {
             return {
                 decision: 'allowed',
                 documentType,
                 confidence: Number(confidence.toFixed(4)),
                 extractedTextPreview: text.slice(0, 220),
-                detectedEntitySummary: summary
+                detectedEntitySummary: summary,
+                textExtractionStatus: textExtractionStatus,
+                medicalValidationStatus: 'allowed',
+                chartWriteStatus: 'requires_clinician_review',
+                isSyntheticDemoData: isSyntheticDemoData,
+                reviewRequired: true,
+                syntheticDemoLabels: syntheticDemoLabels,
+                labEvidenceScore: labEvidence.score
             };
         }
 
-        if (!documentTypeRecognized && highConfidenceEntityCount <= 0) {
+        if (!documentTypeRecognized && highConfidenceEntityCount <= 0 && labEvidence.score < 2 && intakeEvidence.score < 2) {
             return {
                 decision: 'rejected',
                 documentType: 'unknown',
                 confidence: Number(confidence.toFixed(4)),
                 extractedTextPreview: text.slice(0, 220),
                 detectedEntitySummary: summary,
-                rejectionReason: 'The uploaded PDF did not contain enough recognizable clinical or healthcare language to be ingested.'
+                rejectionReason: 'The uploaded PDF did not contain enough recognizable clinical or healthcare language to be ingested.',
+                textExtractionStatus: textExtractionStatus,
+                medicalValidationStatus: 'rejected',
+                chartWriteStatus: 'rejected',
+                isSyntheticDemoData: isSyntheticDemoData,
+                reviewRequired: true,
+                syntheticDemoLabels: syntheticDemoLabels,
+                labEvidenceScore: labEvidence.score
             };
         }
 
@@ -425,7 +752,14 @@
             confidence: Number(confidence.toFixed(4)),
             extractedTextPreview: text.slice(0, 220),
             detectedEntitySummary: summary,
-            rejectionReason: 'Document type could not be verified with high confidence.'
+            rejectionReason: 'Document type could not be verified with high confidence.',
+            textExtractionStatus: textExtractionStatus,
+            medicalValidationStatus: 'review_required',
+            chartWriteStatus: chartWriteStatus,
+            isSyntheticDemoData: isSyntheticDemoData,
+            reviewRequired: true,
+            syntheticDemoLabels: syntheticDemoLabels,
+            labEvidenceScore: labEvidence.score
         };
     }
 
@@ -440,6 +774,41 @@
                 return String.fromCharCode(parseInt(octalValue, 8));
             })
             .replace(/\\\\/g, '\\');
+    }
+
+    function looksLikeRawPdfSyntax(text) {
+        const normalized = normalizeWhitespace(text);
+        if (!normalized) {
+            return false;
+        }
+
+        if (/^%PDF-\d/i.test(normalized)) {
+            return true;
+        }
+
+        const syntaxMatches = [
+            /\b\d+\s+\d+\s+obj\b/i,
+            /\bendobj\b/i,
+            /\bxref\b/i,
+            /\/BaseFont\b/i,
+            /\/Type\s*\/Page\b/i,
+            /ReportLab Generated PDF/i
+        ].filter(function (pattern) {
+            return pattern.test(normalized);
+        }).length;
+
+        return syntaxMatches >= 2;
+    }
+
+    function hasEnoughReadablePdfText(text) {
+        const normalized = normalizeWhitespace(text);
+        if (!normalized || looksLikeRawPdfSyntax(normalized)) {
+            return false;
+        }
+
+        const alphaCharacters = (normalized.match(/[A-Za-z]/g) || []).length;
+        const wordCount = normalized.split(/\s+/).filter(Boolean).length;
+        return alphaCharacters >= 40 && wordCount >= 12;
     }
 
     function extractPrintableTextFromPdfBuffer(arrayBuffer) {
@@ -482,7 +851,8 @@
             collected.push(printableMatches.join('\n'));
         }
 
-        return normalizeWhitespace(collected.join('\n'));
+        const normalized = normalizeWhitespace(collected.join('\n'));
+        return hasEnoughReadablePdfText(normalized) ? normalized : '';
     }
 
     function detectPromptInjectionText(text) {
@@ -512,6 +882,30 @@
         };
     }
 
+    function buildMvpSyntheticLabFallbackDocument(options = {}) {
+        const fileName = String(options.fileName || MVP_SYNTHETIC_LAB_RESULTS_FILE_NAME);
+        return {
+            fileName: fileName,
+            patientKey: String(options.patientKey || 'marcus-johnson'),
+            patientName: String(options.patientName || 'Marcus Johnson'),
+            extractionMethod: 'synthetic_demo_pdf_fallback',
+            text: [
+                'Synthetic demo data only',
+                'Patient: Marcus Johnson',
+                `Document: ${fileName}`,
+                'Hemoglobin A1c: 8.2 %, high',
+                'LDL Cholesterol: 142 mg/dL, high',
+                'Creatinine: 1.1 mg/dL, normal',
+                'eGFR: 82 mL/min/1.73m2, normal',
+                'Collection Date: 2026-05-05',
+                'Missing:',
+                '- Ordering provider not clearly detected',
+                '- Collection time not clearly detected'
+            ].join('\n'),
+            missingData: SEEDED_MISSING_DATA.slice()
+        };
+    }
+
     function buildSeededIntakeFallbackDocument(options = {}) {
         return {
             fileName: options.fileName || SEEDED_INTAKE_FILE_NAME,
@@ -524,10 +918,77 @@
     }
 
     function isLikelySyntheticMarcusJohnsonPdf(fileName, text) {
+        const normalizedFileName = String(fileName || '').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+        const normalizedText = String(text || '').trim().toLowerCase();
+        if (normalizedText) {
+            return false;
+        }
+        return normalizedFileName.includes('marcus_johnson_synthetic_lab_results')
+            || normalizedFileName === MVP_SYNTHETIC_LAB_RESULTS_FILE_NAME.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+    }
+
+    function isLikelySyntheticMarcusJohnsonIntakePdf(fileName, text) {
         const normalizedFileName = String(fileName || '').toLowerCase();
-        const normalizedText = String(text || '').toLowerCase();
-        return /marcus[-_ ]johnson.*lab.*\.pdf/.test(normalizedFileName)
-            || (/patient:\s*marcus johnson/.test(normalizedText) && /\b(a1c|ldl|creatinine|egfr)\b/.test(normalizedText));
+        const normalizedText = String(text || '').trim().toLowerCase();
+        if (normalizedText) {
+            return false;
+        }
+        return /marcus[-_ ]johnson.*intake.*\.pdf/.test(normalizedFileName)
+            || normalizedFileName === SEEDED_INTAKE_FILE_NAME.toLowerCase();
+    }
+
+    function detectSyntheticDemoLabels(text) {
+        const normalized = normalizeWhitespace(text);
+        if (!normalized) {
+            return [];
+        }
+
+        return unique(SYNTHETIC_DEMO_LABEL_PATTERNS.reduce(function (collection, pattern) {
+            const match = normalized.match(pattern);
+            if (match && match[0]) {
+                collection.push(normalizeWhitespace(match[0]));
+            }
+            return collection;
+        }, []));
+    }
+
+    function buildLabEvidenceSummary(text) {
+        const normalized = normalizeWhitespace(text);
+        if (!normalized) {
+            return {
+                score: 0,
+                matchedSignals: [],
+                structuredRowCount: 0
+            };
+        }
+
+        const matchedSignals = [];
+        (MEDICAL_GUARD_DOCUMENT_HINTS.lab_results.textPatterns || []).forEach(function (pattern) {
+            const match = normalized.match(pattern);
+            if (match && match[0]) {
+                matchedSignals.push(normalizeWhitespace(match[0]));
+            }
+        });
+
+        const structuredRowCount = normalized.split('\n').reduce(function (count, line) {
+            return parseRecognizedLabLine(line) ? count + 1 : count;
+        }, 0);
+
+        return {
+            score: unique(matchedSignals).length + structuredRowCount,
+            matchedSignals: unique(matchedSignals).slice(0, 24),
+            structuredRowCount: structuredRowCount
+        };
+    }
+
+    function buildIntakeEvidenceSummary(text) {
+        const extracted = extractIntakeFactsFromText(text, {
+            fileName: 'intake-form.pdf'
+        });
+        return {
+            score: Number(extracted.validFieldCount || 0),
+            validFieldCount: Number(extracted.validFieldCount || 0)
+        };
     }
 
     function extractTextOrSeedFallback(options = {}) {
@@ -542,7 +1003,7 @@
             extractedText = extractPrintableTextFromPdfBuffer(options.arrayBuffer);
         }
 
-        if ((requestedDocumentType === 'intake_form' || /marcus[-_ ]johnson.*intake.*\.pdf/i.test(fileName)) && (forceSeededFallback || !extractedText)) {
+        if ((requestedDocumentType === 'intake_form' || isLikelySyntheticMarcusJohnsonIntakePdf(fileName, extractedText)) && (forceSeededFallback || !extractedText)) {
             const seededIntake = buildSeededIntakeFallbackDocument({
                 fileName: fileName || SEEDED_INTAKE_FILE_NAME,
                 patientKey,
@@ -560,14 +1021,20 @@
         }
 
         if (forceSeededFallback || isLikelySyntheticMarcusJohnsonPdf(fileName, extractedText)) {
-            const seeded = buildSeededFallbackDocument({
-                fileName: fileName || SEEDED_FILE_NAME,
-                patientKey,
-                patientName
-            });
+            const seeded = forceSeededFallback
+                ? buildSeededFallbackDocument({
+                    fileName: fileName || SEEDED_FILE_NAME,
+                    patientKey,
+                    patientName
+                })
+                : buildMvpSyntheticLabFallbackDocument({
+                    fileName: fileName || MVP_SYNTHETIC_LAB_RESULTS_FILE_NAME,
+                    patientKey,
+                    patientName
+                });
 
             return {
-                status: forceSeededFallback ? 'seeded_demo_fallback' : 'synthetic_marcus_demo',
+                status: forceSeededFallback ? 'seeded_demo_fallback' : 'synthetic_demo_pdf_fallback',
                 extractionMethod: seeded.extractionMethod,
                 text: seeded.text,
                 preview: seeded.text.slice(0, 240),
@@ -751,7 +1218,17 @@
             return null;
         }
 
-        const numericMatch = normalizedLine.match(/(-?\d+(?:\.\d+)?)\s*(%|mg\/dL|mg\/dl|mL\/min\/1\.73m2|ml\/min\/1\.73m2)?/i);
+        let numericSearchText = normalizedLine;
+        (definition.aliases || []).some(function (pattern) {
+            const aliasMatch = normalizedLine.match(pattern);
+            if (!aliasMatch) {
+                return false;
+            }
+            numericSearchText = normalizedLine.slice((aliasMatch.index || 0) + aliasMatch[0].length);
+            return true;
+        });
+
+        const numericMatch = numericSearchText.match(/(-?\d+(?:\.\d+)?)\s*(%|mg\/dL|mg\/dl|mL\/min\/1\.73m2|ml\/min\/1\.73m2|mg\/L|mg\/l|mmol\/L|mmol\/l|K\/uL|k\/uL|mg\/g|mm\/hr)?/i);
         if (!numericMatch) {
             return null;
         }
@@ -763,8 +1240,15 @@
 
         const unit = normalizeUnit(numericMatch[2] || '', definition.defaultUnit);
         const referenceMatch = normalizedLine.match(/(?:ref(?:erence)? range|range)\s*[:\-]?\s*([A-Za-z0-9<>\-./% ]+)/i);
-        const flagMatch = normalizedLine.match(/\b(high|low|normal|abnormal|critical|unknown)\b/i);
-        const flag = inferFlag(definition, numericValue, normalizedLine, flagMatch ? flagMatch[1] : '');
+        const flagWordMatch = normalizedLine.match(/\b(high|low|normal|abnormal|critical|unknown)\b/i);
+        let parsedFlag = flagWordMatch ? flagWordMatch[1] : '';
+        if (!parsedFlag) {
+            const shortFlagMatch = normalizedLine.match(/(?:^|[\s:,\-])(H|L)(?:$|[\s,;])/i);
+            if (shortFlagMatch) {
+                parsedFlag = String(shortFlagMatch[1] || '').toUpperCase() === 'H' ? 'high' : 'low';
+            }
+        }
+        const flag = inferFlag(definition, numericValue, normalizedLine, parsedFlag);
         const displayValue = unit ? `${numericMatch[1]} ${unit}`.trim() : numericMatch[1];
 
         return {
@@ -853,7 +1337,7 @@
     }
 
     function extractIntakeFactsFromText(text, options = {}) {
-        const useSeededIntake = Boolean(options.useSyntheticMarcus) || /marcus[-_ ]johnson.*intake.*\.pdf/i.test(String(options.fileName || ''));
+        const useSeededIntake = Boolean(options.useSyntheticMarcus) || isLikelySyntheticMarcusJohnsonIntakePdf(String(options.fileName || ''), text);
         const sourceText = useSeededIntake ? SEEDED_INTAKE_TEXT : text;
         const lines = normalizeWhitespace(sourceText).split('\n');
         const fields = {
@@ -1062,7 +1546,13 @@
             rejectionReason: overrides.rejectionReason || documentGuard.rejection_reason || documentGuard.rejectionReason || '',
             documentGuardDecision: overrides.documentGuardDecision || documentGuard.decision || '',
             awsGuardEnabled: Boolean(overrides.awsGuardEnabled ?? documentGuard.aws_guard_enabled ?? documentGuard.awsGuardEnabled ?? false),
-            seededDemo: Boolean(overrides.seededDemo ?? metadata.seeded_demo ?? metadata.seededDemo),
+            textExtractionStatus: overrides.textExtractionStatus || toolOutput.text_extraction_status || toolOutput.textExtractionStatus || documentGuard.text_extraction_status || documentGuard.textExtractionStatus || '',
+            medicalValidationStatus: overrides.medicalValidationStatus || toolOutput.medical_validation_status || toolOutput.medicalValidationStatus || documentGuard.medical_validation_status || documentGuard.medicalValidationStatus || '',
+            chartWriteStatus: overrides.chartWriteStatus || toolOutput.chart_write_status || toolOutput.chartWriteStatus || documentGuard.chart_write_status || documentGuard.chartWriteStatus || '',
+            syntheticDemoData: Boolean(overrides.syntheticDemoData ?? documentGuard.is_synthetic_demo_data ?? documentGuard.isSyntheticDemoData ?? false),
+            reviewRequired: Boolean(overrides.reviewRequired ?? documentGuard.review_required ?? documentGuard.reviewRequired ?? true),
+            labEvidenceScore: Number(overrides.labEvidenceScore ?? documentGuard.lab_evidence_score ?? documentGuard.labEvidenceScore ?? 0),
+            seededDemo: Boolean(overrides.seededDemo ?? metadata.seeded_demo ?? metadata.seededDemo ?? documentGuard.is_synthetic_demo_data ?? documentGuard.isSyntheticDemoData ?? false),
             ragGrounded: Boolean(overrides.ragGrounded ?? responseMeta.rag_grounded ?? false)
         };
     }
@@ -1139,9 +1629,13 @@
                 ingestionStatus: toolOutput.ingestion_status || toolOutput.ingestionStatus || toolOutput.status || '',
                 documentGuardDecision: documentGuard.decision || '',
                 documentGuardProvider: documentGuard.guard_provider || documentGuard.guardProvider || '',
+                textExtractionStatus: toolOutput.text_extraction_status || toolOutput.textExtractionStatus || documentGuard.text_extraction_status || documentGuard.textExtractionStatus || '',
+                medicalValidationStatus: toolOutput.medical_validation_status || toolOutput.medicalValidationStatus || documentGuard.medical_validation_status || documentGuard.medicalValidationStatus || '',
+                chartWriteStatus: toolOutput.chart_write_status || toolOutput.chartWriteStatus || documentGuard.chart_write_status || documentGuard.chartWriteStatus || '',
                 extractedFactCount: extractedFacts.length,
                 abnormalCount: abnormalFindings.length,
-                missingDataCount: missingData.length
+                missingDataCount: missingData.length,
+                labEvidenceScore: Number(documentGuard.lab_evidence_score || documentGuard.labEvidenceScore || 0)
             },
             vectorSummary: vectorSummary,
             retrievalSummary: {
@@ -1158,7 +1652,12 @@
                     provider: documentGuard.guard_provider || documentGuard.guardProvider || '',
                     textractStatus: documentGuard.textract_status || documentGuard.textractStatus || '',
                     comprehendStatus: documentGuard.comprehend_status || documentGuard.comprehendStatus || '',
-                    medicalEntityCount: Number(documentGuard.medical_entity_count || documentGuard.medicalEntityCount || 0)
+                    medicalEntityCount: Number(documentGuard.medical_entity_count || documentGuard.medicalEntityCount || 0),
+                    textExtractionStatus: documentGuard.text_extraction_status || documentGuard.textExtractionStatus || '',
+                    medicalValidationStatus: documentGuard.medical_validation_status || documentGuard.medicalValidationStatus || '',
+                    chartWriteStatus: documentGuard.chart_write_status || documentGuard.chartWriteStatus || '',
+                    labEvidenceScore: Number(documentGuard.lab_evidence_score || documentGuard.labEvidenceScore || 0),
+                    syntheticDemoData: Boolean(documentGuard.is_synthetic_demo_data || documentGuard.isSyntheticDemoData)
                 },
                 untrustedDocumentText: true,
                 seededDemo: seededDemo,

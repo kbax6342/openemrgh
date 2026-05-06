@@ -75,7 +75,15 @@
             'sourceCount',
             'sourceTitles',
             'sourceCategories',
-            'latestAmbientVisitFound'
+            'latestAmbientVisitFound',
+            'frameStatus',
+            'frameMode',
+            'healthCheckStatus',
+            'openemrAvailable',
+            'requiresLogin',
+            'targetOrigin',
+            'targetPath',
+            'unavailableReason'
         ]);
 
         const metrics = targetWindow.CopilotMetrics || {
@@ -237,7 +245,14 @@
 
         const state = {
             isOpen: false,
-            iframeLoaded: false
+            iframeRequested: false,
+            iframeReady: false,
+            frameLoadInFlight: false,
+            frameLoadTimer: null,
+            frameStatus: 'idle',
+            frameStatusMessage: '',
+            lastFrameUrl: '',
+            healthCheck: null
         };
 
         const root = document.createElement('div');
@@ -267,8 +282,9 @@
         header.innerHTML =
             '<div>' +
             '<h2 id="openemr-ai-copilot-title" class="copilot-widget-title">Medical Co-Pilot</h2>' +
-            '<p class="copilot-widget-note">Beta</p>' +
+            '<p class="copilot-widget-note">OpenEMR connection pending</p>' +
             '</div>';
+        const headerNote = header.querySelector('.copilot-widget-note');
 
         const closeButton = document.createElement('button');
         closeButton.type = 'button';
@@ -280,11 +296,47 @@
         const body = document.createElement('div');
         body.className = 'copilot-widget-body';
 
+        const statusPanel = document.createElement('section');
+        statusPanel.className = 'copilot-widget-status-panel';
+        statusPanel.setAttribute('aria-live', 'polite');
+
+        const statusTitle = document.createElement('p');
+        statusTitle.className = 'copilot-widget-status-title';
+        statusTitle.textContent = 'OpenEMR connection pending';
+
+        const statusMessage = document.createElement('p');
+        statusMessage.className = 'copilot-widget-status-message';
+        statusMessage.textContent = 'Open the copilot to verify the OpenEMR connection.';
+
+        const statusActions = document.createElement('div');
+        statusActions.className = 'copilot-widget-status-actions';
+
+        const retryButton = document.createElement('button');
+        retryButton.type = 'button';
+        retryButton.className = 'copilot-widget-secondary-action';
+        retryButton.textContent = 'Retry';
+        retryButton.hidden = true;
+
+        const openInNewTabLink = document.createElement('a');
+        openInNewTabLink.className = 'copilot-widget-secondary-action copilot-widget-link-action';
+        openInNewTabLink.target = '_blank';
+        openInNewTabLink.rel = 'noopener noreferrer';
+        openInNewTabLink.textContent = 'Open In New Tab';
+        openInNewTabLink.hidden = true;
+
+        statusActions.appendChild(retryButton);
+        statusActions.appendChild(openInNewTabLink);
+        statusPanel.appendChild(statusTitle);
+        statusPanel.appendChild(statusMessage);
+        statusPanel.appendChild(statusActions);
+        body.appendChild(statusPanel);
+
         const frame = document.createElement('iframe');
         frame.className = 'copilot-widget-frame';
         frame.title = 'Medical Co-Pilot';
         frame.loading = 'lazy';
         frame.referrerPolicy = 'same-origin';
+        frame.hidden = true;
         body.appendChild(frame);
 
         drawer.appendChild(header);
@@ -294,8 +346,240 @@
         document.body.appendChild(root);
 
         function tryRestoreSession() {
-            if (window.top && typeof window.top.restoreSession === 'function') {
-                window.top.restoreSession();
+            try {
+                if (window.top && typeof window.top.restoreSession === 'function') {
+                    window.top.restoreSession();
+                }
+            } catch (error) {
+                logFrameEvent('openemr_cross_origin_access_blocked_prevented', {
+                    frameStatus: 'guarded',
+                    frameMode: 'restore_session_skipped',
+                    unavailableReason: 'cross_origin_top_access_blocked',
+                    openemrAvailable: false,
+                    requiresLogin: false
+                });
+            }
+        }
+
+        function resolveCopilotUrl() {
+            return typeof window.OPENEMR_AI_COPILOT_URL === 'string' ? window.OPENEMR_AI_COPILOT_URL : '';
+        }
+
+        function resolveHealthUrl() {
+            if (typeof window.OPENEMR_AI_COPILOT_HEALTH_URL === 'string' && window.OPENEMR_AI_COPILOT_HEALTH_URL) {
+                return window.OPENEMR_AI_COPILOT_HEALTH_URL;
+            }
+
+            const copilotUrl = resolveCopilotUrl();
+            if (!copilotUrl) {
+                return '';
+            }
+
+            try {
+                const healthUrl = new URL(copilotUrl, window.location.href);
+                healthUrl.searchParams.set('healthcheck', '1');
+                return healthUrl.toString();
+            } catch (error) {
+                return copilotUrl;
+            }
+        }
+
+        function resolveLoginUrl() {
+            if (typeof window.OPENEMR_AI_COPILOT_LOGIN_URL === 'string' && window.OPENEMR_AI_COPILOT_LOGIN_URL) {
+                return window.OPENEMR_AI_COPILOT_LOGIN_URL;
+            }
+
+            return '/interface/login/login.php';
+        }
+
+        function buildFrameUrl() {
+            const copilotUrl = resolveCopilotUrl();
+            if (!copilotUrl) {
+                return '';
+            }
+
+            try {
+                const url = new URL(copilotUrl, window.location.href);
+                url.searchParams.set('frame_request_id', createId('copilot_frame'));
+                return url.toString();
+            } catch (error) {
+                return copilotUrl;
+            }
+        }
+
+        function buildSafeUrlMetadata(url) {
+            try {
+                const parsed = new URL(url, window.location.href);
+                return {
+                    targetOrigin: parsed.origin,
+                    targetPath: parsed.pathname
+                };
+            } catch (error) {
+                return {
+                    targetOrigin: window.location.origin || '',
+                    targetPath: ''
+                };
+            }
+        }
+
+        function clearFrameLoadTimer() {
+            if (state.frameLoadTimer) {
+                window.clearTimeout(state.frameLoadTimer);
+                state.frameLoadTimer = null;
+            }
+        }
+
+        function renderFrameState() {
+            const isConnected = state.frameStatus === 'connected';
+            const isLoading = state.frameStatus === 'checking' || state.frameStatus === 'loading';
+            const isUnavailable = state.frameStatus === 'unavailable' || state.frameStatus === 'failed' || state.frameStatus === 'login_required';
+            const noteText = isConnected
+                ? 'OpenEMR connected'
+                : (state.frameStatus === 'login_required'
+                    ? 'OpenEMR session expired — reopen or log in'
+                    : (isUnavailable ? 'OpenEMR unavailable — Copilot demo still running' : 'OpenEMR connection pending'));
+
+            headerNote.textContent = noteText;
+            statusTitle.textContent = noteText;
+            statusMessage.textContent = state.frameStatusMessage || 'Open the copilot to verify the OpenEMR connection.';
+            statusPanel.dataset.status = state.frameStatus;
+            statusPanel.hidden = isConnected;
+            retryButton.hidden = !(isUnavailable || state.frameStatus === 'idle');
+            openInNewTabLink.hidden = !resolveCopilotUrl();
+            openInNewTabLink.href = state.frameStatus === 'login_required' ? resolveLoginUrl() : resolveCopilotUrl();
+            frame.hidden = !isConnected && !isLoading;
+
+            body.classList.toggle('copilot-widget-body-loading', isLoading);
+            body.classList.toggle('copilot-widget-body-frame-ready', isConnected);
+            body.classList.toggle('copilot-widget-body-fallback', isUnavailable);
+        }
+
+        function logFrameEvent(eventName, payload) {
+            if (!telemetry) {
+                return;
+            }
+
+            telemetry.log(eventName, payload);
+        }
+
+        function markFrameFallback(message, details) {
+            const payload = Object.assign({
+                frameStatus: details.frameStatus || 'unavailable',
+                healthCheckStatus: details.healthCheckStatus || details.frameStatus || 'unavailable',
+                openemrAvailable: false,
+                requiresLogin: Boolean(details.requiresLogin),
+                unavailableReason: details.unavailableReason || 'frame_unavailable'
+            }, details.urlMeta || {});
+
+            state.iframeReady = false;
+            state.iframeRequested = false;
+            state.frameLoadInFlight = false;
+            state.frameStatus = details.frameStatus || 'unavailable';
+            state.frameStatusMessage = message;
+            clearFrameLoadTimer();
+            frame.removeAttribute('src');
+            logFrameEvent('openemr_frame_load_failed', payload);
+            if (payload.healthCheckStatus === 'failed' || payload.frameStatus === 'unavailable' || payload.frameStatus === 'login_required') {
+                logFrameEvent('openemr_health_check_failed', payload);
+            }
+            logFrameEvent('copilot_demo_continued_without_openemr_frame', payload);
+            renderFrameState();
+        }
+
+        async function runHealthCheck() {
+            const healthUrl = resolveHealthUrl();
+            const urlMeta = buildSafeUrlMetadata(resolveCopilotUrl());
+
+            if (!healthUrl) {
+                return {
+                    ok: false,
+                    frameStatus: 'unavailable',
+                    healthCheckStatus: 'missing_url',
+                    unavailableReason: 'missing_copilot_url',
+                    requiresLogin: false,
+                    urlMeta: urlMeta
+                };
+            }
+
+            const controller = typeof AbortController === 'function' ? new AbortController() : null;
+            const timeoutId = controller ? window.setTimeout(function () {
+                controller.abort();
+            }, 5000) : null;
+
+            try {
+                const response = await fetch(healthUrl, {
+                    method: 'GET',
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    signal: controller ? controller.signal : undefined
+                });
+
+                if (timeoutId) {
+                    window.clearTimeout(timeoutId);
+                }
+
+                const redirectedToLogin = response.redirected && /\/interface\/login\/login\.php/i.test(response.url || '');
+                if (redirectedToLogin) {
+                    return {
+                        ok: false,
+                        frameStatus: 'login_required',
+                        healthCheckStatus: 'login_required',
+                        unavailableReason: 'session_expired',
+                        requiresLogin: true,
+                        urlMeta: urlMeta
+                    };
+                }
+
+                if (!response.ok) {
+                    return {
+                        ok: false,
+                        frameStatus: 'unavailable',
+                        healthCheckStatus: 'http_' + response.status,
+                        unavailableReason: 'health_http_error',
+                        requiresLogin: false,
+                        urlMeta: urlMeta
+                    };
+                }
+
+                const contentType = (response.headers.get('content-type') || '').toLowerCase();
+                if (contentType.indexOf('application/json') !== -1) {
+                    const data = await response.json();
+                    if (data && data.requiresLogin) {
+                        return {
+                            ok: false,
+                            frameStatus: 'login_required',
+                            healthCheckStatus: 'login_required',
+                            unavailableReason: 'session_expired',
+                            requiresLogin: true,
+                            urlMeta: urlMeta
+                        };
+                    }
+                }
+
+                return {
+                    ok: true,
+                    frameStatus: 'available',
+                    healthCheckStatus: 'ok',
+                    unavailableReason: '',
+                    requiresLogin: false,
+                    urlMeta: urlMeta
+                };
+            } catch (error) {
+                if (timeoutId) {
+                    window.clearTimeout(timeoutId);
+                }
+
+                return {
+                    ok: false,
+                    frameStatus: 'unavailable',
+                    healthCheckStatus: error && error.name === 'AbortError' ? 'timeout' : 'network_error',
+                    unavailableReason: error && error.name === 'AbortError' ? 'health_timeout' : 'health_request_failed',
+                    requiresLogin: false,
+                    urlMeta: urlMeta
+                };
             }
         }
 
@@ -305,37 +589,107 @@
             drawer.setAttribute('aria-hidden', state.isOpen ? 'false' : 'true');
         }
 
-        function attachFrameEscapeHandler() {
-            try {
-                const frameDocument = frame.contentWindow && frame.contentWindow.document;
-                if (!frameDocument || frameDocument.__openemrAICopilotEscapeBound) {
-                    return;
-                }
-
-                frameDocument.addEventListener('keydown', function (event) {
-                    if (event.key === 'Escape') {
-                        event.preventDefault();
-                        closeDrawer();
-                    }
-                });
-                frameDocument.__openemrAICopilotEscapeBound = true;
-            } catch (error) {
-                // Same-origin is expected, but quietly ignore if the frame is unavailable during load.
-            }
-        }
-
-        function ensureIframeLoaded() {
-            if (state.iframeLoaded) {
+        async function confirmFrameLoadSuccess() {
+            state.healthCheck = await runHealthCheck();
+            if (!state.healthCheck.ok) {
+                markFrameFallback(
+                    state.healthCheck.requiresLogin
+                        ? 'OpenEMR session expired. Reopen or log in to continue.'
+                        : 'OpenEMR is not reachable at localhost:8300. Start OpenEMR and refresh the demo.',
+                    state.healthCheck
+                );
                 return;
             }
 
-            frame.src = window.OPENEMR_AI_COPILOT_URL;
-            state.iframeLoaded = true;
+            state.iframeReady = true;
+            state.frameLoadInFlight = false;
+            state.frameStatus = 'connected';
+            state.frameStatusMessage = 'OpenEMR connected';
+            clearFrameLoadTimer();
+            renderFrameState();
+            logFrameEvent('openemr_frame_load_succeeded', Object.assign({
+                frameStatus: 'connected',
+                healthCheckStatus: 'ok',
+                openemrAvailable: true,
+                requiresLogin: false
+            }, state.healthCheck.urlMeta || buildSafeUrlMetadata(state.lastFrameUrl || resolveCopilotUrl())));
+        }
+
+        async function ensureIframeLoaded(forceReload) {
+            if (state.frameLoadInFlight) {
+                return;
+            }
+
+            if (state.iframeReady && !forceReload) {
+                state.frameStatus = 'connected';
+                state.frameStatusMessage = 'OpenEMR connected';
+                renderFrameState();
+                return;
+            }
+
+            const frameUrl = buildFrameUrl();
+            if (!frameUrl) {
+                markFrameFallback('OpenEMR is not reachable at localhost:8300. Start OpenEMR and refresh the demo.', {
+                    frameStatus: 'unavailable',
+                    healthCheckStatus: 'missing_url',
+                    unavailableReason: 'missing_copilot_url',
+                    requiresLogin: false,
+                    urlMeta: buildSafeUrlMetadata(window.location.href)
+                });
+                return;
+            }
+
+            state.frameLoadInFlight = true;
+            state.frameStatus = 'checking';
+            state.frameStatusMessage = 'Checking OpenEMR connection...';
+            renderFrameState();
+
+            const urlMeta = buildSafeUrlMetadata(frameUrl);
+            logFrameEvent('openemr_cross_origin_access_blocked_prevented', Object.assign({
+                frameStatus: 'guarded',
+                frameMode: 'iframe_status_only',
+                unavailableReason: 'cross_origin_dom_access_disabled'
+            }, urlMeta));
+            logFrameEvent('openemr_frame_load_started', Object.assign({
+                frameStatus: 'checking',
+                frameMode: 'embedded_iframe'
+            }, urlMeta));
+
+            state.healthCheck = await runHealthCheck();
+            if (!state.healthCheck.ok) {
+                markFrameFallback(
+                    state.healthCheck.requiresLogin
+                        ? 'OpenEMR session expired. Reopen or log in to continue.'
+                        : 'OpenEMR is not reachable at localhost:8300. Start OpenEMR and refresh the demo.',
+                    state.healthCheck
+                );
+                return;
+            }
+
+            state.iframeRequested = true;
+            state.iframeReady = false;
+            state.lastFrameUrl = frameUrl;
+            state.frameStatus = 'loading';
+            state.frameStatusMessage = 'Loading OpenEMR-connected copilot...';
+            renderFrameState();
+            clearFrameLoadTimer();
+            state.frameLoadTimer = window.setTimeout(function () {
+                markFrameFallback(
+                    'OpenEMR did not finish loading in the embedded frame. You can retry or open the copilot in a new tab.',
+                    {
+                        frameStatus: 'failed',
+                        healthCheckStatus: 'load_timeout',
+                        unavailableReason: 'iframe_load_timeout',
+                        requiresLogin: false,
+                        urlMeta: urlMeta
+                    }
+                );
+            }, 8000);
+            frame.src = frameUrl;
         }
 
         function openDrawer() {
             tryRestoreSession();
-            ensureIframeLoaded();
             state.isOpen = true;
             syncOpenState();
             if (telemetry) {
@@ -344,6 +698,7 @@
                     selectedPatientKey: window.OpenEMRCopilotState.selectedPatientKey || null
                 });
             }
+            ensureIframeLoaded(false);
             closeButton.focus();
         }
 
@@ -367,6 +722,18 @@
             }
         }
 
+        retryButton.addEventListener('click', function () {
+            ensureIframeLoaded(true);
+        });
+        openInNewTabLink.addEventListener('click', function () {
+            if (telemetry) {
+                telemetry.log('copilot_open', {
+                    role: window.OpenEMRCopilotState.role || 'doctor',
+                    selectedPatientKey: window.OpenEMRCopilotState.selectedPatientKey || null,
+                    actionType: 'open_in_new_tab'
+                });
+            }
+        });
         launcher.addEventListener('click', toggleDrawer);
         closeButton.addEventListener('click', closeDrawer);
         document.addEventListener('keydown', function (event) {
@@ -375,9 +742,21 @@
                 closeDrawer();
             }
         });
-        frame.addEventListener('load', attachFrameEscapeHandler);
+        frame.addEventListener('load', function () {
+            confirmFrameLoadSuccess();
+        });
+        frame.addEventListener('error', function () {
+            markFrameFallback('OpenEMR is not reachable at localhost:8300. Start OpenEMR and refresh the demo.', {
+                frameStatus: 'failed',
+                healthCheckStatus: 'iframe_error',
+                unavailableReason: 'iframe_load_error',
+                requiresLogin: false,
+                urlMeta: buildSafeUrlMetadata(state.lastFrameUrl || resolveCopilotUrl())
+            });
+        });
 
         syncOpenState();
+        renderFrameState();
     }
 
     if (document.readyState === 'loading') {

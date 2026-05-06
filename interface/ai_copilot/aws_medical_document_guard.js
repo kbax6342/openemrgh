@@ -46,11 +46,36 @@ const MEDICAL_ENTITY_HINTS = [
     'hemoglobin a1c',
     'a1c',
     'glucose',
+    'random glucose',
     'ldl',
     'hdl',
+    'hemoglobin',
+    'platelets',
+    'bun',
+    'sodium',
+    'potassium',
+    'total cholesterol',
+    'triglycerides',
     'creatinine',
     'egfr',
+    'wbc',
+    'crp',
+    'esr',
+    'urine albumin/creatinine ratio',
+    'reference range',
+    'ordering provider',
+    'clinical laboratory',
+    'lab results',
+    'specimen',
+    'collected',
+    'reported',
     'mg/dl',
+    'mg/l',
+    'g/dl',
+    'mg/g',
+    'k/ul',
+    'mm/hr',
+    'mmol/l',
     'blood pressure',
     'pulse',
     'member id',
@@ -67,7 +92,47 @@ const MEDICAL_ENTITY_HINTS = [
 const DOCUMENT_CLASS_HINTS = {
     lab_results: {
         filePatterns: [/\blab\b/i, /\blabs\b/i, /\bresult\b/i, /\bdiagnostic\b/i],
-        textPatterns: [/\ba1c\b/i, /\bglucose\b/i, /\bldl\b/i, /\bhdl\b/i, /\bcreatinine\b/i, /\begfr\b/i, /\bmg\/dL\b/i, /\bhigh\b/i, /\blow\b/i, /\bnormal\b/i]
+        textPatterns: [
+            /\blab results?\b/i,
+            /\bclinical laboratory\b/i,
+            /\bclinical laboratory services\b/i,
+            /\bhemoglobin\s*a1c\b/i,
+            /\ba1c\b/i,
+            /\brandom glucose\b/i,
+            /\bglucose\b/i,
+            /\bldl\b/i,
+            /\bhdl\b/i,
+            /\bhemoglobin\b/i,
+            /\bplatelets?\b/i,
+            /\btotal cholesterol\b/i,
+            /\btriglycerides?\b/i,
+            /\bcreatinine\b/i,
+            /\begfr\b/i,
+            /\bbun\b/i,
+            /\bsodium\b/i,
+            /\bpotassium\b/i,
+            /\bwbc\b/i,
+            /\bcrp\b/i,
+            /\besr\b/i,
+            /\burine albumin\/creatinine ratio\b/i,
+            /\breference range\b/i,
+            /\bspecimen\b/i,
+            /\bcollected\b/i,
+            /\breported\b/i,
+            /\bordering provider\b/i,
+            /\bmg\/dL\b/i,
+            /\bmg\/L\b/i,
+            /\bg\/dL\b/i,
+            /\bmmol\/L\b/i,
+            /\bK\/uL\b/i,
+            /\bmg\/g\b/i,
+            /\bmm\/hr\b/i,
+            /%/,
+            /\bhigh\b/i,
+            /\blow\b/i,
+            /\bnormal\b/i,
+            /\b[HL]\b/
+        ]
     },
     intake_form: {
         filePatterns: [/\bintake\b/i, /\bquestionnaire\b/i, /\bform\b/i],
@@ -94,6 +159,14 @@ const DOCUMENT_CLASS_HINTS = {
         textPatterns: [/\bvisit summary\b/i, /\bfollow-up\b/i, /\bnext steps\b/i, /\bcare plan\b/i]
     }
 };
+
+const SYNTHETIC_DEMO_LABEL_PATTERNS = [
+    /\bsynthetic demo data only\b/i,
+    /\bsynthetic demo data\b/i,
+    /\bnot a real medical record\b/i,
+    /\bsynthetic lab results\b/i,
+    /\bsynthetic intake form\b/i
+];
 
 function normalizeText(value) {
     return String(value || '')
@@ -148,20 +221,29 @@ function envFloat(key, fallback) {
 function detectAcceptedDocumentClass(fileName, text) {
     const normalizedFileName = String(fileName || '');
     const normalizedText = String(text || '');
+    let bestType = 'unknown';
+    let bestScore = 0;
+
     for (const [documentType, hints] of Object.entries(DOCUMENT_CLASS_HINTS)) {
+        let score = 0;
         for (const pattern of hints.filePatterns) {
             if (pattern.test(normalizedFileName)) {
-                return documentType;
+                score += 2;
             }
         }
         for (const pattern of hints.textPatterns) {
             if (pattern.test(normalizedText)) {
-                return documentType;
+                score += 1;
             }
+        }
+
+        if (score > bestScore) {
+            bestScore = score;
+            bestType = documentType;
         }
     }
 
-    return 'unknown';
+    return bestScore > 0 ? bestType : 'unknown';
 }
 
 function findRejectedClues(text) {
@@ -189,6 +271,62 @@ function buildLocalEntitySummary(text, minimumScore) {
         })),
         averageScore,
         minimumScore
+    };
+}
+
+function detectSyntheticDemoLabels(text) {
+    const normalized = normalizeText(text);
+    if (!normalized) {
+        return [];
+    }
+
+    return Array.from(new Set(SYNTHETIC_DEMO_LABEL_PATTERNS.reduce((collection, pattern) => {
+        const match = normalized.match(pattern);
+        if (match && match[0]) {
+            collection.push(previewText(match[0], 80));
+        }
+        return collection;
+    }, [])));
+}
+
+function buildLabEvidenceSummary(text) {
+    const normalized = normalizeText(text);
+    if (!normalized) {
+        return {
+            score: 0,
+            matchedSignals: [],
+            structuredRowCount: 0
+        };
+    }
+
+    const matchedSignals = [];
+    (DOCUMENT_CLASS_HINTS.lab_results.textPatterns || []).forEach((pattern) => {
+        const match = normalized.match(pattern);
+        if (match && match[0]) {
+            matchedSignals.push(previewText(match[0], 80));
+        }
+    });
+
+    const structuredRowCount = normalized.split('\n').reduce((count, line) => {
+        const parsed = ingestion.parseRecognizedLabLine ? ingestion.parseRecognizedLabLine(line) : null;
+        return parsed ? count + 1 : count;
+    }, 0);
+
+    return {
+        score: Array.from(new Set(matchedSignals)).length + structuredRowCount,
+        matchedSignals: Array.from(new Set(matchedSignals)).slice(0, 24),
+        structuredRowCount
+    };
+}
+
+function buildIntakeEvidenceSummary(text) {
+    const extracted = ingestion.extractIntakeFactsFromText
+        ? ingestion.extractIntakeFactsFromText(text, { fileName: 'intake-form.pdf' })
+        : { validFieldCount: 0 };
+
+    return {
+        score: Number(extracted.validFieldCount || 0),
+        validFieldCount: Number(extracted.validFieldCount || 0)
     };
 }
 
@@ -225,14 +363,20 @@ function buildDecisionFromSignals(input) {
     const minimumScore = envFloat('AWS_COMPREHEND_MEDICAL_MIN_SCORE', 0.70);
     const entitySummary = input.detectedEntitySummary || buildLocalEntitySummary(text, minimumScore);
     const documentType = detectAcceptedDocumentClass(fileName, text);
+    const syntheticDemoLabels = detectSyntheticDemoLabels(text);
+    const isSyntheticDemoData = syntheticDemoLabels.length > 0;
+    const labEvidence = buildLabEvidenceSummary(text);
+    const intakeEvidence = buildIntakeEvidenceSummary(text);
     const rejectedClues = findRejectedClues(`${fileName}\n${text}`);
     const highConfidenceEntityCount = parseNumber(entitySummary.highConfidenceEntityCount, 0);
     const confidenceBase = Math.max(parseNumber(entitySummary.averageScore, 0), rejectedClues.length > 0 ? 0.25 : 0.45);
     const documentTypeRecognized = ACCEPTED_MEDICAL_DOCUMENT_CLASSES.includes(documentType);
     const confidenceBoost = documentTypeRecognized ? 0.18 : 0;
     const entityBoost = Math.min(highConfidenceEntityCount, 6) * 0.04;
+    const labEvidenceBoost = Math.min(labEvidence.score, 8) * 0.03;
+    const intakeEvidenceBoost = Math.min(intakeEvidence.score, 6) * 0.03;
     const confidencePenalty = rejectedClues.length > 0 ? 0.25 : 0;
-    const confidence = Number(Math.max(0, Math.min(0.99, confidenceBase + confidenceBoost + entityBoost - confidencePenalty)).toFixed(4));
+    const confidence = Number(Math.max(0, Math.min(0.99, confidenceBase + confidenceBoost + entityBoost + labEvidenceBoost + intakeEvidenceBoost - confidencePenalty)).toFixed(4));
 
     if (text === '') {
         return {
@@ -243,53 +387,87 @@ function buildDecisionFromSignals(input) {
             detectedEntitySummary: {
                 ...entitySummary,
                 rejectedClues,
-                medicalEntityCount: highConfidenceEntityCount
+                medicalEntityCount: highConfidenceEntityCount,
+                labEvidenceScore: labEvidence.score,
+                labEvidenceSignals: labEvidence.matchedSignals,
+                structuredLabRowCount: labEvidence.structuredRowCount,
+                intakeEvidenceScore: intakeEvidence.score,
+                syntheticDemoLabels
             },
-            rejectionReason: 'No reliable text was available for medical-document validation.'
+            rejectionReason: 'No reliable text was available for medical-document validation.',
+            textExtractionStatus: 'failed',
+            medicalValidationStatus: 'review_required',
+            chartWriteStatus: 'requires_clinician_review',
+            isSyntheticDemoData,
+            reviewRequired: true,
+            syntheticDemoLabels,
+            labEvidenceScore: labEvidence.score
         };
     }
 
-    if (rejectedClues.length >= 2 && highConfidenceEntityCount < minimumEntities) {
+    const strongLabEvidence = documentType === 'lab_results' && (labEvidence.structuredRowCount >= 2 || labEvidence.score >= 6);
+    const strongIntakeEvidence = documentType === 'intake_form' && intakeEvidence.validFieldCount >= 3;
+    const summary = {
+        ...entitySummary,
+        rejectedClues,
+        medicalEntityCount: highConfidenceEntityCount,
+        labEvidenceScore: labEvidence.score,
+        labEvidenceSignals: labEvidence.matchedSignals,
+        structuredLabRowCount: labEvidence.structuredRowCount,
+        intakeEvidenceScore: intakeEvidence.score,
+        syntheticDemoLabels
+    };
+
+    if (rejectedClues.length >= 2 && highConfidenceEntityCount < minimumEntities && labEvidence.score < 2 && intakeEvidence.score < 2) {
         return {
             decision: 'rejected',
             documentType: 'unknown',
             confidence,
             extractedTextPreview: previewText(text),
-            detectedEntitySummary: {
-                ...entitySummary,
-                rejectedClues,
-                medicalEntityCount: highConfidenceEntityCount
-            },
-            rejectionReason: 'The uploaded PDF appears to be a non-medical document based on business or unrelated document language.'
+            detectedEntitySummary: summary,
+            rejectionReason: 'The uploaded PDF appears to be a non-medical document based on business or unrelated document language.',
+            textExtractionStatus: 'success',
+            medicalValidationStatus: 'rejected',
+            chartWriteStatus: 'rejected',
+            isSyntheticDemoData,
+            reviewRequired: true,
+            syntheticDemoLabels,
+            labEvidenceScore: labEvidence.score
         };
     }
 
-    if (documentTypeRecognized && highConfidenceEntityCount >= minimumEntities && confidence >= minimumScore) {
+    if (strongLabEvidence || strongIntakeEvidence || (documentTypeRecognized && highConfidenceEntityCount >= minimumEntities && confidence >= minimumScore)) {
         return {
             decision: 'allowed',
             documentType,
             confidence,
             extractedTextPreview: previewText(text),
-            detectedEntitySummary: {
-                ...entitySummary,
-                rejectedClues,
-                medicalEntityCount: highConfidenceEntityCount
-            }
+            detectedEntitySummary: summary,
+            textExtractionStatus: 'success',
+            medicalValidationStatus: 'allowed',
+            chartWriteStatus: 'requires_clinician_review',
+            isSyntheticDemoData,
+            reviewRequired: true,
+            syntheticDemoLabels,
+            labEvidenceScore: labEvidence.score
         };
     }
 
-    if (!documentTypeRecognized && highConfidenceEntityCount <= 0) {
+    if (!documentTypeRecognized && highConfidenceEntityCount <= 0 && labEvidence.score < 2 && intakeEvidence.score < 2) {
         return {
             decision: 'rejected',
             documentType: 'unknown',
             confidence,
             extractedTextPreview: previewText(text),
-            detectedEntitySummary: {
-                ...entitySummary,
-                rejectedClues,
-                medicalEntityCount: highConfidenceEntityCount
-            },
-            rejectionReason: 'The uploaded PDF did not contain enough recognizable clinical or healthcare language to be ingested.'
+            detectedEntitySummary: summary,
+            rejectionReason: 'The uploaded PDF did not contain enough recognizable clinical or healthcare language to be ingested.',
+            textExtractionStatus: 'success',
+            medicalValidationStatus: 'rejected',
+            chartWriteStatus: 'rejected',
+            isSyntheticDemoData,
+            reviewRequired: true,
+            syntheticDemoLabels,
+            labEvidenceScore: labEvidence.score
         };
     }
 
@@ -298,12 +476,15 @@ function buildDecisionFromSignals(input) {
         documentType: documentTypeRecognized ? documentType : 'unknown',
         confidence,
         extractedTextPreview: previewText(text),
-        detectedEntitySummary: {
-            ...entitySummary,
-            rejectedClues,
-            medicalEntityCount: highConfidenceEntityCount
-        },
-        rejectionReason: 'Document type could not be verified with high confidence.'
+        detectedEntitySummary: summary,
+        rejectionReason: 'Document type could not be verified with high confidence.',
+        textExtractionStatus: 'success',
+        medicalValidationStatus: 'review_required',
+        chartWriteStatus: 'requires_clinician_review',
+        isSyntheticDemoData,
+        reviewRequired: true,
+        syntheticDemoLabels,
+        labEvidenceScore: labEvidence.score
     };
 }
 

@@ -374,6 +374,8 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
     <script src="js/shortcuts.js?v=<?php echo $v_js_includes; ?>"></script>
     <script>
         window.OPENEMR_AI_COPILOT_URL = <?php echo js_escape(OEGlobalsBag::getInstance()->getWebRoot() . '/interface/ai_copilot/index.php?embedded=1'); ?>;
+        window.OPENEMR_AI_COPILOT_HEALTH_URL = <?php echo js_escape(OEGlobalsBag::getInstance()->getWebRoot() . '/interface/ai_copilot/index.php?embedded=1&healthcheck=1'); ?>;
+        window.OPENEMR_AI_COPILOT_LOGIN_URL = <?php echo js_escape(OEGlobalsBag::getInstance()->getWebRoot() . '/interface/login/login.php'); ?>;
     </script>
     <script src="<?php echo attr_url(OEGlobalsBag::getInstance()->getWebRoot()); ?>/interface/ai_copilot/copilot_widget.js?v=<?php echo attr_url((string) ($v_js_includes ?? time())); ?>"></script>
 

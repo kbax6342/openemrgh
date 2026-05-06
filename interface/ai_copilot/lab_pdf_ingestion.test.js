@@ -10,6 +10,7 @@ const copilotIndexSource = fs.readFileSync(path.join(__dirname, 'index.php'), 'u
 const copilotCssSource = fs.readFileSync(path.join(__dirname, 'copilot.css'), 'utf8');
 const medicalDocumentGuardPhpSource = fs.readFileSync(path.join(__dirname, 'medical_document_guard.php'), 'utf8');
 const awsMedicalDocumentGuardSource = fs.readFileSync(path.join(__dirname, 'aws_medical_document_guard.js'), 'utf8');
+const pdfTextExtractorSource = fs.readFileSync(path.join(__dirname, 'pdf_text_extractor.js'), 'utf8');
 const packageJsonSource = fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8');
 const envExampleSource = fs.readFileSync(path.join(__dirname, '..', '..', '.env.example'), 'utf8');
 
@@ -34,6 +35,34 @@ function fakePdfFile(name = 'marcus-johnson-labs.pdf') {
         size: 2048
     };
 }
+
+const SYNTHETIC_MARCUS_LAB_TEXT = [
+    'SYNTHETIC DEMO DATA ONLY',
+    'NOT A REAL MEDICAL RECORD',
+    'Patient: Marcus Johnson',
+    'Synthetic Hospital Lab Results',
+    'Clinical Laboratory Services',
+    'Lab Results',
+    'Hemoglobin A1c 9.6 % High',
+    'Random Glucose 248 mg/dL High',
+    'Creatinine 1.10 mg/dL Normal',
+    'eGFR 86 mL/min/1.73m2 Normal',
+    'BUN 19 mg/dL Normal',
+    'Sodium 136 mmol/L Normal',
+    'Potassium 4.3 mmol/L Normal',
+    'WBC 10.9 K/uL High',
+    'Hemoglobin 13.4 g/dL Normal',
+    'Platelets 332 K/uL Normal',
+    'CRP 12.8 mg/L High',
+    'ESR 42 mm/hr High',
+    'Urine Albumin/Creatinine Ratio 72 mg/g High',
+    'Total Cholesterol 214 mg/dL High',
+    'LDL Cholesterol 126 mg/dL High',
+    'HDL Cholesterol 39 mg/dL Low',
+    'Triglycerides 224 mg/dL High',
+    'Ordering Provider: Demo Clinician',
+    'Collected: 2026-05-05'
+].join('\n');
 
 const tests = [
     function doctorCanAttachAndIngestPdfThroughPromptComposer() {
@@ -109,6 +138,28 @@ const tests = [
         });
         assert.strictEqual(extracted.status, 'seeded_demo_fallback');
         assert.ok(/Hemoglobin A1c: 8\.2 %, high/.test(extracted.text));
+    },
+    function knownSyntheticDemoPdfUsesScopedLocalFallback() {
+        const extracted = ingestion.extractTextOrSeedFallback({
+            fileName: 'marcus_johnson_synthetic_lab_results.pdf',
+            patientKey: 'DEMO-PCP-1001',
+            patientName: 'Marcus Johnson'
+        });
+        assert.strictEqual(extracted.status, 'synthetic_demo_pdf_fallback');
+        assert.strictEqual(extracted.extractionMethod, 'synthetic_demo_pdf_fallback');
+        assert.ok(/Synthetic demo data only/i.test(extracted.text));
+        assert.ok(/Collection Date: 2026-05-05/.test(extracted.text));
+        assert.ok(/Hemoglobin A1c: 8\.2 %, high/.test(extracted.text));
+    },
+    function arbitraryUnreadableLabPdfDoesNotSilentlyUseMarcusFallback() {
+        const extracted = ingestion.extractTextOrSeedFallback({
+            fileName: 'marcus-johnson-lab-results.pdf',
+            patientKey: 'DEMO-PCP-1001',
+            patientName: 'Marcus Johnson'
+        });
+        assert.strictEqual(extracted.status, 'extraction_review_required');
+        assert.strictEqual(extracted.extractionMethod, 'pdf_text_unavailable');
+        assert.strictEqual(extracted.text, '');
     },
     function labPdfTextIsChunked() {
         const text = new Array(8).fill('Hemoglobin A1c: 8.2 %, high\nLDL Cholesterol: 142 mg/dL, high').join('\n');
@@ -293,7 +344,7 @@ const tests = [
         assert.ok(!facts.facts.some((fact) => /ignore previous instructions/i.test(fact.label)));
     },
     function syntheticMarcusJohnsonLabPdfReturnsExpectedFacts() {
-        const facts = ingestion.extractLabFactsFromText('Patient: Marcus Johnson', {
+        const facts = ingestion.extractLabFactsFromText('', {
             fileName: ingestion.SEEDED_FILE_NAME
         });
         assert.deepStrictEqual(
@@ -305,6 +356,33 @@ const tests = [
                 'eGFR: 82 mL/min/1.73m2, normal'
             ]
         );
+    },
+    function readableSyntheticMarcusLabPdfKeepsUploadedValuesInsteadOfOldSeedData() {
+        const facts = ingestion.extractLabFactsFromText(SYNTHETIC_MARCUS_LAB_TEXT, {
+            fileName: 'Marcus Johnson Synthetic Lab Results.pdf'
+        });
+        assert.ok(facts.facts.some((fact) => fact.label === 'Hemoglobin A1c' && fact.value === '9.6 %' && fact.flag === 'high'));
+        assert.ok(facts.facts.some((fact) => fact.label === 'Random Glucose' && fact.value === '248 mg/dL' && fact.flag === 'high'));
+        assert.ok(facts.facts.some((fact) => fact.label === 'Creatinine' && fact.value === '1.10 mg/dL'));
+        assert.ok(facts.facts.some((fact) => fact.label === 'eGFR' && fact.value === '86 mL/min/1.73m2'));
+        assert.ok(facts.facts.some((fact) => fact.label === 'BUN' && fact.value === '19 mg/dL'));
+        assert.ok(facts.facts.some((fact) => fact.label === 'Sodium' && fact.value === '136 mmol/L'));
+        assert.ok(facts.facts.some((fact) => fact.label === 'Potassium' && fact.value === '4.3 mmol/L'));
+        assert.ok(facts.facts.some((fact) => fact.label === 'WBC' && fact.value === '10.9 K/uL' && fact.flag === 'high'));
+        assert.ok(facts.facts.some((fact) => fact.label === 'Hemoglobin' && fact.value === '13.4 g/dL'));
+        assert.ok(facts.facts.some((fact) => fact.label === 'Platelets' && fact.value === '332 K/uL'));
+        assert.ok(facts.facts.some((fact) => fact.label === 'CRP' && fact.value === '12.8 mg/L' && fact.flag === 'high'));
+        assert.ok(facts.facts.some((fact) => fact.label === 'ESR' && fact.value === '42 mm/hr' && fact.flag === 'high'));
+        assert.ok(facts.facts.some((fact) => fact.label === 'Urine Albumin/Creatinine Ratio' && fact.value === '72 mg/g' && fact.flag === 'high'));
+        assert.ok(facts.facts.some((fact) => fact.label === 'Total Cholesterol' && fact.value === '214 mg/dL' && fact.flag === 'high'));
+        assert.ok(facts.facts.some((fact) => fact.label === 'LDL Cholesterol' && fact.value === '126 mg/dL' && fact.flag === 'high'));
+        assert.ok(facts.facts.some((fact) => fact.label === 'HDL Cholesterol' && fact.value === '39 mg/dL' && fact.flag === 'low'));
+        assert.ok(facts.facts.some((fact) => fact.label === 'Triglycerides' && fact.value === '224 mg/dL' && fact.flag === 'high'));
+        assert.ok(!facts.facts.some((fact) => fact.label === 'Hemoglobin A1c' && fact.value === '8.2 %'));
+    },
+    function clientSideRawPdfBytesAreNotTreatedAsReadableExtraction() {
+        const binary = Uint8Array.from(Buffer.from('%PDF-1.4 1 0 obj /BaseFont /Helvetica endobj xref trailer'));
+        assert.strictEqual(ingestion.extractPrintableTextFromPdfBuffer(binary), '');
     },
     function syntheticMarcusJohnsonIntakeFormReturnsExpectedFacts() {
         const intake = ingestion.extractIntakeFactsFromText(ingestion.SEEDED_INTAKE_TEXT, {
@@ -335,25 +413,34 @@ const tests = [
     function medicalDocumentGuardAllowsMarcusLabPdf() {
         const result = ingestion.evaluateMedicalDocumentGuard({
             fileName: 'Marcus Johnson Lab Results.pdf',
-            text: ingestion.SEEDED_TEXT
+            text: SYNTHETIC_MARCUS_LAB_TEXT
         });
         assert.strictEqual(result.decision, 'allowed');
         assert.strictEqual(result.documentType, 'lab_results');
         assert.ok(result.confidence >= 0.7);
+        assert.strictEqual(result.textExtractionStatus, 'success');
+        assert.strictEqual(result.medicalValidationStatus, 'allowed');
+        assert.strictEqual(result.chartWriteStatus, 'requires_clinician_review');
+        assert.strictEqual(result.isSyntheticDemoData, true);
+        assert.strictEqual(result.reviewRequired, true);
+        assert.ok(result.labEvidenceScore >= 6);
     },
     function medicalDocumentGuardAllowsMarcusIntakeForm() {
         const result = ingestion.evaluateMedicalDocumentGuard({
             fileName: 'Marcus Johnson Intake Form.pdf',
-            text: ingestion.SEEDED_INTAKE_TEXT
+            text: ['Synthetic demo data only', ingestion.SEEDED_INTAKE_TEXT].join('\n')
         });
         assert.strictEqual(result.decision, 'allowed');
         assert.strictEqual(result.documentType, 'intake_form');
         assert.ok(result.confidence >= 0.7);
+        assert.strictEqual(result.isSyntheticDemoData, true);
+        assert.strictEqual(result.reviewRequired, true);
     },
     function awsMedicalDocumentGuardFilesAndEnvPlaceholdersExist() {
         assert.ok(packageJsonSource.includes('@aws-sdk/client-s3'));
         assert.ok(packageJsonSource.includes('@aws-sdk/client-textract'));
         assert.ok(packageJsonSource.includes('@aws-sdk/client-comprehendmedical'));
+        assert.ok(packageJsonSource.includes('pdf-parse'));
         assert.ok(envExampleSource.includes('AWS_REGION='));
         assert.ok(envExampleSource.includes('AWS_TEXTRACT_UPLOAD_BUCKET='));
         assert.ok(envExampleSource.includes('AWS_MEDICAL_DOCUMENT_GUARD_ENABLED=true'));
@@ -362,19 +449,37 @@ const tests = [
         assert.ok(awsMedicalDocumentGuardSource.includes('StartDocumentTextDetectionCommand'));
         assert.ok(awsMedicalDocumentGuardSource.includes('DetectEntitiesV2Command'));
         assert.ok(medicalDocumentGuardPhpSource.includes('aiCopilotValidateMedicalDocumentGuard'));
+        assert.ok(pdfTextExtractorSource.includes("require('pdf-parse')"));
+        assert.ok(pdfTextExtractorSource.includes('copilot_pdf_raw_bytes_detected'));
+        assert.ok(pdfTextExtractorSource.includes('copilot_pdf_ocr_or_textract_fallback_started'));
     },
     function serverBlocksVectorizationUntilMedicalDocumentGuardAllowsUpload() {
         assert.ok(labPdfIngestionPhpSource.includes('copilot_upload_received'));
+        assert.ok(labPdfIngestionPhpSource.includes('copilot_pdf_upload_received'));
         assert.ok(labPdfIngestionPhpSource.includes('aiCopilotValidateMedicalDocumentGuard'));
+        assert.ok(medicalDocumentGuardPhpSource.includes('copilot_medical_guard_started'));
+        assert.ok(medicalDocumentGuardPhpSource.includes('copilot_medical_guard_allowed'));
         assert.ok(labPdfIngestionPhpSource.includes('document_guard_rejected'));
         assert.ok(labPdfIngestionPhpSource.includes('document_guard_review_required'));
         assert.ok(labPdfIngestionPhpSource.includes('copilot_vectorization_blocked'));
+        assert.ok(labPdfIngestionPhpSource.includes('copilot_lab_values_extracted'));
+        assert.ok(labPdfIngestionPhpSource.includes('copilot_uploaded_document_vectorization_started'));
+        assert.ok(labPdfIngestionPhpSource.includes('copilot_uploaded_document_vectorization_succeeded'));
+        assert.ok(labPdfIngestionPhpSource.includes('copilot_uploaded_document_source_registered'));
         assert.ok(labPdfIngestionPhpSource.includes('aiCopilotLabPdfUpsertVectorRecords($records)'));
+        assert.ok(labPdfIngestionPhpSource.includes('pdf_text_extractor.js'));
     },
     function uiShowsMedicalDocumentGuardNoticeAndAuditHooks() {
         assert.ok(copilotIndexSource.includes('copilot-upload-notice'));
         assert.ok(copilotIndexSource.includes('Medical document detected. Ready for ingestion.'));
         assert.ok(copilotIndexSource.includes('This does not appear to be a medical document.'));
+        assert.ok(copilotIndexSource.includes('copilot_pdf_upload_received'));
+        assert.ok(copilotIndexSource.includes('copilot_pdf_raw_bytes_detected'));
+        assert.ok(copilotIndexSource.includes('copilot_pdf_text_extraction_started'));
+        assert.ok(copilotIndexSource.includes('copilot_pdf_text_extraction_failed'));
+        assert.ok(copilotIndexSource.includes('copilot_pdf_ocr_or_textract_fallback_started'));
+        assert.ok(copilotIndexSource.includes('copilot_medical_guard_started'));
+        assert.ok(copilotIndexSource.includes('copilot_medical_guard_allowed'));
         assert.ok(copilotIndexSource.includes('copilot_document_guard_started'));
         assert.ok(copilotIndexSource.includes('copilot_textract_started'));
         assert.ok(copilotIndexSource.includes('copilot_textract_succeeded'));
@@ -385,7 +490,33 @@ const tests = [
         assert.ok(copilotIndexSource.includes('copilot_document_guard_rejected'));
         assert.ok(copilotIndexSource.includes('copilot_document_guard_review_required'));
         assert.ok(copilotIndexSource.includes('copilot_vectorization_blocked'));
+        assert.ok(copilotIndexSource.includes('copilot_pdf_text_extraction_succeeded'));
+        assert.ok(copilotIndexSource.includes('copilot_medical_guard_detected_synthetic_demo_label'));
+        assert.ok(copilotIndexSource.includes('copilot_medical_guard_lab_evidence_score'));
+        assert.ok(copilotIndexSource.includes('copilot_medical_guard_document_type_detected'));
+        assert.ok(copilotIndexSource.includes('copilot_medical_guard_allowed_for_demo_ingestion'));
+        assert.ok(copilotIndexSource.includes('copilot_clinician_review_required'));
+        assert.ok(copilotIndexSource.includes('copilot_lab_values_extracted'));
+        assert.ok(copilotIndexSource.includes('copilot_uploaded_document_vectorization_started'));
+        assert.ok(copilotIndexSource.includes('copilot_uploaded_document_vectorization_succeeded'));
+        assert.ok(copilotIndexSource.includes('copilot_uploaded_document_source_registered'));
+        assert.ok(copilotIndexSource.includes('[Lab PDF Ingestion Debug] lab_pdf_text_extracted'));
+        assert.ok(copilotIndexSource.includes('[Lab PDF Ingestion Debug] lab_pdf_facts_extracted'));
+        assert.ok(copilotIndexSource.includes('[Lab PDF Ingestion Debug] lab_pdf_vectorized'));
+        assert.ok(copilotIndexSource.includes('[Lab PDF Ingestion Debug] rag_context_retrieved'));
+        assert.ok(copilotIndexSource.includes('extractedTextLength'));
+        assert.ok(copilotIndexSource.includes('retrievalChunkIds'));
+        assert.ok(copilotIndexSource.includes('copilot_vectorization_started'));
+        assert.ok(copilotIndexSource.includes('copilot_vectorization_succeeded'));
         assert.ok(copilotCssSource.includes('.copilot-upload-notice'));
+    },
+    function ragGroundingMessagingReflectsRetrievedUploadedChunksOnly() {
+        assert.ok(copilotIndexSource.includes('RAG-grounded response: uploaded lab PDF chunks were retrieved before drafting this answer.'));
+        assert.ok(copilotIndexSource.includes('Uploaded PDF ingestion was attempted, but no readable lab evidence chunks were retrieved.'));
+        assert.ok(copilotIndexSource.includes('OpenAI response generated with uploaded PDF retrieval context.'));
+        assert.ok(copilotIndexSource.includes('OpenAI response generated without retrieved uploaded PDF chunks.'));
+        assert.ok(copilotApiSource.includes('aiCopilotAttachmentRetrievedChunkCount'));
+        assert.ok(copilotApiSource.includes('aiCopilotAttachmentHasRetrievedChunks'));
     },
     function missingIntakeFieldsStayMissingInsteadOfInvented() {
         const intake = ingestion.extractIntakeFactsFromText([
@@ -672,6 +803,7 @@ const tests = [
             Object.keys(events[0].payload).sort(),
             [
                 'awsGuardEnabled',
+                'chartWriteStatus',
                 'chunkCount',
                 'confidence',
                 'documentGuardDecision',
@@ -680,16 +812,21 @@ const tests = [
                 'documentType',
                 'extractionMethod',
                 'guardrailTriggered',
+                'labEvidenceScore',
+                'medicalValidationStatus',
                 'medicalEntityCount',
                 'missingDataCount',
                 'mode',
                 'requestId',
                 'ragGrounded',
                 'rejectionReason',
+                'reviewRequired',
                 'retrievedChunkCount',
                 'role',
                 'selectedPatientKey',
                 'seededDemo',
+                'syntheticDemoData',
+                'textExtractionStatus',
                 'toolStatus'
             ].sort()
         );
@@ -727,6 +864,7 @@ const tests = [
             Object.keys(payload).sort(),
             [
                 'awsGuardEnabled',
+                'chartWriteStatus',
                 'chunkCount',
                 'confidence',
                 'documentGuardDecision',
@@ -735,16 +873,21 @@ const tests = [
                 'documentType',
                 'extractionMethod',
                 'guardrailTriggered',
+                'labEvidenceScore',
+                'medicalValidationStatus',
                 'medicalEntityCount',
                 'missingDataCount',
                 'mode',
                 'ragGrounded',
                 'rejectionReason',
                 'requestId',
+                'reviewRequired',
                 'retrievedChunkCount',
                 'role',
                 'selectedPatientKey',
                 'seededDemo',
+                'syntheticDemoData',
+                'textExtractionStatus',
                 'toolStatus'
             ].sort()
         );

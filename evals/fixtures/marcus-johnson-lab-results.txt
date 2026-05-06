@@ -1,0 +1,8 @@
+Synthetic demo data only
+Document: Marcus Johnson lab results
+Collection date: 2026-05-05
+Hemoglobin A1c: 8.2 % High
+Glucose: 186 mg/dL High
+LDL: 142 mg/dL High
+Creatinine: 1.0 mg/dL Normal
+eGFR: 88 Normal

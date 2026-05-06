@@ -1,0 +1,7 @@
+Synthetic demo data only
+Document: Marcus Johnson intake form
+Reason for visit: blood sugar management and medication questions
+Medication adherence issue: sometimes misses evening Metformin
+Allergies: no known drug allergies reported
+Insurance update: patient says coverage changed recently
+Care preference: written instructions and phone reminders

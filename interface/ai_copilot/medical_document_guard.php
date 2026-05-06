@@ -98,13 +98,40 @@ function aiCopilotMedicalGuardDetectDocumentType(string $fileName, string $text)
             '/\blabs\b/i',
             '/\bresult\b/i',
             '/\bdiagnostic\b/i',
+            '/\blab results?\b/i',
+            '/\bclinical laboratory\b/i',
             '/\ba1c\b/i',
+            '/\bhemoglobin\s*a1c\b/i',
+            '/\brandom glucose\b/i',
             '/\bglucose\b/i',
             '/\bldl\b/i',
             '/\bhdl\b/i',
+            '/\bhemoglobin\b/i',
+            '/\bplatelets?\b/i',
+            '/\btotal cholesterol\b/i',
+            '/\btriglycerides?\b/i',
             '/\bcreatinine\b/i',
             '/\begfr\b/i',
+            '/\bbun\b/i',
+            '/\bsodium\b/i',
+            '/\bpotassium\b/i',
+            '/\bwbc\b/i',
+            '/\bcrp\b/i',
+            '/\besr\b/i',
+            '/\burine albumin\/creatinine ratio\b/i',
+            '/\breference range\b/i',
+            '/\bspecimen\b/i',
+            '/\bcollected\b/i',
+            '/\breported\b/i',
+            '/\bordering provider\b/i',
             '/\bmg\/dL\b/i',
+            '/\bmg\/L\b/i',
+            '/\bg\/dL\b/i',
+            '/\bmmol\/L\b/i',
+            '/\bK\/uL\b/i',
+            '/\bmg\/g\b/i',
+            '/\bmm\/hr\b/i',
+            '/\b[HL]\b/',
         ],
         'intake_form' => [
             '/\bintake\b/i',
@@ -148,15 +175,27 @@ function aiCopilotMedicalGuardDetectDocumentType(string $fileName, string $text)
         ],
     ];
 
+    $bestType = 'unknown';
+    $bestScore = 0;
+
     foreach ($hints as $documentType => $patterns) {
+        $score = 0;
         foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $normalizedFileName) === 1 || preg_match($pattern, $normalizedText) === 1) {
-                return $documentType;
+            if (preg_match($pattern, $normalizedFileName) === 1) {
+                $score += 2;
             }
+            if (preg_match($pattern, $normalizedText) === 1) {
+                $score += 1;
+            }
+        }
+
+        if ($score > $bestScore) {
+            $bestScore = $score;
+            $bestType = $documentType;
         }
     }
 
-    return 'unknown';
+    return $bestScore > 0 ? $bestType : 'unknown';
 }
 
 function aiCopilotMedicalGuardRejectedMatches(string $fileName, string $text): array
@@ -190,11 +229,36 @@ function aiCopilotMedicalGuardLocalEntitySummary(string $text): array
         'hemoglobin a1c',
         'a1c',
         'glucose',
+        'random glucose',
         'ldl',
         'hdl',
+        'hemoglobin',
+        'platelets',
+        'bun',
+        'sodium',
+        'potassium',
+        'total cholesterol',
+        'triglycerides',
         'creatinine',
         'egfr',
+        'wbc',
+        'crp',
+        'esr',
+        'urine albumin/creatinine ratio',
+        'reference range',
+        'ordering provider',
+        'clinical laboratory',
+        'lab results',
+        'specimen',
+        'collected',
+        'reported',
         'mg/dl',
+        'mg/l',
+        'g/dl',
+        'mg/g',
+        'k/ul',
+        'mm/hr',
+        'mmol/l',
         'member id',
         'claim',
         'payer',
@@ -234,11 +298,128 @@ function aiCopilotMedicalGuardLocalEntitySummary(string $text): array
     ];
 }
 
+function aiCopilotMedicalGuardSyntheticDemoMatches(string $text): array
+{
+    $patterns = [
+        '/\bsynthetic demo data only\b/i',
+        '/\bsynthetic demo data\b/i',
+        '/\bnot a real medical record\b/i',
+        '/\bsynthetic lab results\b/i',
+        '/\bsynthetic intake form\b/i',
+    ];
+
+    $matches = [];
+    foreach ($patterns as $pattern) {
+        if (preg_match($pattern, $text, $result) === 1) {
+            $matches[] = aiCopilotMedicalGuardNormalizeText((string) ($result[0] ?? ''));
+        }
+    }
+
+    return array_values(array_unique(array_filter($matches, static fn($item) => $item !== '')));
+}
+
+function aiCopilotMedicalGuardBuildLabEvidenceSummary(string $text): array
+{
+    $patterns = [
+        '/\blab results?\b/i',
+        '/\bclinical laboratory\b/i',
+        '/\bhemoglobin\s*a1c\b/i',
+        '/\ba1c\b/i',
+        '/\brandom glucose\b/i',
+        '/\bglucose\b/i',
+        '/\bldl\b/i',
+        '/\bhdl\b/i',
+        '/\btotal cholesterol\b/i',
+        '/\btriglycerides?\b/i',
+        '/\bcreatinine\b/i',
+        '/\begfr\b/i',
+        '/\bbun\b/i',
+        '/\bwbc\b/i',
+        '/\bcrp\b/i',
+        '/\besr\b/i',
+        '/\burine albumin\/creatinine ratio\b/i',
+        '/\breference range\b/i',
+        '/\bspecimen\b/i',
+        '/\bcollected\b/i',
+        '/\breported\b/i',
+        '/\bordering provider\b/i',
+        '/\bmg\/dL\b/i',
+        '/\bmg\/L\b/i',
+        '/\bmmol\/L\b/i',
+        '/\bK\/uL\b/i',
+        '/\bmg\/g\b/i',
+        '/\bmm\/hr\b/i',
+        '/\bhigh\b/i',
+        '/\blow\b/i',
+        '/\bnormal\b/i',
+        '/\b[HL]\b/',
+        '/%/',
+    ];
+
+    $matchedSignals = [];
+    foreach ($patterns as $pattern) {
+        if (preg_match($pattern, $text, $result) === 1) {
+            $matchedSignals[] = aiCopilotMedicalGuardNormalizeText((string) ($result[0] ?? ''));
+        }
+    }
+
+    $structuredRowCount = 0;
+    $rowPatterns = [
+        '/\b(hemoglobin\s*a1c|hba1c|a1c|random glucose|glucose|ldl(?: cholesterol)?|hdl(?: cholesterol)?|total cholesterol|triglycerides?|creatinine|egfr|bun|wbc|crp|esr|urine albumin\/creatinine ratio|albumin\/creatinine ratio)\b.*?(-?\d+(?:\.\d+)?)\s*(%|mg\/dL|mg\/L|mmol\/L|K\/uL|mg\/g|mm\/hr|mL\/min\/1\.73m2)?/i',
+    ];
+    foreach (explode("\n", aiCopilotMedicalGuardNormalizeText($text)) as $line) {
+        foreach ($rowPatterns as $pattern) {
+            if (preg_match($pattern, $line) === 1) {
+                $structuredRowCount++;
+                break;
+            }
+        }
+    }
+
+    $matchedSignals = array_values(array_unique(array_filter($matchedSignals, static fn($item) => $item !== '')));
+
+    return [
+        'score' => count($matchedSignals) + $structuredRowCount,
+        'matchedSignals' => array_slice($matchedSignals, 0, 24),
+        'structuredRowCount' => $structuredRowCount,
+    ];
+}
+
+function aiCopilotMedicalGuardBuildIntakeEvidenceSummary(string $text): array
+{
+    $patterns = [
+        '/\breason for visit\b/i',
+        '/\bcurrent concerns\b/i',
+        '/\bmedication adherence\b/i',
+        '/\bmedication notes\b/i',
+        '/\ballergies\b/i',
+        '/\binsurance update\b/i',
+        '/\bcare preferences\b/i',
+        '/\bpreferred contact\b/i',
+    ];
+
+    $count = 0;
+    foreach ($patterns as $pattern) {
+        if (preg_match($pattern, $text) === 1) {
+            $count++;
+        }
+    }
+
+    return [
+        'score' => $count,
+        'validFieldCount' => $count,
+    ];
+}
+
 function aiCopilotMedicalGuardDecisionFromSignals(string $fileName, string $text, array $entitySummary): array
 {
     $documentType = aiCopilotMedicalGuardDetectDocumentType($fileName, $text);
     $rejectedClues = aiCopilotMedicalGuardRejectedMatches($fileName, $text);
     $highConfidenceCount = (int) ($entitySummary['highConfidenceEntityCount'] ?? 0);
+    $syntheticDemoLabels = aiCopilotMedicalGuardSyntheticDemoMatches($text);
+    $isSyntheticDemoData = $syntheticDemoLabels !== [];
+    $labEvidence = aiCopilotMedicalGuardBuildLabEvidenceSummary($text);
+    $intakeEvidence = aiCopilotMedicalGuardBuildIntakeEvidenceSummary($text);
     $confidenceBase = max((float) ($entitySummary['averageScore'] ?? 0), $rejectedClues !== [] ? 0.25 : 0.45);
     $documentTypeRecognized = in_array($documentType, aiCopilotMedicalGuardAcceptedClasses(), true);
     $confidence = max(
@@ -248,6 +429,8 @@ function aiCopilotMedicalGuardDecisionFromSignals(string $fileName, string $text
             $confidenceBase
             + ($documentTypeRecognized ? 0.18 : 0.0)
             + (min($highConfidenceCount, 6) * 0.04)
+            + (min((int) ($labEvidence['score'] ?? 0), 8) * 0.03)
+            + (min((int) ($intakeEvidence['score'] ?? 0), 6) * 0.03)
             - ($rejectedClues !== [] ? 0.25 : 0.0)
         )
     );
@@ -256,7 +439,18 @@ function aiCopilotMedicalGuardDecisionFromSignals(string $fileName, string $text
     $detectedEntitySummary = array_merge($entitySummary, [
         'rejectedClues' => $rejectedClues,
         'medicalEntityCount' => $highConfidenceCount,
+        'labEvidenceScore' => (int) ($labEvidence['score'] ?? 0),
+        'labEvidenceSignals' => $labEvidence['matchedSignals'] ?? [],
+        'structuredLabRowCount' => (int) ($labEvidence['structuredRowCount'] ?? 0),
+        'intakeEvidenceScore' => (int) ($intakeEvidence['score'] ?? 0),
+        'syntheticDemoLabels' => $syntheticDemoLabels,
     ]);
+    $textExtractionStatus = $text === '' ? 'failed' : 'success';
+    $strongLabEvidence = $documentType === 'lab_results' && (((int) ($labEvidence['structuredRowCount'] ?? 0)) >= 2 || ((int) ($labEvidence['score'] ?? 0)) >= 6);
+    $strongIntakeEvidence = $documentType === 'intake_form' && ((int) ($intakeEvidence['validFieldCount'] ?? 0)) >= 3;
+    $chartWriteStatus = ($rejectedClues !== [] && count($rejectedClues) >= 2 && $highConfidenceCount < aiCopilotMedicalGuardMinEntities() && !$strongLabEvidence && !$strongIntakeEvidence)
+        ? 'rejected'
+        : 'requires_clinician_review';
 
     if ($text === '') {
         return [
@@ -266,10 +460,17 @@ function aiCopilotMedicalGuardDecisionFromSignals(string $fileName, string $text
             'extractedTextPreview' => '',
             'detectedEntitySummary' => $detectedEntitySummary,
             'rejectionReason' => 'No reliable text was available for medical-document validation.',
+            'textExtractionStatus' => $textExtractionStatus,
+            'medicalValidationStatus' => 'review_required',
+            'chartWriteStatus' => 'requires_clinician_review',
+            'isSyntheticDemoData' => $isSyntheticDemoData,
+            'reviewRequired' => true,
+            'syntheticDemoLabels' => $syntheticDemoLabels,
+            'labEvidenceScore' => (int) ($labEvidence['score'] ?? 0),
         ];
     }
 
-    if ($rejectedClues !== [] && count($rejectedClues) >= 2 && $highConfidenceCount < aiCopilotMedicalGuardMinEntities()) {
+    if ($rejectedClues !== [] && count($rejectedClues) >= 2 && $highConfidenceCount < aiCopilotMedicalGuardMinEntities() && ((int) ($labEvidence['score'] ?? 0)) < 2 && ((int) ($intakeEvidence['score'] ?? 0)) < 2) {
         return [
             'decision' => 'rejected',
             'documentType' => 'unknown',
@@ -277,20 +478,34 @@ function aiCopilotMedicalGuardDecisionFromSignals(string $fileName, string $text
             'extractedTextPreview' => aiCopilotMedicalGuardPreview($text),
             'detectedEntitySummary' => $detectedEntitySummary,
             'rejectionReason' => 'The uploaded PDF appears to be a non-medical document based on business or unrelated document language.',
+            'textExtractionStatus' => $textExtractionStatus,
+            'medicalValidationStatus' => 'rejected',
+            'chartWriteStatus' => 'rejected',
+            'isSyntheticDemoData' => $isSyntheticDemoData,
+            'reviewRequired' => true,
+            'syntheticDemoLabels' => $syntheticDemoLabels,
+            'labEvidenceScore' => (int) ($labEvidence['score'] ?? 0),
         ];
     }
 
-    if ($documentTypeRecognized && $highConfidenceCount >= aiCopilotMedicalGuardMinEntities() && $confidence >= aiCopilotMedicalGuardMinScore()) {
+    if ($strongLabEvidence || $strongIntakeEvidence || ($documentTypeRecognized && $highConfidenceCount >= aiCopilotMedicalGuardMinEntities() && $confidence >= aiCopilotMedicalGuardMinScore())) {
         return [
             'decision' => 'allowed',
             'documentType' => $documentType,
             'confidence' => $confidence,
             'extractedTextPreview' => aiCopilotMedicalGuardPreview($text),
             'detectedEntitySummary' => $detectedEntitySummary,
+            'textExtractionStatus' => $textExtractionStatus,
+            'medicalValidationStatus' => 'allowed',
+            'chartWriteStatus' => 'requires_clinician_review',
+            'isSyntheticDemoData' => $isSyntheticDemoData,
+            'reviewRequired' => true,
+            'syntheticDemoLabels' => $syntheticDemoLabels,
+            'labEvidenceScore' => (int) ($labEvidence['score'] ?? 0),
         ];
     }
 
-    if (!$documentTypeRecognized && $highConfidenceCount <= 0) {
+    if (!$documentTypeRecognized && $highConfidenceCount <= 0 && ((int) ($labEvidence['score'] ?? 0)) < 2 && ((int) ($intakeEvidence['score'] ?? 0)) < 2) {
         return [
             'decision' => 'rejected',
             'documentType' => 'unknown',
@@ -298,6 +513,13 @@ function aiCopilotMedicalGuardDecisionFromSignals(string $fileName, string $text
             'extractedTextPreview' => aiCopilotMedicalGuardPreview($text),
             'detectedEntitySummary' => $detectedEntitySummary,
             'rejectionReason' => 'The uploaded PDF did not contain enough recognizable clinical or healthcare language to be ingested.',
+            'textExtractionStatus' => $textExtractionStatus,
+            'medicalValidationStatus' => 'rejected',
+            'chartWriteStatus' => 'rejected',
+            'isSyntheticDemoData' => $isSyntheticDemoData,
+            'reviewRequired' => true,
+            'syntheticDemoLabels' => $syntheticDemoLabels,
+            'labEvidenceScore' => (int) ($labEvidence['score'] ?? 0),
         ];
     }
 
@@ -308,6 +530,13 @@ function aiCopilotMedicalGuardDecisionFromSignals(string $fileName, string $text
         'extractedTextPreview' => aiCopilotMedicalGuardPreview($text),
         'detectedEntitySummary' => $detectedEntitySummary,
         'rejectionReason' => 'Document type could not be verified with high confidence.',
+        'textExtractionStatus' => $textExtractionStatus,
+        'medicalValidationStatus' => 'review_required',
+        'chartWriteStatus' => $chartWriteStatus,
+        'isSyntheticDemoData' => $isSyntheticDemoData,
+        'reviewRequired' => true,
+        'syntheticDemoLabels' => $syntheticDemoLabels,
+        'labEvidenceScore' => (int) ($labEvidence['score'] ?? 0),
     ];
 }
 
@@ -419,7 +648,7 @@ function aiCopilotMedicalGuardLocalFallback(array $input): array
     $entitySummary = aiCopilotMedicalGuardLocalEntitySummary($text);
     $decision = aiCopilotMedicalGuardDecisionFromSignals((string) ($input['file_name'] ?? ''), $text, $entitySummary);
 
-    return array_merge($decision, [
+    return aiCopilotMedicalGuardAugmentAuditEvents(array_merge($decision, [
         'guardProvider' => 'local_validation_fallback',
         'extractionMethod' => 'local_text_heuristics',
         'textractStatus' => 'not_run',
@@ -432,7 +661,82 @@ function aiCopilotMedicalGuardLocalFallback(array $input): array
                 ? 'copilot_document_guard_allowed'
                 : ($decision['decision'] === 'rejected' ? 'copilot_document_guard_rejected' : 'copilot_document_guard_review_required'),
         ],
+    ]));
+}
+
+function aiCopilotMedicalGuardAugmentAuditEvents(array $result): array
+{
+    $events = is_array($result['auditEvents'] ?? null) ? $result['auditEvents'] : [];
+
+    if (($result['textExtractionStatus'] ?? 'failed') === 'success') {
+        $events[] = 'copilot_pdf_text_extraction_succeeded';
+    }
+    if (!empty($result['isSyntheticDemoData'])) {
+        $events[] = 'copilot_medical_guard_detected_synthetic_demo_label';
+    }
+    if (isset($result['labEvidenceScore']) && is_numeric($result['labEvidenceScore'])) {
+        $events[] = 'copilot_medical_guard_lab_evidence_score';
+    }
+    if ((string) ($result['documentType'] ?? '') !== '') {
+        $events[] = 'copilot_medical_guard_document_type_detected';
+    }
+    if (($result['decision'] ?? '') === 'allowed' && !empty($result['isSyntheticDemoData'])) {
+        $events[] = 'copilot_medical_guard_allowed_for_demo_ingestion';
+    }
+    if (!array_key_exists('reviewRequired', $result) || !empty($result['reviewRequired'])) {
+        $events[] = 'copilot_clinician_review_required';
+    }
+
+    $result['auditEvents'] = array_values(array_unique(array_filter(array_map('strval', $events), static fn($item) => trim($item) !== '')));
+    return $result;
+}
+
+function aiCopilotMedicalGuardLogDerivedEvents(array $result, string $requestId, string $fileName): void
+{
+    if (($result['textExtractionStatus'] ?? 'failed') === 'success') {
+        aiCopilotMedicalGuardLog('copilot_pdf_text_extraction_succeeded', [
+            'request_id' => $requestId,
+            'file_name' => basename($fileName),
+            'extraction_method' => (string) ($result['extractionMethod'] ?? 'unknown'),
+        ]);
+    }
+
+    if (!empty($result['isSyntheticDemoData'])) {
+        aiCopilotMedicalGuardLog('copilot_medical_guard_detected_synthetic_demo_label', [
+            'request_id' => $requestId,
+            'file_name' => basename($fileName),
+            'labels' => is_array($result['syntheticDemoLabels'] ?? null) ? $result['syntheticDemoLabels'] : [],
+        ]);
+    }
+
+    aiCopilotMedicalGuardLog('copilot_medical_guard_lab_evidence_score', [
+        'request_id' => $requestId,
+        'file_name' => basename($fileName),
+        'lab_evidence_score' => (int) ($result['labEvidenceScore'] ?? 0),
     ]);
+
+    aiCopilotMedicalGuardLog('copilot_medical_guard_document_type_detected', [
+        'request_id' => $requestId,
+        'file_name' => basename($fileName),
+        'document_type' => (string) ($result['documentType'] ?? 'unknown'),
+    ]);
+
+    if (($result['decision'] ?? '') === 'allowed' && !empty($result['isSyntheticDemoData'])) {
+        aiCopilotMedicalGuardLog('copilot_medical_guard_allowed_for_demo_ingestion', [
+            'request_id' => $requestId,
+            'file_name' => basename($fileName),
+            'document_type' => (string) ($result['documentType'] ?? 'unknown'),
+            'confidence' => (string) ($result['confidence'] ?? 0),
+        ]);
+    }
+
+    if (!array_key_exists('reviewRequired', $result) || !empty($result['reviewRequired'])) {
+        aiCopilotMedicalGuardLog('copilot_clinician_review_required', [
+            'request_id' => $requestId,
+            'file_name' => basename($fileName),
+            'chart_write_status' => (string) ($result['chartWriteStatus'] ?? 'requires_clinician_review'),
+        ]);
+    }
 }
 
 function aiCopilotValidateMedicalDocumentGuard(array $input): array
@@ -444,6 +748,13 @@ function aiCopilotValidateMedicalDocumentGuard(array $input): array
     $role = (string) ($input['role'] ?? 'doctor');
 
     aiCopilotMedicalGuardLog('copilot_document_guard_started', [
+        'request_id' => $requestId,
+        'role' => $role,
+        'patient_key' => $patientKey,
+        'file_name' => basename($fileName),
+        'aws_guard_enabled' => aiCopilotMedicalGuardEnabled() ? 'true' : 'false',
+    ]);
+    aiCopilotMedicalGuardLog('copilot_medical_guard_started', [
         'request_id' => $requestId,
         'role' => $role,
         'patient_key' => $patientKey,
@@ -473,17 +784,26 @@ function aiCopilotValidateMedicalDocumentGuard(array $input): array
             'textractStatus' => 'not_run',
             'comprehendStatus' => 'not_run',
             'extractedText' => '',
+            'textExtractionStatus' => 'failed',
+            'medicalValidationStatus' => 'rejected',
+            'chartWriteStatus' => 'rejected',
+            'isSyntheticDemoData' => false,
+            'reviewRequired' => true,
+            'syntheticDemoLabels' => [],
+            'labEvidenceScore' => 0,
             'awsGuardEnabled' => aiCopilotMedicalGuardEnabled(),
             'auditEvents' => [
                 'copilot_document_guard_rejected',
                 'copilot_vectorization_blocked',
             ],
         ];
+        $result = aiCopilotMedicalGuardAugmentAuditEvents($result);
         aiCopilotMedicalGuardLog('copilot_document_guard_rejected', [
             'request_id' => $requestId,
             'file_name' => basename($fileName),
             'reason' => $result['rejectionReason'],
         ]);
+        aiCopilotMedicalGuardLogDerivedEvents($result, $requestId, $fileName);
         return $result;
     }
 
@@ -501,6 +821,16 @@ function aiCopilotValidateMedicalDocumentGuard(array $input): array
                 'provider' => $localResult['guardProvider'] ?? 'local_validation_fallback',
             ]
         );
+        if (($localResult['decision'] ?? '') === 'allowed') {
+            aiCopilotMedicalGuardLog('copilot_medical_guard_allowed', [
+                'request_id' => $requestId,
+                'file_name' => basename($fileName),
+                'document_type' => $localResult['documentType'] ?? 'unknown',
+                'confidence' => $localResult['confidence'] ?? 0,
+                'provider' => $localResult['guardProvider'] ?? 'local_validation_fallback',
+            ]);
+        }
+        aiCopilotMedicalGuardLogDerivedEvents($localResult, $requestId, $fileName);
         if (($localResult['decision'] ?? '') !== 'allowed') {
             aiCopilotMedicalGuardLog('copilot_vectorization_blocked', [
                 'request_id' => $requestId,
@@ -555,11 +885,13 @@ function aiCopilotValidateMedicalDocumentGuard(array $input): array
             'decision' => 'review_required',
         ]);
 
-        return [
+        $failureText = aiCopilotMedicalGuardNormalizeText((string) ($input['text'] ?? $input['fallback_text'] ?? ''));
+        $failureSyntheticLabels = aiCopilotMedicalGuardSyntheticDemoMatches($failureText);
+        $failureResult = [
             'decision' => 'review_required',
             'documentType' => 'unknown',
             'confidence' => 0.0,
-            'extractedTextPreview' => '',
+            'extractedTextPreview' => aiCopilotMedicalGuardPreview($failureText),
             'detectedEntitySummary' => [
                 'totalEntities' => 0,
                 'highConfidenceEntityCount' => 0,
@@ -575,7 +907,14 @@ function aiCopilotValidateMedicalDocumentGuard(array $input): array
             'extractionMethod' => 'aws_guard_failure',
             'textractStatus' => 'failed',
             'comprehendStatus' => 'not_run',
-            'extractedText' => '',
+            'extractedText' => $failureText,
+            'textExtractionStatus' => $failureText !== '' ? 'success' : 'failed',
+            'medicalValidationStatus' => 'review_required',
+            'chartWriteStatus' => 'requires_clinician_review',
+            'isSyntheticDemoData' => $failureSyntheticLabels !== [],
+            'reviewRequired' => true,
+            'syntheticDemoLabels' => $failureSyntheticLabels,
+            'labEvidenceScore' => (int) (aiCopilotMedicalGuardBuildLabEvidenceSummary($failureText)['score'] ?? 0),
             'awsGuardEnabled' => true,
             'auditEvents' => [
                 'copilot_document_guard_started',
@@ -585,6 +924,9 @@ function aiCopilotValidateMedicalDocumentGuard(array $input): array
                 'copilot_vectorization_blocked',
             ],
         ];
+        $failureResult = aiCopilotMedicalGuardAugmentAuditEvents($failureResult);
+        aiCopilotMedicalGuardLogDerivedEvents($failureResult, $requestId, $fileName);
+        return $failureResult;
     }
 
     $textractStatus = (string) ($awsResult['textractStatus'] ?? 'not_run');
@@ -624,6 +966,15 @@ function aiCopilotValidateMedicalDocumentGuard(array $input): array
             'provider' => (string) ($awsResult['guardProvider'] ?? 'aws_textract_comprehend_medical'),
         ]
     );
+    if ($decision === 'allowed') {
+        aiCopilotMedicalGuardLog('copilot_medical_guard_allowed', [
+            'request_id' => $requestId,
+            'file_name' => basename($fileName),
+            'document_type' => (string) ($awsResult['documentType'] ?? 'unknown'),
+            'confidence' => (string) ($awsResult['confidence'] ?? 0),
+            'provider' => (string) ($awsResult['guardProvider'] ?? 'aws_textract_comprehend_medical'),
+        ]);
+    }
     if ($decision !== 'allowed') {
         aiCopilotMedicalGuardLog('copilot_vectorization_blocked', [
             'request_id' => $requestId,
@@ -632,7 +983,7 @@ function aiCopilotValidateMedicalDocumentGuard(array $input): array
         ]);
     }
 
-    return [
+    $finalResult = [
         'decision' => $decision,
         'documentType' => (string) ($awsResult['documentType'] ?? 'unknown'),
         'confidence' => isset($awsResult['confidence']) && is_numeric($awsResult['confidence']) ? (float) $awsResult['confidence'] : 0.0,
@@ -644,7 +995,17 @@ function aiCopilotValidateMedicalDocumentGuard(array $input): array
         'textractStatus' => $textractStatus,
         'comprehendStatus' => $comprehendStatus,
         'extractedText' => aiCopilotMedicalGuardNormalizeText((string) ($awsResult['extractedText'] ?? '')),
+        'textExtractionStatus' => (string) ($awsResult['textExtractionStatus'] ?? ((string) ($awsResult['extractedText'] ?? '') !== '' ? 'success' : 'failed')),
+        'medicalValidationStatus' => (string) ($awsResult['medicalValidationStatus'] ?? $decision),
+        'chartWriteStatus' => (string) ($awsResult['chartWriteStatus'] ?? ($decision === 'rejected' ? 'rejected' : 'requires_clinician_review')),
+        'isSyntheticDemoData' => !empty($awsResult['isSyntheticDemoData']),
+        'reviewRequired' => !array_key_exists('reviewRequired', $awsResult) || !empty($awsResult['reviewRequired']),
+        'syntheticDemoLabels' => is_array($awsResult['syntheticDemoLabels'] ?? null) ? $awsResult['syntheticDemoLabels'] : [],
+        'labEvidenceScore' => isset($awsResult['labEvidenceScore']) && is_numeric($awsResult['labEvidenceScore']) ? (int) $awsResult['labEvidenceScore'] : 0,
         'awsGuardEnabled' => true,
         'auditEvents' => is_array($awsResult['auditEvents'] ?? null) ? $awsResult['auditEvents'] : [],
     ];
+    $finalResult = aiCopilotMedicalGuardAugmentAuditEvents($finalResult);
+    aiCopilotMedicalGuardLogDerivedEvents($finalResult, $requestId, $fileName);
+    return $finalResult;
 }

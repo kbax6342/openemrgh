@@ -258,6 +258,26 @@ How to test:
 - In DevTools, confirm the `[Medical Co-Pilot Audit]` document-guard events appear before the ingestion/vectorization events
 - Upload an obvious non-medical PDF and confirm the inline warning says it does not appear to be a medical document, with no `Sources Used` entry created for that file
 - Confirm the response includes `Sources Used` and the clinician-review safety notice
+
+### OpenEMR Iframe Safety
+
+The floating Co-Pilot drawer now avoids unsafe iframe DOM access when OpenEMR content fails to load or a browser replaces the iframe with an internal error page.
+
+Behavior:
+- The widget never reads `iframe.contentWindow.document`, `iframe.contentDocument`, or other cross-origin frame DOM APIs
+- Before loading the embedded Co-Pilot iframe, the widget performs a same-origin health check against `index.php?embedded=1&healthcheck=1`
+- If OpenEMR is reachable, the drawer shows `OpenEMR connected`
+- If OpenEMR is unavailable, the drawer shows `OpenEMR unavailable — Copilot demo still running`
+- If the session appears expired, the drawer shows a non-blocking reopen/login prompt instead of reusing a stale `token_main` URL
+- The standalone Co-Pilot page and PDF ingestion flow remain usable independently of the iframe state
+
+Iframe safety audit events:
+- `openemr_frame_load_started`
+- `openemr_frame_load_succeeded`
+- `openemr_frame_load_failed`
+- `openemr_cross_origin_access_blocked_prevented`
+- `openemr_health_check_failed`
+- `copilot_demo_continued_without_openemr_frame`
 - Ask a follow-up lab question and confirm the answer still cites the uploaded lab PDF context
 
 ### Demo Conversation Trace

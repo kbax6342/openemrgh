@@ -548,10 +548,40 @@ function aiCopilotPromptImpliesChartRetrieval(string $message): bool
     return preg_match('/\b(chart|chart context|visit history|ai-assisted encounter|ambient encounter capture|latest ambient encounter|troponin|a1c|glucose|wbc|ldl|creatinine|lab result|labs|medication history|medication information|insurance|immunization|care preference|payment due|balance due|payer|billing context|policy number)\b/i', $message) === 1;
 }
 
+function aiCopilotAttachmentRetrievedChunkCount(array $toolOutput): int
+{
+    $retrieval = is_array($toolOutput['retrieval'] ?? null) ? $toolOutput['retrieval'] : [];
+    if (isset($retrieval['chunk_count']) && is_numeric($retrieval['chunk_count'])) {
+        return max(0, (int) $retrieval['chunk_count']);
+    }
+
+    $chunkIds = is_array($retrieval['chunk_ids'] ?? null) ? $retrieval['chunk_ids'] : [];
+    return count(array_values(array_filter(array_map('strval', $chunkIds), static fn($item) => trim($item) !== '')));
+}
+
+function aiCopilotAttachmentHasRetrievedChunks(array $context): bool
+{
+    $toolOutput = is_array($context['attached_lab_pdf_tool_output'] ?? null) ? $context['attached_lab_pdf_tool_output'] : [];
+    if ($toolOutput === []) {
+        return false;
+    }
+
+    $toolStatus = aiCopilotCleanText((string) ($toolOutput['status'] ?? ''));
+    if (in_array($toolStatus, ['invalid_file_type', 'role_blocked', 'ocr_required', 'extraction_review_required', 'document_guard_rejected', 'document_guard_review_required'], true)) {
+        return false;
+    }
+
+    return aiCopilotAttachmentRetrievedChunkCount($toolOutput) > 0;
+}
+
 function aiCopilotShouldMarkRagGroundedForRequest(string $mode, string $message, array $context): bool
 {
     if (!aiCopilotContextHasPatient($context)) {
         return false;
+    }
+
+    if ($mode === 'lab_pdf_ingestion' || !empty($context['attached_lab_pdf_tool_output'])) {
+        return aiCopilotAttachmentHasRetrievedChunks($context);
     }
 
     if (aiCopilotIsRagGrounded($mode, $context)) {
@@ -580,7 +610,6 @@ function aiCopilotIsRagGrounded(string $mode, array $context): bool
         'patient_education',
         'rag_chart_context',
         'latest_ambient_summary',
-        'lab_pdf_ingestion',
     ], true);
 }
 
@@ -4884,6 +4913,16 @@ function aiCopilotNormalizeLabPdfContext(mixed $value): array
         'safe_message' => aiCopilotCleanText((string) ($toolOutput['safeMessage'] ?? $toolOutput['safe_message'] ?? '')),
         'extraction_method' => aiCopilotCleanText((string) ($toolOutput['extractionMethod'] ?? $toolOutput['extraction_method'] ?? '')),
         'extracted_text_preview' => aiCopilotCleanText((string) ($toolOutput['extractedTextPreview'] ?? $toolOutput['extracted_text_preview'] ?? '')),
+        'extracted_text_length' => isset($toolOutput['extractedTextLength']) && is_numeric($toolOutput['extractedTextLength'])
+            ? (int) $toolOutput['extractedTextLength']
+            : (isset($toolOutput['extracted_text_length']) && is_numeric($toolOutput['extracted_text_length']) ? (int) $toolOutput['extracted_text_length'] : 0),
+        'page_count' => isset($toolOutput['pageCount']) && is_numeric($toolOutput['pageCount'])
+            ? (int) $toolOutput['pageCount']
+            : (isset($toolOutput['page_count']) && is_numeric($toolOutput['page_count']) ? (int) $toolOutput['page_count'] : 0),
+        'raw_bytes_detected' => !empty($toolOutput['rawBytesDetected']) || !empty($toolOutput['raw_bytes_detected']),
+        'text_extraction_status' => aiCopilotCleanText((string) ($toolOutput['textExtractionStatus'] ?? $toolOutput['text_extraction_status'] ?? '')),
+        'medical_validation_status' => aiCopilotCleanText((string) ($toolOutput['medicalValidationStatus'] ?? $toolOutput['medical_validation_status'] ?? '')),
+        'chart_write_status' => aiCopilotCleanText((string) ($toolOutput['chartWriteStatus'] ?? $toolOutput['chart_write_status'] ?? '')),
         'number_of_chunks' => isset($toolOutput['numberOfChunks']) && is_numeric($toolOutput['numberOfChunks'])
             ? (int) $toolOutput['numberOfChunks']
             : (isset($toolOutput['number_of_chunks']) && is_numeric($toolOutput['number_of_chunks']) ? (int) $toolOutput['number_of_chunks'] : 0),
@@ -4914,8 +4953,8 @@ function aiCopilotNormalizeLabPdfContext(mixed $value): array
             'request_id' => aiCopilotCleanText((string) ($sourceMetadata['requestId'] ?? $sourceMetadata['request_id'] ?? '')),
             'source_id' => aiCopilotCleanText((string) ($sourceMetadata['sourceId'] ?? $sourceMetadata['source_id'] ?? '')),
         ],
-        'extracted_facts' => array_slice($extractedFacts, 0, 12),
-        'abnormal_findings' => array_slice(array_values(array_unique($abnormalFindings)), 0, 8),
+        'extracted_facts' => array_slice($extractedFacts, 0, 20),
+        'abnormal_findings' => array_slice(array_values(array_unique($abnormalFindings)), 0, 12),
         'missing_data' => array_slice(array_values(array_unique($missingData)), 0, 10),
         'missing_data_flags' => array_slice(array_values(array_unique($missingData)), 0, 10),
         'intake_fields' => $intakeFields,
@@ -4958,6 +4997,15 @@ function aiCopilotNormalizeLabPdfContext(mixed $value): array
             'textract_status' => aiCopilotCleanText((string) ($documentGuard['textractStatus'] ?? $documentGuard['textract_status'] ?? '')),
             'comprehend_status' => aiCopilotCleanText((string) ($documentGuard['comprehendStatus'] ?? $documentGuard['comprehend_status'] ?? '')),
             'aws_guard_enabled' => !empty($documentGuard['awsGuardEnabled']) || !empty($documentGuard['aws_guard_enabled']),
+            'text_extraction_status' => aiCopilotCleanText((string) ($documentGuard['textExtractionStatus'] ?? $documentGuard['text_extraction_status'] ?? '')),
+            'medical_validation_status' => aiCopilotCleanText((string) ($documentGuard['medicalValidationStatus'] ?? $documentGuard['medical_validation_status'] ?? '')),
+            'chart_write_status' => aiCopilotCleanText((string) ($documentGuard['chartWriteStatus'] ?? $documentGuard['chart_write_status'] ?? '')),
+            'is_synthetic_demo_data' => !empty($documentGuard['isSyntheticDemoData']) || !empty($documentGuard['is_synthetic_demo_data']),
+            'review_required' => !array_key_exists('reviewRequired', $documentGuard) || !empty($documentGuard['reviewRequired']) || !array_key_exists('review_required', $documentGuard) || !empty($documentGuard['review_required']),
+            'synthetic_demo_labels' => array_values(array_filter(array_map('aiCopilotCleanText', $documentGuard['syntheticDemoLabels'] ?? $documentGuard['synthetic_demo_labels'] ?? []), static fn($item) => $item !== '')),
+            'lab_evidence_score' => isset($documentGuard['labEvidenceScore']) && is_numeric($documentGuard['labEvidenceScore'])
+                ? (int) $documentGuard['labEvidenceScore']
+                : (isset($documentGuard['lab_evidence_score']) && is_numeric($documentGuard['lab_evidence_score']) ? (int) $documentGuard['lab_evidence_score'] : 0),
             'audit_events' => array_values(array_filter(array_map('aiCopilotCleanText', $documentGuard['auditEvents'] ?? $documentGuard['audit_events'] ?? []), static fn($item) => $item !== '')),
         ],
         'source_coverage' => $sourceCoverage,
@@ -4998,6 +5046,12 @@ function aiCopilotLabPdfToolOutputForClient(array $toolOutput): array
         'safeMessage' => aiCopilotCleanText((string) ($toolOutput['safe_message'] ?? '')),
         'extractionMethod' => aiCopilotCleanText((string) ($toolOutput['extraction_method'] ?? '')),
         'extractedTextPreview' => aiCopilotCleanText((string) ($toolOutput['extracted_text_preview'] ?? '')),
+        'extractedTextLength' => isset($toolOutput['extracted_text_length']) && is_numeric($toolOutput['extracted_text_length']) ? (int) $toolOutput['extracted_text_length'] : 0,
+        'pageCount' => isset($toolOutput['page_count']) && is_numeric($toolOutput['page_count']) ? (int) $toolOutput['page_count'] : 0,
+        'rawBytesDetected' => !empty($toolOutput['raw_bytes_detected']),
+        'textExtractionStatus' => aiCopilotCleanText((string) ($toolOutput['text_extraction_status'] ?? '')),
+        'medicalValidationStatus' => aiCopilotCleanText((string) ($toolOutput['medical_validation_status'] ?? '')),
+        'chartWriteStatus' => aiCopilotCleanText((string) ($toolOutput['chart_write_status'] ?? '')),
         'numberOfChunks' => $toolOutput['number_of_chunks'] ?? 0,
         'documentMetadata' => [
             'title' => aiCopilotCleanText((string) ($toolOutput['document_metadata']['title'] ?? '')),
@@ -5092,6 +5146,13 @@ function aiCopilotLabPdfToolOutputForClient(array $toolOutput): array
             'textractStatus' => aiCopilotCleanText((string) ($toolOutput['document_guard']['textract_status'] ?? '')),
             'comprehendStatus' => aiCopilotCleanText((string) ($toolOutput['document_guard']['comprehend_status'] ?? '')),
             'awsGuardEnabled' => !empty($toolOutput['document_guard']['aws_guard_enabled']),
+            'textExtractionStatus' => aiCopilotCleanText((string) ($toolOutput['document_guard']['text_extraction_status'] ?? '')),
+            'medicalValidationStatus' => aiCopilotCleanText((string) ($toolOutput['document_guard']['medical_validation_status'] ?? '')),
+            'chartWriteStatus' => aiCopilotCleanText((string) ($toolOutput['document_guard']['chart_write_status'] ?? '')),
+            'isSyntheticDemoData' => !empty($toolOutput['document_guard']['is_synthetic_demo_data']),
+            'reviewRequired' => !array_key_exists('review_required', $toolOutput['document_guard']) || !empty($toolOutput['document_guard']['review_required']),
+            'syntheticDemoLabels' => array_values(array_filter(array_map('aiCopilotCleanText', $toolOutput['document_guard']['synthetic_demo_labels'] ?? []), static fn($item) => $item !== '')),
+            'labEvidenceScore' => isset($toolOutput['document_guard']['lab_evidence_score']) && is_numeric($toolOutput['document_guard']['lab_evidence_score']) ? (int) $toolOutput['document_guard']['lab_evidence_score'] : 0,
             'auditEvents' => array_values(array_filter(array_map('aiCopilotCleanText', $toolOutput['document_guard']['audit_events'] ?? []), static fn($item) => $item !== '')),
         ],
         'sourceCoverage' => is_array($toolOutput['source_coverage'] ?? null) ? $toolOutput['source_coverage'] : [],
@@ -5884,11 +5945,16 @@ function aiCopilotBuildIntakeFormIngestionResponse(array $context): array
     }
 
     if (in_array((string) ($toolOutput['status'] ?? ''), ['document_guard_rejected', 'document_guard_review_required'], true)) {
+        $guardPreview = aiCopilotCleanText((string) ($toolOutput['extracted_text_preview'] ?? ''));
+        $guardFactsSection = [aiCopilotCleanText((string) ($toolOutput['safe_message'] ?? 'Document type could not be verified. Review required before ingestion.'))];
+        if ($guardPreview !== '') {
+            $guardFactsSection[] = 'Readable PDF text preview: ' . $guardPreview;
+        }
         return aiCopilotBuildResponse(
             'Intake Form Ingestion — Clinician Review Required',
             [
                 aiCopilotBuildSection('RAG-grounded Response Notice', ['No validated intake-form evidence was ingested because the uploaded PDF did not pass the medical document validation gate for automatic ingestion.'], 'yellow'),
-                aiCopilotBuildSection('Extracted Intake Facts', [aiCopilotCleanText((string) ($toolOutput['safe_message'] ?? 'Document type could not be verified. Review required before ingestion.'))], 'yellow'),
+                aiCopilotBuildSection('Extracted Intake Facts', $guardFactsSection, 'yellow'),
                 aiCopilotBuildSection('Missing or Ambiguous Data', ['The upload was blocked before vectorization or retrieval, so no intake-form chunks were stored or cited.'], 'yellow'),
                 aiCopilotBuildSection('Sources Used', ['No validated uploaded intake-form sources are currently available.']),
                 aiCopilotBuildSection('Safety Notice', [AI_COPILOT_INTAKE_FORM_REVIEW_NOTICE]),
@@ -6118,7 +6184,7 @@ function aiCopilotBuildCombinedUploadedDocumentResponse(array $context): array
         'Uploaded Document Ingestion — Clinician Review Required',
         [
             aiCopilotBuildSection('Summary', $summaryItems),
-            aiCopilotBuildSection('Lab Result Findings', array_slice($labItems, 0, 12), $labItems !== [] ? 'neutral' : 'yellow'),
+            aiCopilotBuildSection('Lab Result Findings', array_slice($labItems, 0, 20), $labItems !== [] ? 'neutral' : 'yellow'),
             aiCopilotBuildSection('Intake Form Findings', array_slice($intakeItems, 0, 12), $intakeItems !== [] ? 'neutral' : 'yellow'),
             aiCopilotBuildSection('Missing or Ambiguous Data', array_slice(array_values(array_unique($missingItems)), 0, 10), 'yellow'),
             aiCopilotBuildSection('Sources Used', array_values(array_unique($sourceItems))),
@@ -6172,13 +6238,18 @@ function aiCopilotBuildLabPdfIngestionResponse(array $context, string $prompt = 
     }
 
     if (in_array((string) ($toolOutput['status'] ?? ''), ['document_guard_rejected', 'document_guard_review_required'], true)) {
+        $guardPreview = aiCopilotCleanText((string) ($toolOutput['extracted_text_preview'] ?? ''));
+        $guardFactsSection = [aiCopilotCleanText((string) ($toolOutput['safe_message'] ?? 'Document type could not be verified. Review required before ingestion.'))];
+        if ($guardPreview !== '') {
+            $guardFactsSection[] = 'Readable PDF text preview: ' . $guardPreview;
+        }
         return aiCopilotBuildResponse(
             'Lab PDF Ingestion — Clinician Review Required',
             [
-                aiCopilotBuildSection('Extracted Lab Facts', [aiCopilotCleanText((string) ($toolOutput['safe_message'] ?? 'Document type could not be verified. Review required before ingestion.'))], 'yellow'),
-                aiCopilotBuildSection('Abnormal / Attention Needed', ['No lab values were ingested because the uploaded PDF was blocked before storage, vectorization, and retrieval.'], 'yellow'),
-                aiCopilotBuildSection('Missing or Ambiguous Data', ['The upload did not create validated lab-PDF evidence, so no uploaded lab chunks or Sources Used entries are available for this request.'], 'yellow'),
-                aiCopilotBuildSection('Draft Clinical Summary', ['No structured lab summary was generated because the uploaded PDF did not pass the medical document validation gate for automatic ingestion.']),
+                aiCopilotBuildSection('Extracted Lab Facts', $guardFactsSection, 'yellow'),
+                aiCopilotBuildSection('Abnormal / Attention Needed', ['No lab values were automatically ingested because the uploaded PDF requires clinician review before storage, vectorization, and retrieval can proceed.'], 'yellow'),
+                aiCopilotBuildSection('Missing or Ambiguous Data', ['The upload did not create validated lab-PDF evidence for automatic RAG use, so uploaded lab chunks and Sources Used entries are unavailable until clinician review is completed.'], 'yellow'),
+                aiCopilotBuildSection('Draft Clinical Summary', ['No structured lab summary was generated because the uploaded PDF did not pass the medical document validation gate for automatic ingestion. Text extraction may still have succeeded and is shown above for clinician review.']),
                 aiCopilotBuildSection('Sources Used', ['No validated uploaded lab PDF sources are currently available.']),
                 aiCopilotBuildSection('Safety Notice', [AI_COPILOT_LAB_PDF_REVIEW_NOTICE]),
             ],
@@ -6290,8 +6361,8 @@ function aiCopilotBuildLabPdfIngestionResponse(array $context, string $prompt = 
     return aiCopilotBuildResponse(
         'Lab PDF Ingestion — Clinician Review Required',
         [
-            aiCopilotBuildSection('Extracted Lab Facts', array_slice($findingItems, 0, 10), in_array($status, ['ocr_required', 'extraction_review_required'], true) ? 'yellow' : 'neutral'),
-            aiCopilotBuildSection('Abnormal / Attention Needed', array_slice($abnormalItems, 0, 8), $abnormalItems !== [] ? 'yellow' : 'neutral'),
+            aiCopilotBuildSection('Extracted Lab Facts', array_slice($findingItems, 0, 20), in_array($status, ['ocr_required', 'extraction_review_required'], true) ? 'yellow' : 'neutral'),
+            aiCopilotBuildSection('Abnormal / Attention Needed', array_slice($abnormalItems, 0, 12), $abnormalItems !== [] ? 'yellow' : 'neutral'),
             aiCopilotBuildSection('Missing or Ambiguous Data', array_slice($missingItems, 0, 8), 'yellow'),
             aiCopilotBuildSection('Draft Clinical Summary', $draftSummaryItems),
             aiCopilotBuildSection('Sources Used', $sourceItems),
@@ -6316,6 +6387,7 @@ function aiCopilotAgentDraftGroundedAnswerTool(
     $chartContextResult = is_array($toolInput['chart_context_result'] ?? null) ? $toolInput['chart_context_result'] : [];
     $guidelineEvidenceResult = is_array($toolInput['guideline_evidence_result'] ?? null) ? $toolInput['guideline_evidence_result'] : [];
     $attachmentResult = is_array($toolInput['attachment_result'] ?? null) ? $toolInput['attachment_result'] : [];
+    $attachmentToolOutput = is_array($attachmentResult['tool_output'] ?? null) ? $attachmentResult['tool_output'] : [];
 
     $draft = aiCopilotGenerateDraft($requestId, $role, $mode, $prompt, $chatHistory, $context, $validModes[$mode]);
 
@@ -6337,7 +6409,7 @@ function aiCopilotAgentDraftGroundedAnswerTool(
             'openai_error_category' => $draft['openai_error_category'] ?? null,
             'openai_http_status' => $draft['openai_http_status'] ?? null,
             'openai_error_message_safe' => $draft['openai_error_message_safe'] ?? null,
-            'rag_grounded' => aiCopilotShouldMarkRagGroundedForRequest($mode, $prompt, $context) || !empty($attachmentResult['tool_output']),
+            'rag_grounded' => aiCopilotShouldMarkRagGroundedForRequest($mode, $prompt, $context) || aiCopilotAttachmentRetrievedChunkCount($attachmentToolOutput) > 0,
         ],
         $requestStartedAt
     );

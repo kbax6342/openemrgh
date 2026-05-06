@@ -13,11 +13,29 @@ require_once("../globals.php");
 use OpenEMR\Common\Csrf\CsrfUtils;
 use OpenEMR\Common\Session\SessionWrapperFactory;
 use OpenEMR\Core\Header;
+use OpenEMR\Core\OEGlobalsBag;
 
 $isEmbedded = !empty($_GET['embedded']) && $_GET['embedded'] === '1';
+$isHealthCheck = !empty($_GET['healthcheck']) && $_GET['healthcheck'] === '1';
 $session = SessionWrapperFactory::getInstance()->getActiveSession();
 if (empty($session->get('csrf_private_key'))) {
     CsrfUtils::setupCsrfKey($session);
+}
+
+if ($isHealthCheck) {
+    header('Content-Type: application/json');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+
+    echo json_encode([
+        'ok' => true,
+        'embedded' => $isEmbedded,
+        'openemrReachable' => true,
+        'sessionActive' => !empty($session->get('authUser')),
+        'requiresLogin' => empty($session->get('authUser')),
+        'copilotUrl' => OEGlobalsBag::getInstance()->getWebRoot() . '/interface/ai_copilot/index.php?embedded=1',
+        'loginUrl' => OEGlobalsBag::getInstance()->getWebRoot() . '/interface/login/login.php',
+    ], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
+    exit;
 }
 
 $csrfToken = CsrfUtils::collectCsrfToken(session: $session);
@@ -511,6 +529,19 @@ function getCopilotHostWindow() {
     return window;
 }
 
+function restoreSessionIfAvailable() {
+    try {
+        if (window.top && typeof window.top.restoreSession === 'function') {
+            window.top.restoreSession();
+            return true;
+        }
+    } catch (error) {
+        return false;
+    }
+
+    return false;
+}
+
 function ensureTelemetryHost(targetWindow) {
     if (!targetWindow) {
         return window;
@@ -597,6 +628,12 @@ function ensureTelemetryHost(targetWindow) {
         'rejectionReason',
         'documentGuardDecision',
         'awsGuardEnabled',
+        'textExtractionStatus',
+        'medicalValidationStatus',
+        'chartWriteStatus',
+        'syntheticDemoData',
+        'reviewRequired',
+        'labEvidenceScore',
         'seededDemo',
         'ragGrounded',
         'sourceCount',
@@ -1337,6 +1374,12 @@ function emitLabPdfAuditEvent(eventName, payload = {}) {
         rejectionReason: payload.rejectionReason || null,
         documentGuardDecision: payload.documentGuardDecision || null,
         awsGuardEnabled: Boolean(payload.awsGuardEnabled),
+        textExtractionStatus: payload.textExtractionStatus || null,
+        medicalValidationStatus: payload.medicalValidationStatus || null,
+        chartWriteStatus: payload.chartWriteStatus || null,
+        syntheticDemoData: Boolean(payload.syntheticDemoData),
+        reviewRequired: !Object.prototype.hasOwnProperty.call(payload, 'reviewRequired') || Boolean(payload.reviewRequired),
+        labEvidenceScore: Number.isFinite(payload.labEvidenceScore) ? payload.labEvidenceScore : 0,
         seededDemo: Boolean(payload.seededDemo),
         ragGrounded: Boolean(payload.ragGrounded)
     };
@@ -1811,6 +1854,54 @@ function logLabPdfDataToConsole(prompt, toolOutput, options = {}) {
         return;
     }
 
+    const documentTitle = toolOutput.documentMetadata?.title || toolOutput.sourceMetadata?.fileName || '';
+    const extractionMethod = toolOutput.extractionMethod || '';
+    const extractedTextPreview = toolOutput.extractedTextPreview || '';
+    const extractedTextLength = Number.isFinite(toolOutput.extractedTextLength)
+        ? toolOutput.extractedTextLength
+        : String(extractedTextPreview || '').length;
+    const extractedFacts = Array.isArray(toolOutput.extractedFacts) ? toolOutput.extractedFacts : [];
+    const vectorChunks = Array.isArray(toolOutput.vectorizedResult)
+        ? toolOutput.vectorizedResult.map((record) => ({
+            chunkId: record.id || '',
+            textPreview: record.textPreview || '',
+            chunkIndex: record.chunkIndex ?? null
+        }))
+        : [];
+    const retrievalChunkIds = Array.isArray(toolOutput.retrieval?.chunkIds) ? toolOutput.retrieval.chunkIds : [];
+
+    if (toolOutput.textExtractionStatus === 'success') {
+        console.info('[Lab PDF Ingestion Debug] lab_pdf_text_extracted', {
+            documentTitle,
+            extractionMethod,
+            extractedTextLength,
+            extractedTextPreview
+        });
+    }
+    if (extractedFacts.length > 0) {
+        console.info('[Lab PDF Ingestion Debug] lab_pdf_facts_extracted', {
+            documentTitle,
+            extractionMethod,
+            extractedFactCount: extractedFacts.length,
+            extractedFacts
+        });
+    }
+    if (vectorChunks.length > 0) {
+        console.info('[Lab PDF Ingestion Debug] lab_pdf_vectorized', {
+            documentTitle,
+            extractionMethod,
+            vectorChunkCount: vectorChunks.length,
+            vectorChunks
+        });
+    }
+    if (retrievalChunkIds.length > 0) {
+        console.info('[Lab PDF Ingestion Debug] rag_context_retrieved', {
+            documentTitle,
+            extractionMethod,
+            retrievalChunkIds
+        });
+    }
+
     const demoTracePayload = helper.buildLabPdfDemoTracePayload({
         tool_output: toolOutput,
         role: options.role || null,
@@ -1971,28 +2062,60 @@ function buildVisibleSourceEntries(message) {
     }).sources;
 }
 
+function buildAttachmentEvidenceMeta(toolOutput) {
+    if (!toolOutput || typeof toolOutput !== 'object') {
+        return null;
+    }
+
+    const sourceType = normalizeAttachmentDocumentType(toolOutput.sourceMetadata?.sourceType || toolOutput.documentMetadata?.documentType);
+    if (!['lab_pdf', 'intake_form'].includes(sourceType) && toolOutput.tool !== 'attach_and_vectorize_lab_pdf') {
+        return null;
+    }
+
+    const blockedStatuses = ['invalid_file_type', 'role_blocked', 'ocr_required', 'extraction_review_required', 'document_guard_rejected', 'document_guard_review_required'];
+    const status = String(toolOutput.status || '');
+    const chunkCount = Number.isFinite(toolOutput.sourceMetadata?.chunkCount) ? toolOutput.sourceMetadata.chunkCount : (Number.isFinite(toolOutput.numberOfChunks) ? toolOutput.numberOfChunks : 0);
+    const retrievedChunkCount = Number.isFinite(toolOutput.retrieval?.chunkCount) ? toolOutput.retrieval.chunkCount : (Array.isArray(toolOutput.retrieval?.chunkIds) ? toolOutput.retrieval.chunkIds.length : 0);
+    const documentTitle = toolOutput.documentMetadata?.title || toolOutput.sourceMetadata?.fileName || '';
+
+    return {
+        attempted: true,
+        documentType: sourceType || 'lab_pdf',
+        documentTitle,
+        status,
+        chunkCount,
+        retrievedChunkCount,
+        hasRetrievedChunks: !blockedStatuses.includes(status) && retrievedChunkCount > 0
+    };
+}
+
+function buildRagGroundingNoteText(message) {
+    if (!message || message.role !== 'assistant') {
+        return '';
+    }
+
+    const attachmentEvidence = message.meta?.attachment_evidence && typeof message.meta.attachment_evidence === 'object'
+        ? message.meta.attachment_evidence
+        : null;
+    if (attachmentEvidence && attachmentEvidence.attempted) {
+        if (attachmentEvidence.hasRetrievedChunks) {
+            return attachmentEvidence.documentType === 'intake_form'
+                ? 'RAG-grounded response: uploaded intake-form chunks were retrieved before drafting this answer.'
+                : 'RAG-grounded response: uploaded lab PDF chunks were retrieved before drafting this answer.';
+        }
+
+        return 'Uploaded PDF ingestion was attempted, but no readable lab evidence chunks were retrieved.';
+    }
+
+    if (message.meta?.rag_grounded && buildVisibleSourceEntries(message).length > 0) {
+        return 'RAG-grounded response: retrieved chart context was used before drafting this answer.';
+    }
+
+    return '';
+}
+
 function shouldShowRagGroundingNote(message) {
-    if (message.role !== 'assistant') {
-        return false;
-    }
-
-    if (message.meta?.rag_grounded) {
-        return buildVisibleSourceEntries(message).length > 0;
-    }
-
-    if (![
-        'medication_info',
-        'treatment_plan',
-        'clinical_notes',
-        'follow_up',
-        'visit_summary',
-        'patient_education',
-        'rag_chart_context'
-    ].includes(message.mode || '')) {
-        return false;
-    }
-
-    return buildVisibleSourceEntries(message).length > 0;
+    return buildRagGroundingNoteText(message) !== '';
 }
 
 function formatEngineLabel(value) {
@@ -2052,8 +2175,17 @@ function buildAssistantRuntimeMeta(message) {
 
     const status = document.createElement('div');
     status.className = 'copilot-runtime-meta-status';
+    const attachmentEvidence = message.meta?.attachment_evidence && typeof message.meta.attachment_evidence === 'object'
+        ? message.meta.attachment_evidence
+        : null;
     if (engine === 'openai') {
-        status.textContent = 'LLM status: OpenAI response generated with retrieved chart context.';
+        if (attachmentEvidence && attachmentEvidence.attempted) {
+            status.textContent = attachmentEvidence.hasRetrievedChunks
+                ? 'LLM status: OpenAI response generated with uploaded PDF retrieval context.'
+                : 'LLM status: OpenAI response generated without retrieved uploaded PDF chunks. OCR/manual review may still be required.';
+        } else {
+            status.textContent = 'LLM status: OpenAI response generated with retrieved chart context.';
+        }
     } else if (engine === 'fallback') {
         if (String(message.meta.fallback_reason || '') === 'demo_mode') {
             status.textContent = 'LLM status: Local fallback mode. This response was generated by the local demo retrieval/fallback engine.';
@@ -2234,9 +2366,7 @@ function appendBubbleContent(bubble, message) {
     const guardrailBanner = message.role === 'assistant' ? buildGuardrailBanner(message.guardrails) : null;
     const sourceEntries = message.role === 'assistant' ? buildVisibleSourceEntries(message) : [];
     const shouldShowSourcesSection = sourceEntries.length > 0 && !messageHasSourcesSection(message);
-    const ragGroundingNote = shouldShowRagGroundingNote(message)
-        ? 'RAG-grounded response: retrieved chart context was used before drafting this answer.'
-        : '';
+    const ragGroundingNote = shouldShowRagGroundingNote(message) ? buildRagGroundingNoteText(message) : '';
 
     if (!hasStructuredSections && !guardrailBanner && !shouldShowSourcesSection && !ragGroundingNote) {
         bubble.textContent = message.content;
@@ -2462,9 +2592,7 @@ function updateMessageState(messageId, patch) {
 
 function getAssistantMessagePlainText(message) {
     const lines = [];
-    const ragGroundingNote = shouldShowRagGroundingNote(message)
-        ? 'RAG-grounded response: retrieved chart context was used before drafting this answer.'
-        : '';
+    const ragGroundingNote = shouldShowRagGroundingNote(message) ? buildRagGroundingNoteText(message) : '';
     const sourceEntries = buildVisibleSourceEntries(message);
 
     if (message.content) {
@@ -2992,9 +3120,7 @@ async function requestAssistantResponse(prompt, options = {}) {
         return;
     }
 
-    if (window.top && typeof window.top.restoreSession === 'function') {
-        window.top.restoreSession();
-    }
+    restoreSessionIfAvailable();
 
     const resolvedRole = options.roleOverride || state.activeRole;
     const hasLabPdfAttachment = options.hasLabPdfAttachment ?? hasActiveLabPdfAttachment();
@@ -3193,6 +3319,17 @@ async function requestAssistantResponse(prompt, options = {}) {
             seededDemo: Boolean(labPdfAttachment.useDemoSeed),
             ragGrounded: false
         });
+        emitLabPdfAuditEvent('copilot_pdf_upload_received', {
+            requestId,
+            role: resolvedRole,
+            mode: resolvedMode,
+            selectedPatientKey,
+            documentTitle: labPdfAttachment.descriptor.fileName || null,
+            documentType: attachmentDocumentType,
+            toolStatus: 'pdf_upload_received',
+            seededDemo: Boolean(labPdfAttachment.useDemoSeed),
+            ragGrounded: false
+        });
         emitLabPdfAuditEvent('copilot_document_guard_started', {
             requestId,
             role: resolvedRole,
@@ -3201,6 +3338,28 @@ async function requestAssistantResponse(prompt, options = {}) {
             documentTitle: labPdfAttachment.descriptor.fileName || null,
             documentType: attachmentDocumentType,
             toolStatus: 'guard_started',
+            seededDemo: Boolean(labPdfAttachment.useDemoSeed),
+            ragGrounded: false
+        });
+        emitLabPdfAuditEvent('copilot_medical_guard_started', {
+            requestId,
+            role: resolvedRole,
+            mode: resolvedMode,
+            selectedPatientKey,
+            documentTitle: labPdfAttachment.descriptor.fileName || null,
+            documentType: attachmentDocumentType,
+            toolStatus: 'medical_guard_started',
+            seededDemo: Boolean(labPdfAttachment.useDemoSeed),
+            ragGrounded: false
+        });
+        emitLabPdfAuditEvent('copilot_pdf_text_extraction_started', {
+            requestId,
+            role: resolvedRole,
+            mode: resolvedMode,
+            selectedPatientKey,
+            documentTitle: labPdfAttachment.descriptor.fileName || null,
+            documentType: attachmentDocumentType,
+            toolStatus: 'text_extraction_started',
             seededDemo: Boolean(labPdfAttachment.useDemoSeed),
             ragGrounded: false
         });
@@ -3460,6 +3619,7 @@ async function requestAssistantResponse(prompt, options = {}) {
             patientKey: selectedPatientKey,
             ragGrounded: Boolean(meta.rag_grounded)
         });
+        const attachmentEvidenceMeta = buildAttachmentEvidenceMeta(data.tool_output);
         const matchedSourceTitles = data.tool_output && typeof data.tool_output === 'object'
             ? matchedUploadedSourceTitles(data.tool_output)
             : [];
@@ -3582,7 +3742,8 @@ async function requestAssistantResponse(prompt, options = {}) {
                 restricted_by_role: Boolean(meta.restricted_by_role) || !guardrailsResult.allowed,
                 restriction_type: meta.restriction_type || guardrailsResult.blockedReason || '',
                 guardrails_risk_level: guardrailsResult.riskLevel || 'low',
-                latest_ambient_visit_found: sourcePayload.latestAmbientVisitFound
+                latest_ambient_visit_found: sourcePayload.latestAmbientVisitFound,
+                attachment_evidence: attachmentEvidenceMeta
             }
         });
         if (tracksUploadedDocumentRetrieval) {
@@ -3642,16 +3803,33 @@ async function requestAssistantResponse(prompt, options = {}) {
                 confidence: Number.isFinite(documentGuard.confidence) ? documentGuard.confidence : 0,
                 rejectionReason: documentGuard.rejectionReason || null,
                 documentGuardDecision: documentGuard.decision || null,
-                awsGuardEnabled: Boolean(documentGuard.awsGuardEnabled)
+                awsGuardEnabled: Boolean(documentGuard.awsGuardEnabled),
+                textExtractionStatus: documentGuard.textExtractionStatus || toolOutput.textExtractionStatus || null,
+                medicalValidationStatus: documentGuard.medicalValidationStatus || toolOutput.medicalValidationStatus || null,
+                chartWriteStatus: documentGuard.chartWriteStatus || toolOutput.chartWriteStatus || null,
+                syntheticDemoData: Boolean(documentGuard.isSyntheticDemoData),
+                reviewRequired: !Object.prototype.hasOwnProperty.call(documentGuard, 'reviewRequired') || Boolean(documentGuard.reviewRequired),
+                labEvidenceScore: Number.isFinite(documentGuard.labEvidenceScore) ? documentGuard.labEvidenceScore : 0,
+                seededDemo: Boolean(labPdfTelemetryPayload.seededDemo || documentGuard.isSyntheticDemoData)
             };
             const textractStatus = String(documentGuard.textractStatus || '');
             const comprehendStatus = String(documentGuard.comprehendStatus || '');
             const documentGuardDecision = String(documentGuard.decision || '');
+            const textExtractionStatus = String(documentGuard.textExtractionStatus || toolOutput.textExtractionStatus || '');
+            const documentTypeDetected = String(documentGuard.documentType || toolOutput.documentMetadata?.documentType || '');
+            const rawBytesDetected = Boolean(toolOutput.rawBytesDetected);
+            const extractedFacts = Array.isArray(toolOutput.extractedFacts) ? toolOutput.extractedFacts : [];
+            const sourceId = toolOutput.sourceMetadata?.sourceId || toolOutput.documentMetadata?.sourceId || null;
+            const hasGuardLifecycle = Boolean(documentGuardDecision || textractStatus || comprehendStatus);
 
-            if (documentGuardDecision || textractStatus || comprehendStatus) {
+            if (hasGuardLifecycle) {
                 emitLabPdfAuditEvent('copilot_document_guard_started', {
                     ...documentGuardPayload,
                     toolStatus: 'guard_started'
+                });
+                emitLabPdfAuditEvent('copilot_medical_guard_started', {
+                    ...documentGuardPayload,
+                    toolStatus: 'medical_guard_started'
                 });
                 if (textractStatus && textractStatus !== 'not_run') {
                     emitLabPdfAuditEvent('copilot_textract_started', {
@@ -3683,6 +3861,10 @@ async function requestAssistantResponse(prompt, options = {}) {
                         ...documentGuardPayload,
                         toolStatus: 'guard_allowed'
                     });
+                    emitLabPdfAuditEvent('copilot_medical_guard_allowed', {
+                        ...documentGuardPayload,
+                        toolStatus: 'medical_guard_allowed'
+                    });
                 } else if (documentGuardDecision === 'rejected') {
                     emitLabPdfAuditEvent('copilot_document_guard_rejected', {
                         ...documentGuardPayload,
@@ -3702,6 +3884,79 @@ async function requestAssistantResponse(prompt, options = {}) {
                         toolStatus: 'vectorization_blocked'
                     });
                 }
+
+                if (textExtractionStatus === 'success') {
+                    emitLabPdfAuditEvent('copilot_pdf_text_extraction_succeeded', {
+                        ...documentGuardPayload,
+                        toolStatus: 'text_extraction_succeeded'
+                    });
+                } else {
+                    emitLabPdfAuditEvent('copilot_pdf_text_extraction_failed', {
+                        ...documentGuardPayload,
+                        toolStatus: textExtractionStatus || 'text_extraction_failed'
+                    });
+                }
+                if (rawBytesDetected) {
+                    emitLabPdfAuditEvent('copilot_pdf_raw_bytes_detected', {
+                        ...documentGuardPayload,
+                        toolStatus: 'raw_pdf_bytes_detected',
+                        chunkCount: documentGuardPayload.chunkCount,
+                        retrievedChunkCount: documentGuardPayload.retrievedChunkCount
+                    });
+                }
+                if (textractStatus === 'started' || textractStatus === 'succeeded' || toolOutput.status === 'ocr_required') {
+                    emitLabPdfAuditEvent('copilot_pdf_ocr_or_textract_fallback_started', {
+                        ...documentGuardPayload,
+                        toolStatus: textractStatus || 'ocr_or_textract_fallback_started'
+                    });
+                }
+                if (documentGuardPayload.syntheticDemoData) {
+                    emitLabPdfAuditEvent('copilot_medical_guard_detected_synthetic_demo_label', {
+                        ...documentGuardPayload,
+                        toolStatus: 'synthetic_demo_detected'
+                    });
+                }
+                emitLabPdfAuditEvent('copilot_medical_guard_lab_evidence_score', {
+                    ...documentGuardPayload,
+                    toolStatus: 'lab_evidence_scored'
+                });
+                if (documentTypeDetected) {
+                    emitLabPdfAuditEvent('copilot_medical_guard_document_type_detected', {
+                        ...documentGuardPayload,
+                        toolStatus: documentTypeDetected
+                    });
+                }
+                if (documentGuardDecision === 'allowed' && documentGuardPayload.syntheticDemoData) {
+                    emitLabPdfAuditEvent('copilot_medical_guard_allowed_for_demo_ingestion', {
+                        ...documentGuardPayload,
+                        toolStatus: 'allowed_for_demo_ingestion'
+                    });
+                }
+                if (documentGuardPayload.reviewRequired) {
+                    emitLabPdfAuditEvent('copilot_clinician_review_required', {
+                        ...documentGuardPayload,
+                        toolStatus: 'clinician_review_required'
+                    });
+                }
+            }
+
+            if (!hasGuardLifecycle && textExtractionStatus !== 'success') {
+                emitLabPdfAuditEvent('copilot_pdf_text_extraction_failed', {
+                    ...documentGuardPayload,
+                    toolStatus: textExtractionStatus || 'text_extraction_failed'
+                });
+            }
+            if (!hasGuardLifecycle && rawBytesDetected) {
+                emitLabPdfAuditEvent('copilot_pdf_raw_bytes_detected', {
+                    ...documentGuardPayload,
+                    toolStatus: 'raw_pdf_bytes_detected'
+                });
+            }
+            if (!hasGuardLifecycle && (toolOutput.extractionMethod === 'textract' || toolOutput.status === 'ocr_required')) {
+                emitLabPdfAuditEvent('copilot_pdf_ocr_or_textract_fallback_started', {
+                    ...documentGuardPayload,
+                    toolStatus: toolOutput.extractionMethod || 'ocr_or_textract_fallback_started'
+                });
             }
 
             if (toolStatus === 'invalid_file_type' || toolStatus === 'role_blocked' || toolStatus === 'document_guard_rejected' || toolStatus === 'document_guard_review_required') {
@@ -3719,10 +3974,34 @@ async function requestAssistantResponse(prompt, options = {}) {
                     ...labPdfTelemetryPayload,
                     toolStatus: 'chunked'
                 });
+                emitLabPdfAuditEvent('copilot_vectorization_started', {
+                    ...documentGuardPayload,
+                    toolStatus: 'vectorization_started'
+                });
                 emitLabPdfAuditEvent('copilot_lab_pdf_vectorized', {
                     ...labPdfTelemetryPayload,
                     toolStatus: 'vectorized'
                 });
+                emitLabPdfAuditEvent('copilot_uploaded_document_vectorization_started', {
+                    ...documentGuardPayload,
+                    toolStatus: 'uploaded_document_vectorization_started',
+                    chunkCount: documentGuardPayload.chunkCount
+                });
+                emitLabPdfAuditEvent('copilot_vectorization_succeeded', {
+                    ...documentGuardPayload,
+                    toolStatus: 'vectorization_succeeded'
+                });
+                emitLabPdfAuditEvent('copilot_uploaded_document_vectorization_succeeded', {
+                    ...documentGuardPayload,
+                    toolStatus: 'uploaded_document_vectorization_succeeded',
+                    chunkCount: documentGuardPayload.chunkCount
+                });
+                if (sourceId) {
+                    emitLabPdfAuditEvent('copilot_uploaded_document_source_registered', {
+                        ...labPdfTelemetryPayload,
+                        toolStatus: 'source_registered'
+                    });
+                }
                 emitLabPdfAuditEvent('copilot_lab_pdf_retrieval_started', {
                     ...labPdfTelemetryPayload,
                     toolStatus: 'retrieval_started'
@@ -3739,6 +4018,14 @@ async function requestAssistantResponse(prompt, options = {}) {
                     ...labPdfTelemetryPayload,
                     toolStatus: toolStatus === '' ? 'review_required' : toolStatus
                 });
+                if (toolDocumentType === 'lab_pdf' && extractedFacts.length > 0) {
+                    emitLabPdfAuditEvent('copilot_lab_values_extracted', {
+                        ...labPdfTelemetryPayload,
+                        toolStatus: 'lab_values_extracted',
+                        chunkCount: documentGuardPayload.chunkCount,
+                        retrievedChunkCount: documentGuardPayload.retrievedChunkCount
+                    });
+                }
                 if (toolDocumentType === 'intake_form') {
                     emitLabPdfAuditEvent('intake_extraction_completed', {
                         ...labPdfTelemetryPayload,
@@ -3898,9 +4185,7 @@ async function requestReminderEmail(role, patientId) {
         return;
     }
 
-    if (window.top && typeof window.top.restoreSession === 'function') {
-        window.top.restoreSession();
-    }
+    restoreSessionIfAvailable();
 
     const requestId = createId('request');
     const selectedPatientKey = selectedPatientKeyForValue(patientId || '');
@@ -4047,9 +4332,7 @@ async function requestRagChartContextReview(action) {
     const prompt = action?.prompt || '';
     const contextScope = contextScopeFor(resolvedRole, resolvedPatientId);
 
-    if (window.top && typeof window.top.restoreSession === 'function') {
-        window.top.restoreSession();
-    }
+    restoreSessionIfAvailable();
 
     if (CopilotTelemetry) {
         CopilotTelemetry.log('copilot_rag_quick_action_selected', {
