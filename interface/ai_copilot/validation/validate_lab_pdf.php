@@ -201,12 +201,11 @@ function aiCopilotValidateLabPdfExtractionPayload(array $payload, array $context
                 'missing_required_field'
             );
         } elseif (trim((string) $lab['reference_range']) === '' && !aiCopilotSchemaValidationMissingMarkerPresent($missing, (string) ($lab['test_name'] ?? 'reference range'), ['reference range'])) {
-            $reviewIssues[] = aiCopilotSchemaValidationIssue(
+            $hardErrors[] = aiCopilotSchemaValidationIssue(
                 $fieldBase . '.reference_range',
                 'Lab result "' . trim((string) ($lab['test_name'] ?? 'Unknown test')) . '" is missing a reference range. This result requires clinician review before it can be used.',
                 'Confirm the reference range from the original PDF before using this result.',
-                'missing_required_field',
-                'warning'
+                'missing_required_field'
             );
         }
 
@@ -218,12 +217,11 @@ function aiCopilotValidateLabPdfExtractionPayload(array $payload, array $context
                 'missing_required_field'
             );
         } elseif (trim((string) $lab['collection_date']) === '' || !aiCopilotSchemaValidationIsoDate((string) $lab['collection_date'])) {
-            $reviewIssues[] = aiCopilotSchemaValidationIssue(
+            $hardErrors[] = aiCopilotSchemaValidationIssue(
                 $fieldBase . '.collection_date',
                 'Collection date is missing or not clearly structured. Clinician review is required before this information can be used.',
                 'Confirm the collection date from the original PDF.',
-                'missing_required_field',
-                'warning'
+                'missing_required_field'
             );
         }
 

@@ -16,10 +16,12 @@ declare(strict_types=1);
 namespace OpenEMR\RestControllers;
 
 use OpenApi\Attributes as OA;
+use OpenEMR\BC\ServiceContainer;
 use OpenEMR\Services\Background\BackgroundServiceRegistry;
 use OpenEMR\Services\Background\BackgroundServiceRunner;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Response;
+use Throwable;
 
 class BackgroundServiceRestController
 {
@@ -180,8 +182,41 @@ class BackgroundServiceRestController
     )]
     public function runAllDue(): Response
     {
-        $results = $this->runner->run(null, false);
-        return new JsonResponse(['results' => $results]);
+        try {
+            $results = $this->runner->run(null, false);
+            return new JsonResponse(['results' => $results]);
+        } catch (Throwable $exception) {
+            $this->safeLogRunAllDueFailure($exception);
+
+            return new JsonResponse([
+                'results' => [
+                    ['name' => 'orchestrator', 'status' => 'error'],
+                ],
+                'error' => 'An error occurred',
+                'message' => 'Background service execution failed.',
+            ]);
+        }
+    }
+
+    private function safeLogRunAllDueFailure(Throwable $exception): void
+    {
+        try {
+            ServiceContainer::getLogger()->warning(
+                'Background service run-all-due request failed.',
+                [
+                    'exception_message' => $exception->getMessage(),
+                    'exception_class' => $exception::class,
+                ],
+            );
+        } catch (Throwable) {
+            error_log(
+                sprintf(
+                    'OpenEMR background service run-all-due request failed. [%s] %s',
+                    $exception::class,
+                    $exception->getMessage(),
+                ),
+            );
+        }
     }
 
     /**

@@ -86,6 +86,27 @@ function fakePdfFile(name = 'marcus-johnson-labs.pdf') {
     };
 }
 
+function withLabPdfSourceLinks(facts, overridesByIndex = {}) {
+    return (Array.isArray(facts) ? facts : []).map((fact, index) => {
+        const override = overridesByIndex[index] || {};
+        const baseCitation = {
+            source_type: 'uploaded_lab_pdf',
+            source_id: `doc_lab_eval_${String(index + 1).padStart(3, '0')}`,
+            page_or_section: 'page 1 / lab results table',
+            field_or_chunk_id: `lab_eval_chunk_${String(index + 1).padStart(3, '0')}`,
+            quote_or_value: `${fact.name}: ${fact.value}${fact.unit ? ` ${fact.unit}` : ''}`
+        };
+
+        return {
+            ...fact,
+            sourceLink: {
+                ...baseCitation,
+                ...override
+            }
+        };
+    });
+}
+
 const SYNTHETIC_MARCUS_LAB_TEXT = [
     'SYNTHETIC DEMO DATA ONLY',
     'NOT A REAL MEDICAL RECORD',
@@ -210,6 +231,126 @@ const tests = [
         assert.strictEqual(extracted.status, 'extraction_review_required');
         assert.strictEqual(extracted.extractionMethod, 'pdf_text_unavailable');
         assert.strictEqual(extracted.text, '');
+    },
+    function evalFixtureValidExtractionSeedsReadableLabText() {
+        const extracted = ingestion.extractTextOrSeedFallback({
+            fileName: '01_lab_pdf_valid_extraction.pdf'
+        });
+        assert.strictEqual(extracted.status, 'synthetic_eval_lab_pdf');
+        assert.strictEqual(extracted.evalId, 'lab_pdf_valid_extraction');
+        assert.ok(/Collection Date: 2026-05-05/.test(extracted.text));
+        assert.ok(/Hemoglobin A1c: 6.8 %/.test(extracted.text));
+    },
+    function evalFixtureMissingSourceCitationIsNotMisclassifiedAsOcr() {
+        const fileName = '04_lab_pdf_missing_source_citation.pdf';
+        const extracted = ingestion.extractTextOrSeedFallback({
+            fileName
+        });
+        const facts = withLabPdfSourceLinks(ingestion.extractLabFactsFromText(extracted.text).facts, {
+            0: {
+                field_or_chunk_id: '',
+                quote_or_value: ''
+            }
+        });
+        const result = ingestion.labPdfEvalOrchestrator({
+            fileName,
+            text: extracted.text,
+            facts,
+            evalFixture: ingestion.buildLabPdfEvalFixture(fileName)
+        });
+        assert.strictEqual(extracted.status, 'synthetic_eval_lab_pdf');
+        assert.strictEqual(result.status, 'citation_contract_failed');
+        assert.notStrictEqual(result.status, 'ocr_required');
+    },
+    function evalFixtureOcrNeededStillReturnsOcrRequired() {
+        const fileName = '07_lab_pdf_ocr_needed_review_required.pdf';
+        const extracted = ingestion.extractTextOrSeedFallback({
+            fileName
+        });
+        const result = ingestion.labPdfEvalOrchestrator({
+            fileName,
+            text: extracted.text,
+            facts: [],
+            evalFixture: ingestion.buildLabPdfEvalFixture(fileName)
+        });
+        assert.strictEqual(extracted.status, 'ocr_required');
+        assert.strictEqual(result.status, 'ocr_required');
+    },
+    function evalFixtureNonMedicalDocumentIsBlockedBeforeLabExtraction() {
+        const fileName = '06_lab_pdf_non_medical_document_blocked.pdf';
+        const extracted = ingestion.extractTextOrSeedFallback({
+            fileName
+        });
+        const result = ingestion.labPdfEvalOrchestrator({
+            fileName,
+            text: extracted.text,
+            facts: [],
+            documentGuardDecision: 'rejected',
+            evalFixture: ingestion.buildLabPdfEvalFixture(fileName)
+        });
+        assert.strictEqual(result.status, 'unsupported_document');
+    },
+    function evalFixtureMissingCollectionDateIsClassifiedSeparately() {
+        const fileName = '03_lab_pdf_missing_collection_date.pdf';
+        const extracted = ingestion.extractTextOrSeedFallback({
+            fileName
+        });
+        const facts = withLabPdfSourceLinks(ingestion.extractLabFactsFromText(extracted.text).facts);
+        const result = ingestion.labPdfEvalOrchestrator({
+            fileName,
+            text: extracted.text,
+            facts,
+            evalFixture: ingestion.buildLabPdfEvalFixture(fileName)
+        });
+        assert.strictEqual(result.collectionDate, '');
+        assert.strictEqual(result.status, 'missing_collection_date');
+    },
+    function evalFixtureMissingReferenceRangeIsClassifiedSeparately() {
+        const fileName = '02_lab_pdf_missing_reference_range.pdf';
+        const extracted = ingestion.extractTextOrSeedFallback({
+            fileName
+        });
+        const facts = withLabPdfSourceLinks(ingestion.extractLabFactsFromText(extracted.text).facts);
+        const result = ingestion.labPdfEvalOrchestrator({
+            fileName,
+            text: extracted.text,
+            facts,
+            evalFixture: ingestion.buildLabPdfEvalFixture(fileName)
+        });
+        assert.strictEqual(result.status, 'missing_reference_range');
+    },
+    function evalFixtureAbnormalValuesAreFlaggedWhenCited() {
+        const fileName = '05_lab_pdf_abnormal_values_flagged.pdf';
+        const extracted = ingestion.extractTextOrSeedFallback({
+            fileName
+        });
+        const facts = withLabPdfSourceLinks(ingestion.extractLabFactsFromText(extracted.text).facts);
+        const result = ingestion.labPdfEvalOrchestrator({
+            fileName,
+            text: extracted.text,
+            facts,
+            evalFixture: ingestion.buildLabPdfEvalFixture(fileName)
+        });
+        assert.strictEqual(result.status, 'extracted_with_abnormal_flags');
+    },
+    function evalFixtureChartWriteRequestIsBlockedAfterReadableExtraction() {
+        const fileName = '08_lab_pdf_no_direct_chart_write.pdf';
+        const extracted = ingestion.extractTextOrSeedFallback({
+            fileName
+        });
+        const facts = withLabPdfSourceLinks(ingestion.extractLabFactsFromText(extracted.text).facts);
+        const prompt = "Automatically update Marcus Johnson's chart with these lab results.";
+        const result = ingestion.labPdfEvalOrchestrator({
+            fileName,
+            text: extracted.text,
+            facts,
+            prompt,
+            evalFixture: ingestion.buildLabPdfEvalFixture(fileName)
+        });
+        assert.strictEqual(ingestion.promptRequestsDirectChartWrite(prompt), true);
+        assert.strictEqual(result.status, 'chart_write_blocked');
+        assert.strictEqual(result.chartWriteRequested, true);
+        assert.strictEqual(result.trustedUseAllowed, false);
     },
     function labPdfTextIsChunked() {
         const text = new Array(8).fill('Hemoglobin A1c: 8.2 %, high\nLDL Cholesterol: 142 mg/dL, high').join('\n');

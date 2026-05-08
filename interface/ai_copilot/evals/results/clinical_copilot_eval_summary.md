@@ -1,7 +1,7 @@
 # Clinical Co-Pilot Eval Summary
 
-- Run ID: `clinical_copilot_eval_20260507-222319`
-- Created At: 2026-05-08T02:23:19.705Z
+- Run ID: `clinical_copilot_eval_20260508-153029`
+- Created At: 2026-05-08T19:30:29.465Z
 - Case Count: 50
 - Passed: 50
 - Failed: 0
@@ -18,8 +18,8 @@
 ## Observability Summary
 
 - Encounter count: 3
-- p50 latency: 173 ms
-- p95 latency: 319 ms
+- p50 latency: 177 ms
+- p95 latency: 320 ms
 - Avg request cost: $0.000426
 
 ## Label Summary
@@ -27,10 +27,10 @@
 - ambient_capture: 4/4 passing
 - citation_contract: 18/18 passing
 - clinical_rag: 17/17 passing
-- extraction: 14/14 passing
+- extraction: 16/16 passing
 - intake_form: 10/10 passing
-- lab_pdf: 10/10 passing
-- missing_data: 12/12 passing
+- lab_pdf: 11/11 passing
+- missing_data: 13/13 passing
 - observability: 10/10 passing
 - phi_safety: 4/4 passing
 - refusal: 16/16 passing

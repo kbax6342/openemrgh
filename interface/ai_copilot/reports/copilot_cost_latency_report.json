@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-08T02:23:19.737Z",
+  "generated_at": "2026-05-08T19:30:29.544Z",
   "sources": {
     "eval_results_path": "/mnt/d/Web Applications/firstproject/interface/ai_copilot/evals/results/clinical_copilot_eval_results.latest.json",
     "observability_events_path": "/mnt/d/Web Applications/firstproject/interface/ai_copilot/observability/results/observability_events.latest.json",
@@ -47,34 +47,34 @@
     ]
   },
   "latency": {
-    "p50_ms": 173,
-    "p95_ms": 319,
-    "average_ms": 217,
+    "p50_ms": 177,
+    "p95_ms": 320,
+    "average_ms": 220.67,
     "encounter_count": 3
   },
   "bottleneck_analysis": [
     {
       "step_name": "IntakeExtractorWorker",
       "average_ms": 103.5,
-      "p95_ms": 119,
+      "p95_ms": 118,
       "note": "Document extraction gets slower when PDF parsing and clinician-review staging are involved."
     },
     {
       "step_name": "FinalResponse",
-      "average_ms": 46.17,
+      "average_ms": 46,
       "p95_ms": 126,
       "note": "Draft generation or final assembly remains the slowest stage in current local observability data."
     },
     {
       "step_name": "EvidenceRetrieverWorker",
-      "average_ms": 22,
-      "p95_ms": 34,
+      "average_ms": 22.43,
+      "p95_ms": 35,
       "note": "Retrieval latency may increase further if external reranking is enabled in production."
     },
     {
       "step_name": "Supervisor",
-      "average_ms": 0.67,
-      "p95_ms": 1,
+      "average_ms": 1,
+      "p95_ms": 3,
       "note": "Review this step first when optimizing p95 latency."
     }
   ],

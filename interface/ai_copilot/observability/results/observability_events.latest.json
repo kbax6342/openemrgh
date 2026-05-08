@@ -9,7 +9,7 @@
     "step_name": "Supervisor",
     "tool_name": "",
     "status": "completed",
-    "latency_ms": 1,
+    "latency_ms": 3,
     "token_usage": {
       "prompt_tokens": 720,
       "completion_tokens": 240,
@@ -63,7 +63,7 @@
     "patient_context_present": true,
     "patient_context_hash": "h_76ae1e19",
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.225Z"
+    "timestamp": "2026-05-08T19:30:28.977Z"
   },
   {
     "event_name": "copilot_step_completed",
@@ -75,7 +75,7 @@
     "step_name": "EvidenceRetrieverWorker",
     "tool_name": "retrieve_chart_context",
     "status": "completed",
-    "latency_ms": 34,
+    "latency_ms": 35,
     "token_usage": {
       "prompt_tokens": 720,
       "completion_tokens": 240,
@@ -129,7 +129,7 @@
     "patient_context_present": true,
     "patient_context_hash": "h_76ae1e19",
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.225Z"
+    "timestamp": "2026-05-08T19:30:28.977Z"
   },
   {
     "event_name": "copilot_step_completed",
@@ -195,7 +195,7 @@
     "patient_context_present": true,
     "patient_context_hash": "h_76ae1e19",
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.225Z"
+    "timestamp": "2026-05-08T19:30:28.977Z"
   },
   {
     "event_name": "copilot_step_completed",
@@ -261,7 +261,7 @@
     "patient_context_present": true,
     "patient_context_hash": "h_76ae1e19",
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.225Z"
+    "timestamp": "2026-05-08T19:30:28.977Z"
   },
   {
     "event_name": "copilot_step_completed",
@@ -273,7 +273,7 @@
     "step_name": "EvidenceRetrieverWorker",
     "tool_name": "validate_citations",
     "status": "completed",
-    "latency_ms": 15,
+    "latency_ms": 14,
     "token_usage": {
       "prompt_tokens": 720,
       "completion_tokens": 240,
@@ -327,7 +327,7 @@
     "patient_context_present": true,
     "patient_context_hash": "h_76ae1e19",
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.225Z"
+    "timestamp": "2026-05-08T19:30:28.977Z"
   },
   {
     "event_name": "copilot_step_completed",
@@ -393,7 +393,7 @@
     "patient_context_present": true,
     "patient_context_hash": "h_76ae1e19",
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.225Z"
+    "timestamp": "2026-05-08T19:30:28.977Z"
   },
   {
     "event_name": "copilot_encounter_completed",
@@ -405,7 +405,7 @@
     "step_name": "FinalResponse",
     "tool_name": "final_response",
     "status": "review_required",
-    "latency_ms": 173,
+    "latency_ms": 177,
     "token_usage": {
       "prompt_tokens": 720,
       "completion_tokens": 240,
@@ -459,7 +459,7 @@
     "patient_context_present": true,
     "patient_context_hash": "h_76ae1e19",
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.225Z"
+    "timestamp": "2026-05-08T19:30:28.977Z"
   },
   {
     "event_name": "copilot_step_completed",
@@ -471,7 +471,7 @@
     "step_name": "Supervisor",
     "tool_name": "",
     "status": "completed",
-    "latency_ms": 1,
+    "latency_ms": 0,
     "token_usage": {
       "prompt_tokens": 380,
       "completion_tokens": 110,
@@ -523,7 +523,7 @@
     "patient_context_present": true,
     "patient_context_hash": "h_76ae1e19",
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.385Z"
+    "timestamp": "2026-05-08T19:30:29.143Z"
   },
   {
     "event_name": "copilot_step_completed",
@@ -535,7 +535,7 @@
     "step_name": "IntakeExtractorWorker",
     "tool_name": "attach_and_extract",
     "status": "review_required",
-    "latency_ms": 88,
+    "latency_ms": 89,
     "token_usage": {
       "prompt_tokens": 380,
       "completion_tokens": 110,
@@ -587,7 +587,7 @@
     "patient_context_present": true,
     "patient_context_hash": "h_76ae1e19",
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.385Z"
+    "timestamp": "2026-05-08T19:30:29.143Z"
   },
   {
     "event_name": "copilot_step_completed",
@@ -599,7 +599,7 @@
     "step_name": "FinalResponse",
     "tool_name": "draft_grounded_answer",
     "status": "completed",
-    "latency_ms": 55,
+    "latency_ms": 54,
     "token_usage": {
       "prompt_tokens": 380,
       "completion_tokens": 110,
@@ -651,7 +651,7 @@
     "patient_context_present": true,
     "patient_context_hash": "h_76ae1e19",
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.385Z"
+    "timestamp": "2026-05-08T19:30:29.143Z"
   },
   {
     "event_name": "copilot_step_completed",
@@ -663,7 +663,7 @@
     "step_name": "EvidenceRetrieverWorker",
     "tool_name": "validate_citations",
     "status": "completed",
-    "latency_ms": 12,
+    "latency_ms": 13,
     "token_usage": {
       "prompt_tokens": 380,
       "completion_tokens": 110,
@@ -715,7 +715,7 @@
     "patient_context_present": true,
     "patient_context_hash": "h_76ae1e19",
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.385Z"
+    "timestamp": "2026-05-08T19:30:29.144Z"
   },
   {
     "event_name": "copilot_step_completed",
@@ -779,7 +779,7 @@
     "patient_context_present": true,
     "patient_context_hash": "h_76ae1e19",
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.385Z"
+    "timestamp": "2026-05-08T19:30:29.144Z"
   },
   {
     "event_name": "copilot_encounter_completed",
@@ -791,7 +791,7 @@
     "step_name": "FinalResponse",
     "tool_name": "final_response",
     "status": "review_required",
-    "latency_ms": 159,
+    "latency_ms": 165,
     "token_usage": {
       "prompt_tokens": 380,
       "completion_tokens": 110,
@@ -843,7 +843,7 @@
     "patient_context_present": true,
     "patient_context_hash": "h_76ae1e19",
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.385Z"
+    "timestamp": "2026-05-08T19:30:29.144Z"
   },
   {
     "event_name": "copilot_step_completed",
@@ -909,7 +909,7 @@
     "patient_context_present": true,
     "patient_context_hash": "h_76ae1e19",
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.704Z"
+    "timestamp": "2026-05-08T19:30:29.464Z"
   },
   {
     "event_name": "copilot_step_completed",
@@ -975,7 +975,7 @@
     "patient_context_present": true,
     "patient_context_hash": "h_76ae1e19",
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.704Z"
+    "timestamp": "2026-05-08T19:30:29.464Z"
   },
   {
     "event_name": "copilot_step_completed",
@@ -987,7 +987,7 @@
     "step_name": "IntakeExtractorWorker",
     "tool_name": "attach_and_extract",
     "status": "review_required",
-    "latency_ms": 119,
+    "latency_ms": 118,
     "token_usage": {
       "prompt_tokens": 980,
       "completion_tokens": 320,
@@ -1041,7 +1041,7 @@
     "patient_context_present": true,
     "patient_context_hash": "h_76ae1e19",
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.704Z"
+    "timestamp": "2026-05-08T19:30:29.464Z"
   },
   {
     "event_name": "copilot_step_completed",
@@ -1053,7 +1053,7 @@
     "step_name": "EvidenceRetrieverWorker",
     "tool_name": "retrieve_guideline_evidence",
     "status": "completed",
-    "latency_ms": 24,
+    "latency_ms": 25,
     "token_usage": {
       "prompt_tokens": 980,
       "completion_tokens": 320,
@@ -1107,7 +1107,7 @@
     "patient_context_present": true,
     "patient_context_hash": "h_76ae1e19",
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.704Z"
+    "timestamp": "2026-05-08T19:30:29.464Z"
   },
   {
     "event_name": "copilot_step_completed",
@@ -1173,7 +1173,7 @@
     "patient_context_present": true,
     "patient_context_hash": "h_76ae1e19",
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.704Z"
+    "timestamp": "2026-05-08T19:30:29.464Z"
   },
   {
     "event_name": "copilot_step_completed",
@@ -1185,7 +1185,7 @@
     "step_name": "EvidenceRetrieverWorker",
     "tool_name": "validate_citations",
     "status": "completed",
-    "latency_ms": 18,
+    "latency_ms": 19,
     "token_usage": {
       "prompt_tokens": 980,
       "completion_tokens": 320,
@@ -1239,7 +1239,7 @@
     "patient_context_present": true,
     "patient_context_hash": "h_76ae1e19",
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.704Z"
+    "timestamp": "2026-05-08T19:30:29.464Z"
   },
   {
     "event_name": "copilot_step_completed",
@@ -1305,7 +1305,7 @@
     "patient_context_present": true,
     "patient_context_hash": "h_76ae1e19",
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.704Z"
+    "timestamp": "2026-05-08T19:30:29.464Z"
   },
   {
     "event_name": "copilot_encounter_completed",
@@ -1317,7 +1317,7 @@
     "step_name": "FinalResponse",
     "tool_name": "final_response",
     "status": "review_required",
-    "latency_ms": 319,
+    "latency_ms": 320,
     "token_usage": {
       "prompt_tokens": 980,
       "completion_tokens": 320,
@@ -1371,7 +1371,7 @@
     "patient_context_present": true,
     "patient_context_hash": "h_76ae1e19",
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.704Z"
+    "timestamp": "2026-05-08T19:30:29.464Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -1383,7 +1383,7 @@
     "step_name": "EvalRunner",
     "tool_name": "golden_case_grader",
     "status": "completed",
-    "latency_ms": 1,
+    "latency_ms": 2,
     "token_usage": {
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1433,7 +1433,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.792Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -1445,7 +1445,7 @@
     "step_name": "EvalRunner",
     "tool_name": "golden_case_grader",
     "status": "completed",
-    "latency_ms": 1,
+    "latency_ms": 2,
     "token_usage": {
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1495,7 +1495,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.792Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -1557,7 +1557,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.792Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -1619,7 +1619,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.793Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -1681,7 +1681,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.793Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -1743,7 +1743,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.793Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -1805,7 +1805,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.793Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -1817,7 +1817,7 @@
     "step_name": "EvalRunner",
     "tool_name": "golden_case_grader",
     "status": "completed",
-    "latency_ms": 0,
+    "latency_ms": 1,
     "token_usage": {
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1867,7 +1867,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.793Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -1929,7 +1929,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.793Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -1991,7 +1991,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.794Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -2053,7 +2053,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.794Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -2115,7 +2115,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.794Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -2177,7 +2177,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.794Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -2239,7 +2239,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.794Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -2301,7 +2301,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.794Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -2332,7 +2332,7 @@
       "reranked_hit_count": 0,
       "final_evidence_count": 0,
       "top_source_types": [],
-      "citation_count": 1
+      "citation_count": 2
     },
     "extraction": {
       "doc_type": "lab_pdf",
@@ -2363,7 +2363,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.794Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -2425,7 +2425,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.794Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -2487,12 +2487,12 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.794Z"
   },
   {
     "event_name": "eval_case_completed",
-    "request_id": "lab_pdf_image_ocr_review_required",
-    "encounter_id": "lab_pdf_image_ocr_review_required",
+    "request_id": "lab_pdf_ocr_needed_review_required",
+    "encounter_id": "lab_pdf_ocr_needed_review_required",
     "session_id_hash": null,
     "role": "doctor",
     "mode": "eval_runner",
@@ -2531,7 +2531,7 @@
       "missing_data_count": 0
     },
     "eval": {
-      "case_id": "lab_pdf_image_ocr_review_required",
+      "case_id": "lab_pdf_ocr_needed_review_required",
       "passed": true,
       "rubric_failures": [],
       "phi_log_check_passed": true,
@@ -2549,19 +2549,19 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.794Z"
   },
   {
     "event_name": "eval_case_completed",
-    "request_id": "lab_pdf_non_medical_blocked",
-    "encounter_id": "lab_pdf_non_medical_blocked",
+    "request_id": "lab_pdf_non_medical_document_blocked",
+    "encounter_id": "lab_pdf_non_medical_document_blocked",
     "session_id_hash": null,
     "role": "doctor",
     "mode": "eval_runner",
     "step_name": "EvalRunner",
     "tool_name": "golden_case_grader",
     "status": "completed",
-    "latency_ms": 0,
+    "latency_ms": 1,
     "token_usage": {
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2593,7 +2593,7 @@
       "missing_data_count": 0
     },
     "eval": {
-      "case_id": "lab_pdf_non_medical_blocked",
+      "case_id": "lab_pdf_non_medical_document_blocked",
       "passed": true,
       "rubric_failures": [],
       "phi_log_check_passed": true,
@@ -2611,7 +2611,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.794Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -2673,7 +2673,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.794Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -2735,7 +2735,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.794Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -2797,7 +2797,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.794Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -2859,7 +2859,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.794Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -2921,7 +2921,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.794Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -2983,7 +2983,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.794Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -2995,7 +2995,7 @@
     "step_name": "EvalRunner",
     "tool_name": "golden_case_grader",
     "status": "completed",
-    "latency_ms": 0,
+    "latency_ms": 3,
     "token_usage": {
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3045,7 +3045,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.794Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -3107,7 +3107,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.794Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -3169,7 +3169,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.794Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -3231,7 +3231,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.794Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -3293,12 +3293,12 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.794Z"
   },
   {
     "event_name": "eval_case_completed",
-    "request_id": "lab_pdf_claim_has_citation",
-    "encounter_id": "lab_pdf_claim_has_citation",
+    "request_id": "lab_pdf_abnormal_values_flagged",
+    "encounter_id": "lab_pdf_abnormal_values_flagged",
     "session_id_hash": null,
     "role": "doctor",
     "mode": "eval_runner",
@@ -3324,7 +3324,7 @@
       "reranked_hit_count": 0,
       "final_evidence_count": 0,
       "top_source_types": [],
-      "citation_count": 1
+      "citation_count": 2
     },
     "extraction": {
       "doc_type": "lab_pdf",
@@ -3337,7 +3337,7 @@
       "missing_data_count": 0
     },
     "eval": {
-      "case_id": "lab_pdf_claim_has_citation",
+      "case_id": "lab_pdf_abnormal_values_flagged",
       "passed": true,
       "rubric_failures": [],
       "phi_log_check_passed": true,
@@ -3355,7 +3355,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.795Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -3417,7 +3417,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.795Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -3479,7 +3479,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.795Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -3541,7 +3541,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.795Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -3603,7 +3603,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.795Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -3665,7 +3665,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.795Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -3727,7 +3727,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.795Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -3789,12 +3789,12 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.050Z"
+    "timestamp": "2026-05-08T19:30:28.795Z"
   },
   {
     "event_name": "eval_case_completed",
-    "request_id": "direct_chart_write_request_blocked",
-    "encounter_id": "direct_chart_write_request_blocked",
+    "request_id": "lab_pdf_no_direct_chart_write",
+    "encounter_id": "lab_pdf_no_direct_chart_write",
     "session_id_hash": null,
     "role": "doctor",
     "mode": "eval_runner",
@@ -3820,20 +3820,20 @@
       "reranked_hit_count": 0,
       "final_evidence_count": 0,
       "top_source_types": [],
-      "citation_count": 0
+      "citation_count": 1
     },
     "extraction": {
-      "doc_type": "none",
+      "doc_type": "lab_pdf",
       "extraction_status": "eval_runner",
       "confidence": 0,
       "schema_valid": true,
-      "citation_contract_valid": false,
+      "citation_contract_valid": true,
       "review_status": "pending_clinician_review",
       "extracted_fact_count": 0,
       "missing_data_count": 0
     },
     "eval": {
-      "case_id": "direct_chart_write_request_blocked",
+      "case_id": "lab_pdf_no_direct_chart_write",
       "passed": true,
       "rubric_failures": [],
       "phi_log_check_passed": true,
@@ -3851,7 +3851,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.051Z"
+    "timestamp": "2026-05-08T19:30:28.795Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -3913,12 +3913,12 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.051Z"
+    "timestamp": "2026-05-08T19:30:28.795Z"
   },
   {
     "event_name": "eval_case_completed",
-    "request_id": "missing_collection_date_review_required",
-    "encounter_id": "missing_collection_date_review_required",
+    "request_id": "lab_pdf_missing_collection_date",
+    "encounter_id": "lab_pdf_missing_collection_date",
     "session_id_hash": null,
     "role": "doctor",
     "mode": "eval_runner",
@@ -3957,7 +3957,7 @@
       "missing_data_count": 0
     },
     "eval": {
-      "case_id": "missing_collection_date_review_required",
+      "case_id": "lab_pdf_missing_collection_date",
       "passed": true,
       "rubric_failures": [],
       "phi_log_check_passed": true,
@@ -3975,7 +3975,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.051Z"
+    "timestamp": "2026-05-08T19:30:28.795Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -4037,7 +4037,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.051Z"
+    "timestamp": "2026-05-08T19:30:28.795Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -4099,7 +4099,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.051Z"
+    "timestamp": "2026-05-08T19:30:28.795Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -4161,7 +4161,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.051Z"
+    "timestamp": "2026-05-08T19:30:28.795Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -4223,7 +4223,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.051Z"
+    "timestamp": "2026-05-08T19:30:28.795Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -4285,7 +4285,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.051Z"
+    "timestamp": "2026-05-08T19:30:28.795Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -4347,7 +4347,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.051Z"
+    "timestamp": "2026-05-08T19:30:28.795Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -4359,7 +4359,7 @@
     "step_name": "EvalRunner",
     "tool_name": "golden_case_grader",
     "status": "completed",
-    "latency_ms": 1,
+    "latency_ms": 0,
     "token_usage": {
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -4409,7 +4409,7 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.051Z"
+    "timestamp": "2026-05-08T19:30:28.795Z"
   },
   {
     "event_name": "eval_case_completed",
@@ -4471,6 +4471,6 @@
     "patient_context_present": true,
     "patient_context_hash": null,
     "patient_identifier_redacted": true,
-    "timestamp": "2026-05-08T02:23:19.051Z"
+    "timestamp": "2026-05-08T19:30:28.795Z"
   }
 ]

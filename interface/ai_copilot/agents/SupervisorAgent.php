@@ -176,7 +176,7 @@ class SupervisorAgent
                 ? 'failed'
                 : 'review_required';
         }
-        if (($strictExtraction['extraction_status'] ?? '') === 'review_required' && (string) ($toolOutput['status'] ?? '') === 'ok') {
+        if (($strictExtraction['extraction_status'] ?? '') === 'review_required' && in_array((string) ($toolOutput['status'] ?? ''), ['ok', 'extracted'], true)) {
             $toolOutput['status'] = 'review_required';
             $toolOutput['ingestion_status'] = 'review_required';
         }
@@ -195,17 +195,20 @@ class SupervisorAgent
             if (($strictExtraction['extraction_status'] ?? '') !== 'failed') {
                 $strictExtraction['extraction_status'] = 'review_required';
             }
-            if (($toolOutput['status'] ?? '') === 'ok') {
+            if (in_array((string) ($toolOutput['status'] ?? ''), ['ok', 'extracted'], true)) {
                 $toolOutput['status'] = 'review_required';
                 $toolOutput['ingestion_status'] = 'review_required';
             }
             $toolOutput['safe_message'] = (string) ($citationValidation['user_message'] ?? 'This response includes clinical information that could not be fully linked to source evidence. Clinician review is required before use.');
         }
 
+        $toolTrustedUseAllowed = !array_key_exists('trusted_use_allowed', $toolOutput) || !empty($toolOutput['trusted_use_allowed']);
         $trustedPersistenceAllowed = ($schemaValidation['trusted_persistence_allowed'] ?? false) === true
-            && ($citationValidation['trusted_persistence_allowed'] ?? false) === true;
+            && ($citationValidation['trusted_persistence_allowed'] ?? false) === true
+            && $toolTrustedUseAllowed;
         $trustedRagIndexAllowed = ($schemaValidation['trusted_rag_index_allowed'] ?? false) === true
-            && ($citationValidation['trusted_rag_index_allowed'] ?? false) === true;
+            && ($citationValidation['trusted_rag_index_allowed'] ?? false) === true
+            && $toolTrustedUseAllowed;
 
         $pendingFacts = [];
         $persistedFacts = [];

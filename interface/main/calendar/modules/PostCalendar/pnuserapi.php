@@ -13,6 +13,7 @@
 */
 
 use OpenEMR\Common\Session\SessionWrapperFactory;
+use OpenEMR\BC\ServiceContainer;
 use OpenEMR\Core\OEGlobalsBag;
 use OpenEMR\Events\Appointments\CalendarFilterEvent;
 use OpenEMR\Events\Appointments\CalendarUserGetEventsFilter;
@@ -325,41 +326,89 @@ function postcalendar_userapi_buildView($args)
         $pc_facility = $session->get('pc_facility');
         if ($pc_facility) {
             $provinfo = $userService->getUsersForCalendar($pc_facility);
-            if (!$provinfo) {
-                $provinfo = $userService->getUserForCalendar($session->get('authUserID'));
-            }
         } else {
             $provinfo = $userService->getUsersForCalendar();
         }
+        $provinfo = postcalendar_normalize_provider_rows($provinfo);
 
                 //EOS FACILITY FILTERING (CHEMED)
                 //==================================
 
-        $single = [];
-                $provIDs = [];  // array of numeric provider IDs
+        $calendarWarning = '';
+        $fallbackProviderUsed = false;
+        $requestedProviderUsernames = postcalendar_normalize_provider_usernames($pc_username);
+        $viewDateContext = [
+            'raw_date' => $Date,
+            'year' => $the_year,
+            'month' => $the_month,
+            'day' => $the_day,
+            'starting_date' => $starting_date,
+            'ending_date' => $ending_date,
+        ];
 
-        // filter the display on the requested username, the provinfo array is
-        // used to build columns in the week view.
-
-        foreach ($provinfo as $provider) {
-            if (is_array($pc_username)) {
-                foreach ($pc_username as $uname) {
-                    if (!empty($pc_username) && $provider['username'] == $uname) {
-                        array_push($single, $provider);
-                        array_push($provIDs, $provider['id']);
-                    }
-                }
+        if (empty($provinfo)) {
+            $provinfo = postcalendar_normalize_provider_rows($userService->getUserForCalendar($session->get('authUserID')));
+            if (!empty($provinfo)) {
+                $calendarWarning = xlt('No calendar providers were available for the selected facility. Showing your calendar instead.');
+                $fallbackProviderUsed = true;
             } else {
-                if (!empty($pc_username) && $provider['username'] == $pc_username) {
-                    array_push($single, $provider);
-                    array_push($provIDs, $provider['id']);
+                $calendarWarning = xlt('No calendar providers are available for the selected filters. Showing an empty calendar.');
+            }
+        }
+
+        if (!empty($requestedProviderUsernames)) {
+            $single = [];
+            foreach ($provinfo as $provider) {
+                $providerUsername = (string) ($provider['username'] ?? '');
+                if (in_array($providerUsername, $requestedProviderUsernames, true)) {
+                    $single[] = $provider;
+                }
+            }
+
+            if (!empty($single)) {
+                $provinfo = $single;
+            } else {
+                postcalendar_log_calendar_context(
+                    'warning',
+                    'Calendar provider filter did not match any available providers.',
+                    [
+                        'selected_pc_username' => $requestedProviderUsernames,
+                        'selected_pc_facility' => $pc_facility,
+                        'available_providers' => postcalendar_provider_log_summary($provinfo),
+                        'viewtype' => $viewtype,
+                    ],
+                );
+
+                $fallbackProviders = postcalendar_normalize_provider_rows($userService->getUserForCalendar($session->get('authUserID')));
+                if (!empty($fallbackProviders)) {
+                    $provinfo = $fallbackProviders;
+                    $calendarWarning = xlt('Selected provider was unavailable. Showing your calendar instead.');
+                    $fallbackProviderUsed = true;
+                } else {
+                    $provinfo = [];
+                    $calendarWarning = xlt('Selected provider was unavailable and no fallback calendar provider was found. Showing an empty calendar.');
                 }
             }
         }
 
-        if ($single != null) {
-            $provinfo = $single;
+        $provIDs = [];  // array of numeric provider IDs
+        if (!empty($requestedProviderUsernames) || $fallbackProviderUsed) {
+            $provIDs = postcalendar_extract_provider_ids($provinfo);
         }
+
+        postcalendar_log_calendar_context(
+            'notice',
+            'Calendar provider selection resolved.',
+            [
+                'selected_pc_username' => $requestedProviderUsernames,
+                'selected_pc_facility' => $pc_facility,
+                'providers_returned' => postcalendar_provider_log_summary($provinfo),
+                'provider_ids' => $provIDs,
+                'viewtype' => $viewtype,
+                'date_context' => $viewDateContext,
+                'fallback_provider_used' => $fallbackProviderUsed,
+            ],
+        );
 
         //=================================================================
         //  Load the events
@@ -533,6 +582,7 @@ function postcalendar_userapi_buildView($args)
 
         //$provinfo[count($provinfo) +1] = array("id" => "","lname" => "Other");
         $tpl->assign_by_ref('providers', $provinfo);
+        $tpl->assign('CALENDAR_WARNING', $calendarWarning);
 
         if (pnVarCleanFromInput("show_days") != 1) {
             $tpl->assign('showdaysurl', "index.php?" . $_SERVER['QUERY_STRING'] . "&show_days=1");
@@ -580,24 +630,173 @@ function postcalendar_userapi_buildView($args)
     //  Parse the template
     //=================================================================
     $template = "$template_name/views/$viewtype/$template_view_load.html";
-    if (!$print) {
-            $output .= "\n\n<!-- START POSTCALENDAR OUTPUT [-: HTTP://POSTCALENDAR.TV :-] -->\n\n";
-            $output .= $tpl->fetch($template, $cacheid);    // cache id
-            $output .= "\n\n<!-- END POSTCALENDAR OUTPUT [-: HTTP://POSTCALENDAR.TV :-] -->\n\n";
-    } else {
-            echo "<html><head>";
-            echo "</head><body>\n";
+    try {
+        if (!$print) {
+                $output .= "\n\n<!-- START POSTCALENDAR OUTPUT [-: HTTP://POSTCALENDAR.TV :-] -->\n\n";
+                $output .= $tpl->fetch($template, $cacheid);    // cache id
+                $output .= "\n\n<!-- END POSTCALENDAR OUTPUT [-: HTTP://POSTCALENDAR.TV :-] -->\n\n";
+        } else {
+                echo "<html><head>";
+                echo "</head><body>\n";
+                echo $output;
+                $tpl->display($template, $cacheid);
+                echo postcalendar_footer();
+                echo "\n</body></html>";
+                exit;
+        }
+    } catch (\Throwable $exception) {
+        postcalendar_log_calendar_context(
+            'error',
+            'Calendar template rendering failed.',
+            [
+                'template' => $template,
+                'viewtype' => $viewtype,
+                'selected_pc_username' => postcalendar_normalize_provider_usernames($pc_username),
+                'selected_pc_facility' => $pc_facility ?? null,
+                'exception_class' => $exception::class,
+                'exception_message' => $exception->getMessage(),
+            ],
+        );
+
+        $safePanel = postcalendar_build_safe_error_panel(
+            xlt('Calendar temporarily unavailable'),
+            xlt('The selected calendar view could not be rendered safely. Please refresh the page or choose a different provider or view.'),
+        );
+
+        if ($print) {
+            echo "<html><head></head><body>\n";
             echo $output;
-            $tpl->display($template, $cacheid);
-            echo postcalendar_footer();
+            echo $safePanel;
             echo "\n</body></html>";
             exit;
+        }
+
+        return $output . $safePanel;
     }
 
     //=================================================================
     //  Return the output
     //=================================================================
     return $output;
+}
+
+/**
+ * @param mixed $providers
+ * @return array<int, array<string, mixed>>
+ */
+function postcalendar_normalize_provider_rows($providers): array
+{
+    if (!is_array($providers)) {
+        return [];
+    }
+
+    $normalized = [];
+    foreach ($providers as $provider) {
+        if (!is_array($provider)) {
+            continue;
+        }
+        $normalized[] = $provider;
+    }
+    return array_values($normalized);
+}
+
+/**
+ * @param mixed $pc_username
+ * @return list<string>
+ */
+function postcalendar_normalize_provider_usernames($pc_username): array
+{
+    $rawUsernames = is_array($pc_username) ? $pc_username : [$pc_username];
+    $normalized = [];
+    foreach ($rawUsernames as $username) {
+        $username = trim((string) $username);
+        if ($username === '' || $username === '__PC_ALL__') {
+            continue;
+        }
+        $normalized[] = $username;
+    }
+    return array_values(array_unique($normalized));
+}
+
+/**
+ * @param array<int, array<string, mixed>> $providers
+ * @return list<int|string>
+ */
+function postcalendar_extract_provider_ids(array $providers): array
+{
+    $providerIds = [];
+    foreach ($providers as $provider) {
+        if (!isset($provider['id']) || $provider['id'] === '') {
+            continue;
+        }
+        $providerIds[] = $provider['id'];
+    }
+    return $providerIds;
+}
+
+/**
+ * @param array<int, array<string, mixed>> $providers
+ * @return list<string>
+ */
+function postcalendar_provider_log_summary(array $providers): array
+{
+    return array_values(array_map(
+        function (array $provider): string {
+            $id = isset($provider['id']) ? (string) $provider['id'] : '';
+            $username = isset($provider['username']) ? (string) $provider['username'] : '';
+            return trim($id . ':' . $username, ':');
+        },
+        $providers,
+    ));
+}
+
+/**
+ * @return array<string, string>
+ */
+function postcalendar_decode_location_fields($rawLocation): array
+{
+    $blankLocation = [
+        'event_location' => '',
+        'event_street1' => '',
+        'event_street2' => '',
+        'event_city' => '',
+        'event_state' => '',
+        'event_postal' => '',
+    ];
+
+    if (!is_string($rawLocation) || trim($rawLocation) === '') {
+        return $blankLocation;
+    }
+
+    $decoded = @unserialize($rawLocation, ['allowed_classes' => false]);
+    if (is_array($decoded)) {
+        return array_merge($blankLocation, array_intersect_key($decoded, $blankLocation));
+    }
+
+    $blankLocation['event_location'] = $rawLocation;
+    return $blankLocation;
+}
+
+function postcalendar_build_safe_error_panel(string $title, string $message): string
+{
+    return "<div class='alert alert-warning m-3' role='alert'><strong>" . text($title) . "</strong><br>" . text($message) . "</div>";
+}
+
+/**
+ * @param array<string, mixed> $context
+ */
+function postcalendar_log_calendar_context(string $level, string $message, array $context = []): void
+{
+    try {
+        $logger = ServiceContainer::getLogger();
+        match ($level) {
+            'error' => $logger->error($message, $context),
+            'warning' => $logger->warning($message, $context),
+            default => $logger->notice($message, $context),
+        };
+    } catch (\Throwable) {
+        error_log('OpenEMR Calendar: ' . $message);
+    }
 }
 
 /**
@@ -739,12 +938,15 @@ function &postcalendar_userapi_pcQueryEventsFA($args)
         $events[$i]['recurrfreq']  = $tmp['recurrfreq'];
         $events[$i]['recurrspec']  = $tmp['recurrspec'];
 
-        $rspecs = unserialize($tmp['recurrspec'], ['allowed_classes' => false]);
-        $events[$i]['event_repeat_freq'] = $rspecs['event_repeat_freq'];
-        $events[$i]['event_repeat_freq_type'] = $rspecs['event_repeat_freq_type'];
-        $events[$i]['event_repeat_on_num'] = $rspecs['event_repeat_on_num'];
-        $events[$i]['event_repeat_on_day'] = $rspecs['event_repeat_on_day'];
-        $events[$i]['event_repeat_on_freq'] = $rspecs['event_repeat_on_freq'];
+        $rspecs = @unserialize($tmp['recurrspec'], ['allowed_classes' => false]);
+        if (!is_array($rspecs)) {
+            $rspecs = [];
+        }
+        $events[$i]['event_repeat_freq'] = $rspecs['event_repeat_freq'] ?? null;
+        $events[$i]['event_repeat_freq_type'] = $rspecs['event_repeat_freq_type'] ?? null;
+        $events[$i]['event_repeat_on_num'] = $rspecs['event_repeat_on_num'] ?? null;
+        $events[$i]['event_repeat_on_day'] = $rspecs['event_repeat_on_day'] ?? null;
+        $events[$i]['event_repeat_on_freq'] = $rspecs['event_repeat_on_freq'] ?? null;
 
         $events[$i]['topic']       = $tmp['topic'];
         $events[$i]['alldayevent'] = $tmp['alldayevent'];
@@ -805,7 +1007,7 @@ function &postcalendar_userapi_pcQueryEventsFA($args)
                 $events[$i]['contemail']   = $prepFunction($tmp['contemail']);
                 $events[$i]['website']     = $prepFunction(postcalendar_makeValidURL($tmp['website']));
                 $events[$i]['fee']         = $prepFunction($tmp['fee']);
-                $loc = unserialize($tmp['location'], ['allowed_classes' => false]);
+                $loc = postcalendar_decode_location_fields($tmp['location']);
                 $events[$i]['location']   = $prepFunction($loc['event_location']);
                 $events[$i]['street1']    = $prepFunction($loc['event_street1']);
                 $events[$i]['street2']    = $prepFunction($loc['event_street2']);
@@ -1156,7 +1358,7 @@ function &postcalendar_userapi_pcQueryEvents($args)
                 $events[$i]['contemail']   = $prepFunction($tmp['contemail']);
                 $events[$i]['website']     = $prepFunction(postcalendar_makeValidURL($tmp['website']));
                 $events[$i]['fee']         = $prepFunction($tmp['fee']);
-                $loc = unserialize($tmp['location'], ['allowed_classes' => false]);
+                $loc = postcalendar_decode_location_fields($tmp['location']);
                 $events[$i]['location']   = $prepFunction($loc['event_location']);
                 $events[$i]['street1']    = $prepFunction($loc['event_street1']);
                 $events[$i]['street2']    = $prepFunction($loc['event_street2']);
@@ -1288,7 +1490,8 @@ function &postcalendar_userapi_pcGetEvents($args)
     $event->setProviderID($providerID ?? $provider_id ?? null);
 
     $result = OEGlobalsBag::getInstance()->getKernel()->getEventDispatcher()->dispatch($event, CalendarUserGetEventsFilter::EVENT_NAME);
-    return $result->getEventsByDays();
+    $eventsByDays = $result->getEventsByDays();
+    return $eventsByDays;
 }
 
 //===========================

@@ -1,0 +1,12 @@
+OpenEMR Lab PDF Extraction Eval Packet
+Synthetic demo files only. Not real PHI. Not for clinical care.
+
+00_TESTING_GUIDE_lab_pdf_extraction_evals.pdf
+01_lab_pdf_valid_extraction.pdf
+02_lab_pdf_missing_reference_range.pdf
+03_lab_pdf_missing_collection_date.pdf
+04_lab_pdf_missing_source_citation.pdf
+05_lab_pdf_abnormal_values_flagged.pdf
+06_lab_pdf_non_medical_document_blocked.pdf
+07_lab_pdf_ocr_needed_review_required.pdf
+08_lab_pdf_no_direct_chart_write.pdf

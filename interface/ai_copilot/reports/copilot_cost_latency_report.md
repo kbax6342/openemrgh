@@ -1,6 +1,6 @@
 # OpenEMR AI Co-Pilot Cost and Latency Report
 
-Generated: 2026-05-08T02:23:19.737Z
+Generated: 2026-05-08T19:30:29.544Z
 
 ## Actual Dev Spend
 
@@ -17,17 +17,17 @@ Generated: 2026-05-08T02:23:19.737Z
 
 ## Latency
 
-- p50 latency: 173 ms
-- p95 latency: 319 ms
-- Average latency: 217 ms
+- p50 latency: 177 ms
+- p95 latency: 320 ms
+- Average latency: 220.67 ms
 - Encounter count in latest snapshot: 3
 
 ## Bottleneck Analysis
 
-- IntakeExtractorWorker: avg 103.5 ms, p95 119 ms. Document extraction gets slower when PDF parsing and clinician-review staging are involved.
-- FinalResponse: avg 46.17 ms, p95 126 ms. Draft generation or final assembly remains the slowest stage in current local observability data.
-- EvidenceRetrieverWorker: avg 22 ms, p95 34 ms. Retrieval latency may increase further if external reranking is enabled in production.
-- Supervisor: avg 0.67 ms, p95 1 ms. Review this step first when optimizing p95 latency.
+- IntakeExtractorWorker: avg 103.5 ms, p95 118 ms. Document extraction gets slower when PDF parsing and clinician-review staging are involved.
+- FinalResponse: avg 46 ms, p95 126 ms. Draft generation or final assembly remains the slowest stage in current local observability data.
+- EvidenceRetrieverWorker: avg 22.43 ms, p95 35 ms. Retrieval latency may increase further if external reranking is enabled in production.
+- Supervisor: avg 1 ms, p95 3 ms. Review this step first when optimizing p95 latency.
 
 ## Eval Context
 

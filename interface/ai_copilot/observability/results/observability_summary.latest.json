@@ -1,54 +1,54 @@
 {
-  "generated_at": "2026-05-08T02:23:19.705Z",
+  "generated_at": "2026-05-08T19:30:29.465Z",
   "event_count": 71,
   "encounter_count": 3,
   "latency_ms": {
-    "average": 217,
-    "p50": 173,
-    "p95": 319
+    "average": 220.67,
+    "p50": 177,
+    "p95": 320
   },
   "step_latency_ms": {
     "Supervisor": {
       "count": 3,
-      "average_ms": 0.67,
-      "p95_ms": 1
+      "average_ms": 1,
+      "p95_ms": 3
     },
     "EvidenceRetrieverWorker": {
       "count": 7,
-      "average_ms": 22,
-      "p95_ms": 34
+      "average_ms": 22.43,
+      "p95_ms": 35
     },
     "FinalResponse": {
       "count": 6,
-      "average_ms": 46.17,
+      "average_ms": 46,
       "p95_ms": 126
     },
     "IntakeExtractorWorker": {
       "count": 2,
       "average_ms": 103.5,
-      "p95_ms": 119
+      "p95_ms": 118
     }
   },
   "bottlenecks": [
     {
       "step_name": "IntakeExtractorWorker",
       "average_ms": 103.5,
-      "p95_ms": 119
+      "p95_ms": 118
     },
     {
       "step_name": "FinalResponse",
-      "average_ms": 46.17,
+      "average_ms": 46,
       "p95_ms": 126
     },
     {
       "step_name": "EvidenceRetrieverWorker",
-      "average_ms": 22,
-      "p95_ms": 34
+      "average_ms": 22.43,
+      "p95_ms": 35
     },
     {
       "step_name": "Supervisor",
-      "average_ms": 0.67,
-      "p95_ms": 1
+      "average_ms": 1,
+      "p95_ms": 3
     }
   ],
   "costs": {

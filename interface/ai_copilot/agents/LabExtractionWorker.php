@@ -89,15 +89,40 @@ class LabExtractionWorker
             if ($fieldOrChunkId === '') {
                 $fieldOrChunkId = 'lab_' . $index;
             }
-            $citation = $this->buildSourceCitation(
-                $sourceDocumentId,
-                $patientId,
-                $fieldOrChunkId,
-                $pageNumber,
-                $quote !== '' ? $quote : $valueText,
-                $confidence,
-                $fact['bounding_box'] ?? null
-            );
+            $existingCitation = is_array($fact['source_link'] ?? null)
+                ? $fact['source_link']
+                : (is_array($fact['source_citation'] ?? null) ? $fact['source_citation'] : []);
+            if ($existingCitation !== []) {
+                $citation = $existingCitation;
+                if (!isset($citation['patient_id']) || trim((string) ($citation['patient_id'] ?? '')) === '') {
+                    $citation['patient_id'] = $patientId;
+                }
+                if (!isset($citation['source_document_id']) || trim((string) ($citation['source_document_id'] ?? '')) === '') {
+                    $citation['source_document_id'] = $sourceDocumentId;
+                }
+                if (!isset($citation['source_id']) || trim((string) ($citation['source_id'] ?? '')) === '') {
+                    $citation['source_id'] = $sourceDocumentId !== '' ? 'source_document_' . $sourceDocumentId : '';
+                }
+                if (!isset($citation['source_type']) || trim((string) ($citation['source_type'] ?? '')) === '') {
+                    $citation['source_type'] = 'lab_pdf';
+                }
+                if (!isset($citation['confidence']) || !is_numeric($citation['confidence'])) {
+                    $citation['confidence'] = round($confidence, 4);
+                }
+                if (!isset($citation['review_status']) || trim((string) ($citation['review_status'] ?? '')) === '') {
+                    $citation['review_status'] = 'pending_clinician_review';
+                }
+            } else {
+                $citation = $this->buildSourceCitation(
+                    $sourceDocumentId,
+                    $patientId,
+                    $fieldOrChunkId,
+                    $pageNumber,
+                    $quote !== '' ? $quote : $valueText,
+                    $confidence,
+                    $fact['bounding_box'] ?? null
+                );
+            }
             $labs[] = [
                 'test_name' => $testName,
                 'value' => $valueText,

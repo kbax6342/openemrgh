@@ -2803,8 +2803,14 @@ function extractionStatusDescriptor(status, options = {}) {
         uploaded: { tone: 'neutral', label: 'Uploaded' },
         extraction_pending: { tone: 'neutral', label: 'Extraction pending' },
         ok: { tone: schemaValid ? 'success' : 'warning', label: schemaValid ? 'Extraction complete' : defaultReviewLabel },
+        extracted: { tone: 'success', label: 'Extraction complete' },
+        extracted_with_abnormal_flags: { tone: 'warning', label: 'Abnormal values flagged' },
         review_required: { tone: 'warning', label: 'Extraction review required' },
         extraction_review_required: { tone: 'warning', label: 'Extraction review required' },
+        missing_reference_range: { tone: 'warning', label: 'Missing reference range' },
+        missing_collection_date: { tone: 'warning', label: 'Missing collection date' },
+        citation_contract_failed: { tone: 'error', label: 'Citation contract failed' },
+        chart_write_blocked: { tone: 'error', label: 'Direct chart write blocked' },
         extraction_failed: { tone: 'error', label: 'Extraction failed' },
         failed: { tone: 'error', label: 'Extraction failed' },
         ocr_required: { tone: 'warning', label: 'OCR / text review required' },
@@ -2816,7 +2822,8 @@ function extractionStatusDescriptor(status, options = {}) {
         clinician_rejected: { tone: 'error', label: 'Clinician rejected' },
         role_blocked: { tone: 'error', label: 'Blocked by role guardrails' },
         invalid_file_type: { tone: 'error', label: 'Unsupported file type' },
-        document_guard_rejected: { tone: 'error', label: 'Unsupported medical document' }
+        document_guard_rejected: { tone: 'error', label: 'Unsupported medical document' },
+        unsupported_document: { tone: 'error', label: 'Unsupported medical document' }
     };
 
     if (statusMap[normalized]) {
@@ -3052,9 +3059,11 @@ function buildExtractionResultsPanel(message) {
 
     const subtitle = document.createElement('p');
     subtitle.className = 'copilot-extraction-subtitle';
-    subtitle.textContent = documentType === 'intake_form'
-        ? 'Structured intake facts extracted for draft-only clinician review.'
-        : 'Structured lab facts extracted for draft-only clinician review.';
+    subtitle.textContent = toolOutput.resultTitle
+        ? String(toolOutput.resultTitle)
+        : (documentType === 'intake_form'
+            ? 'Structured intake facts extracted for draft-only clinician review.'
+            : 'Structured lab facts extracted for draft-only clinician review.');
     titleWrap.appendChild(subtitle);
     header.appendChild(titleWrap);
 
@@ -3765,7 +3774,7 @@ function buildAttachmentEvidenceMeta(toolOutput) {
         return null;
     }
 
-    const blockedStatuses = ['invalid_file_type', 'role_blocked', 'ocr_required', 'extraction_review_required', 'document_guard_rejected', 'document_guard_review_required'];
+    const blockedStatuses = ['invalid_file_type', 'role_blocked', 'ocr_required', 'extraction_review_required', 'document_guard_rejected', 'document_guard_review_required', 'unsupported_document', 'citation_contract_failed', 'missing_collection_date', 'missing_reference_range', 'chart_write_blocked', 'review_required'];
     const status = String(toolOutput.status || '');
     const chunkCount = Number.isFinite(toolOutput.sourceMetadata?.chunkCount) ? toolOutput.sourceMetadata.chunkCount : (Number.isFinite(toolOutput.numberOfChunks) ? toolOutput.numberOfChunks : 0);
     const retrievedChunkCount = Number.isFinite(toolOutput.retrieval?.chunkCount) ? toolOutput.retrieval.chunkCount : (Array.isArray(toolOutput.retrieval?.chunkIds) ? toolOutput.retrieval.chunkIds.length : 0);

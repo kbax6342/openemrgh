@@ -767,7 +767,7 @@ function aiCopilotAttachmentHasRetrievedChunks(array $context): bool
     }
 
     $toolStatus = aiCopilotCleanText((string) ($toolOutput['status'] ?? ''));
-    if (in_array($toolStatus, ['invalid_file_type', 'role_blocked', 'ocr_required', 'extraction_review_required', 'document_guard_rejected', 'document_guard_review_required'], true)) {
+    if (in_array($toolStatus, ['invalid_file_type', 'role_blocked', 'ocr_required', 'extraction_review_required', 'document_guard_rejected', 'document_guard_review_required', 'unsupported_document', 'citation_contract_failed', 'missing_collection_date', 'missing_reference_range', 'chart_write_blocked', 'review_required'], true)) {
         return false;
     }
 
@@ -1539,7 +1539,7 @@ function aiCopilotBuildAttachmentReviewContextForLlm(array $context): array
     }
 
     $attachmentStatus = aiCopilotCleanText((string) ($toolOutput['status'] ?? 'available'));
-    if (in_array($attachmentStatus, ['invalid_file_type', 'role_blocked', 'ocr_required', 'extraction_review_required', 'document_guard_rejected', 'document_guard_review_required'], true)) {
+    if (in_array($attachmentStatus, ['invalid_file_type', 'role_blocked', 'ocr_required', 'extraction_review_required', 'document_guard_rejected', 'document_guard_review_required', 'unsupported_document', 'citation_contract_failed', 'missing_collection_date', 'missing_reference_range', 'chart_write_blocked', 'review_required'], true)) {
         return [
             'attachment_status' => $attachmentStatus !== '' ? $attachmentStatus : 'blocked',
             'instruction' => aiCopilotCleanText((string) ($toolOutput['safe_message'] ?? 'No validated uploaded document evidence is available for attachment review.')),
@@ -5442,6 +5442,11 @@ function aiCopilotLabPdfToolOutputForClient(array $toolOutput): array
         'medicalValidationStatus' => aiCopilotCleanText((string) ($toolOutput['medical_validation_status'] ?? '')),
         'chartWriteStatus' => aiCopilotCleanText((string) ($toolOutput['chart_write_status'] ?? '')),
         'numberOfChunks' => $toolOutput['number_of_chunks'] ?? 0,
+        'resultTitle' => aiCopilotCleanText((string) ($toolOutput['result_title'] ?? '')),
+        'summary' => aiCopilotCleanText((string) ($toolOutput['summary'] ?? '')),
+        'evalId' => aiCopilotCleanText((string) ($toolOutput['eval_id'] ?? '')),
+        'chartWriteAllowed' => array_key_exists('chart_write_allowed', $toolOutput) ? !empty($toolOutput['chart_write_allowed']) : false,
+        'trustedUseAllowed' => !array_key_exists('trusted_use_allowed', $toolOutput) || !empty($toolOutput['trusted_use_allowed']),
         'documentMetadata' => [
             'title' => aiCopilotCleanText((string) ($toolOutput['document_metadata']['title'] ?? '')),
             'mimeType' => aiCopilotCleanText((string) ($toolOutput['document_metadata']['mime_type'] ?? 'application/pdf')),
@@ -6739,12 +6744,47 @@ function aiCopilotBuildLabPdfIngestionResponse(array $context, string $prompt = 
         );
     }
 
+    $status = aiCopilotCleanText((string) ($toolOutput['status'] ?? ''));
+    $resultTitle = aiCopilotCleanText((string) ($toolOutput['result_title'] ?? ''));
+    if ($resultTitle === '') {
+        $resultTitle = match ($status) {
+            'missing_reference_range' => 'Reference Range Missing — Clinician Review Required',
+            'missing_collection_date' => 'Collection Date Missing — Clinician Review Required',
+            'citation_contract_failed' => 'Citation Contract Failed — Missing Source Citation',
+            'extracted_with_abnormal_flags' => 'Lab PDF Extraction — Abnormal Values Flagged',
+            'unsupported_document' => 'Unsupported Medical Document',
+            'ocr_required' => 'OCR or Textract Review Required',
+            'chart_write_blocked' => 'Direct Chart Write Blocked — Clinician Review Required',
+            default => 'Lab PDF Ingestion — Clinician Review Required',
+        };
+    }
+    $summaryText = aiCopilotCleanText((string) ($toolOutput['summary'] ?? $toolOutput['safe_message'] ?? ''));
+    $trustedUseAllowed = !array_key_exists('trusted_use_allowed', $toolOutput) || !empty($toolOutput['trusted_use_allowed']);
+    $citationValidation = is_array($toolOutput['citation_validation'] ?? null) ? $toolOutput['citation_validation'] : [];
+
     if (($toolOutput['status'] ?? '') === 'role_blocked') {
         return aiCopilotBuildResponse(
-            'Lab PDF Ingestion — Clinician Review Required',
+            $resultTitle,
             [
+                aiCopilotBuildSection('Summary', [$summaryText !== '' ? $summaryText : aiCopilotCleanText((string) ($toolOutput['safe_message'] ?? 'Lab PDF ingestion is restricted in this workflow.'))], 'yellow'),
                 aiCopilotBuildSection('Extracted Lab Facts', [aiCopilotCleanText((string) ($toolOutput['safe_message'] ?? 'Lab PDF ingestion is restricted in this workflow.'))], 'yellow'),
                 aiCopilotBuildSection('Missing or Ambiguous Data', ['The attachment workflow was blocked before any chart write, order, or diagnosis action could occur.'], 'yellow'),
+                aiCopilotBuildSection('Safety Notice', [AI_COPILOT_LAB_PDF_REVIEW_NOTICE]),
+            ],
+            ['Draft note', 'Review needed']
+        );
+    }
+
+    if ($status === 'unsupported_document') {
+        return aiCopilotBuildResponse(
+            $resultTitle,
+            [
+                aiCopilotBuildSection('Summary', [$summaryText !== '' ? $summaryText : aiCopilotCleanText((string) ($toolOutput['safe_message'] ?? 'The uploaded file does not appear to be a supported medical lab document.'))], 'yellow'),
+                aiCopilotBuildSection('Blocked / Untrusted Extracted Facts', ['No lab values were extracted because the uploaded file did not appear to be a supported medical lab document.'], 'yellow'),
+                aiCopilotBuildSection('Abnormal / Attention Needed', ['Lab extraction was refused before any structured clinical facts were created.'], 'yellow'),
+                aiCopilotBuildSection('Missing or Ambiguous Data', ['Upload a supported medical lab PDF before retrying this workflow.'], 'yellow'),
+                aiCopilotBuildSection('Draft Clinical Summary', ['No lab summary was drafted because the uploaded file was not classified as a supported medical lab document.']),
+                aiCopilotBuildSection('Sources Used', ['Ingestion status: unsupported_document']),
                 aiCopilotBuildSection('Safety Notice', [AI_COPILOT_LAB_PDF_REVIEW_NOTICE]),
             ],
             ['Draft note', 'Review needed']
@@ -6792,7 +6832,6 @@ function aiCopilotBuildLabPdfIngestionResponse(array $context, string $prompt = 
     $retrievalChunkIds = array_values(array_filter(array_map('aiCopilotCleanText', $toolOutput['retrieval']['chunk_ids'] ?? []), static fn($item) => $item !== ''));
     $uploadedAt = aiCopilotCleanText((string) ($toolOutput['document_metadata']['uploaded_at'] ?? $toolOutput['source_metadata']['uploaded_at'] ?? ''));
     $extractionMethod = aiCopilotCleanText((string) ($toolOutput['extraction_method'] ?? ''));
-    $status = aiCopilotCleanText((string) ($toolOutput['status'] ?? ''));
     $promptInjectionDetected = !empty($toolOutput['safety_metadata']['prompt_injection_detected']);
 
     if ($promptInjectionDetected) {
@@ -6803,6 +6842,8 @@ function aiCopilotBuildLabPdfIngestionResponse(array $context, string $prompt = 
     $sourceItems[] = 'File: ' . aiCopilotFallbackValue($documentTitle, 'Uploaded lab PDF');
     if ($retrievalChunkIds !== []) {
         $sourceItems[] = 'Chunk ids: ' . aiCopilotJoinList($retrievalChunkIds);
+    } elseif ($status === 'citation_contract_failed') {
+        $sourceItems[] = 'Chunk ids: missing';
     } else {
         $sourceItems[] = 'Chunk ids: No retrieved chunk ids were available.';
     }
@@ -6838,6 +6879,10 @@ function aiCopilotBuildLabPdfIngestionResponse(array $context, string $prompt = 
         }
     }
 
+    if ($summaryText !== '') {
+        $draftSummaryItems[] = $summaryText;
+    }
+
     if ($status === 'ocr_required') {
         $draftSummaryItems = [
             'The attached PDF appears scanned or text-light. OCR or manual clinician verification of the original document is required before relying on extracted facts.',
@@ -6846,6 +6891,26 @@ function aiCopilotBuildLabPdfIngestionResponse(array $context, string $prompt = 
         $draftSummaryItems = [
             aiCopilotCleanText((string) ($toolOutput['safe_message'] ?? 'PDF text extraction did not produce reliable lab rows. Clinician must verify the source PDF.')),
             'No structured lab facts were promoted into the draft because the extracted rows were not reliable enough for source-grounded review.',
+        ];
+    } elseif ($status === 'citation_contract_failed') {
+        $draftSummaryItems = [
+            $summaryText !== '' ? $summaryText : 'One or more extracted lab facts could not be fully linked to source evidence.',
+            'Blocked facts remain draft-only and cannot be treated as trusted clinical claims until the source citation problem is corrected and reviewed by a clinician.',
+        ];
+    } elseif ($status === 'missing_collection_date') {
+        $draftSummaryItems = [
+            $summaryText !== '' ? $summaryText : 'The collection date was missing from the extracted lab result.',
+            'Do not rely on this extracted fact as trusted final data until the collection date is verified from the original PDF.',
+        ];
+    } elseif ($status === 'missing_reference_range') {
+        $draftSummaryItems = [
+            $summaryText !== '' ? $summaryText : 'The reference range was missing from at least one extracted lab result.',
+            'Do not rely on this extracted fact as trusted final data until the reference range is verified from the original PDF.',
+        ];
+    } elseif ($status === 'chart_write_blocked') {
+        $draftSummaryItems = [
+            $summaryText !== '' ? $summaryText : 'Direct chart write was blocked for this uploaded lab PDF.',
+            'The copilot can prepare a draft extraction for clinician review, but it cannot directly update the chart.',
         ];
     } elseif ($status === 'invalid_file_type') {
         $draftSummaryItems = [
@@ -6871,17 +6936,42 @@ function aiCopilotBuildLabPdfIngestionResponse(array $context, string $prompt = 
         $missingItems[] = 'No additional missing lab metadata was detected in the retrieved document context.';
     }
 
-    $status = $toolOutput['status'] ?? '';
+    $citationErrorItems = [];
+    foreach (($citationValidation['validation_errors'] ?? []) as $error) {
+        if (!is_array($error)) {
+            continue;
+        }
+        $citationErrorItems[] = aiCopilotJoinParts([
+            aiCopilotCleanText((string) ($error['field'] ?? 'citation')),
+            aiCopilotCleanText((string) ($error['issue'] ?? 'Source grounding error')),
+        ]);
+    }
+    if ($status === 'citation_contract_failed' && $retrievalChunkIds === []) {
+        $citationErrorItems[] = 'field_or_chunk_id: missing';
+    }
+    $citationErrorItems = array_values(array_unique(array_filter(array_map('aiCopilotCleanText', $citationErrorItems), static fn($item) => $item !== '')));
+
+    $factSectionTitle = in_array($status, ['citation_contract_failed', 'chart_write_blocked'], true)
+        ? 'Blocked / Untrusted Extracted Facts'
+        : 'Extracted Lab Facts';
+
+    $sections = [];
+    if ($summaryText !== '') {
+        $sections[] = aiCopilotBuildSection('Summary', [$summaryText], in_array($status, ['unsupported_document', 'ocr_required', 'citation_contract_failed', 'missing_collection_date', 'missing_reference_range', 'chart_write_blocked'], true) ? 'yellow' : 'neutral');
+    }
+    $sections[] = aiCopilotBuildSection($factSectionTitle, array_slice($findingItems, 0, 20), in_array($status, ['ocr_required', 'extraction_review_required', 'citation_contract_failed', 'missing_collection_date', 'missing_reference_range', 'chart_write_blocked'], true) ? 'yellow' : 'neutral');
+    $sections[] = aiCopilotBuildSection('Abnormal / Attention Needed', array_slice($abnormalItems, 0, 12), $abnormalItems !== [] ? 'yellow' : 'neutral');
+    $sections[] = aiCopilotBuildSection('Missing or Ambiguous Data', array_slice($missingItems, 0, 8), 'yellow');
+    if ($citationErrorItems !== []) {
+        $sections[] = aiCopilotBuildSection('Citation / Source Grounding Error', array_slice($citationErrorItems, 0, 8), 'yellow');
+    }
+    $sections[] = aiCopilotBuildSection('Draft Clinical Summary', $draftSummaryItems);
+    $sections[] = aiCopilotBuildSection('Sources Used', $sourceItems);
+    $sections[] = aiCopilotBuildSection('Safety Notice', [AI_COPILOT_LAB_PDF_REVIEW_NOTICE]);
+
     return aiCopilotBuildResponse(
-        'Lab PDF Ingestion — Clinician Review Required',
-        [
-            aiCopilotBuildSection('Extracted Lab Facts', array_slice($findingItems, 0, 20), in_array($status, ['ocr_required', 'extraction_review_required'], true) ? 'yellow' : 'neutral'),
-            aiCopilotBuildSection('Abnormal / Attention Needed', array_slice($abnormalItems, 0, 12), $abnormalItems !== [] ? 'yellow' : 'neutral'),
-            aiCopilotBuildSection('Missing or Ambiguous Data', array_slice($missingItems, 0, 8), 'yellow'),
-            aiCopilotBuildSection('Draft Clinical Summary', $draftSummaryItems),
-            aiCopilotBuildSection('Sources Used', $sourceItems),
-            aiCopilotBuildSection('Safety Notice', [AI_COPILOT_LAB_PDF_REVIEW_NOTICE]),
-        ],
+        $resultTitle,
+        $sections,
         ['Draft note', 'Chart context', 'Review needed']
     );
 }
@@ -7124,7 +7214,7 @@ function aiCopilotBuildSources(array $context, string $mode = 'general_assistant
         if (!empty($context['attached_lab_pdf_tool_output'])) {
             $toolOutput = is_array($context['attached_lab_pdf_tool_output']) ? $context['attached_lab_pdf_tool_output'] : [];
             $toolStatus = aiCopilotCleanText((string) ($toolOutput['status'] ?? ''));
-            if (in_array($toolStatus, ['invalid_file_type', 'role_blocked', 'ocr_required', 'extraction_review_required', 'document_guard_rejected', 'document_guard_review_required'], true)) {
+            if (in_array($toolStatus, ['invalid_file_type', 'role_blocked', 'ocr_required', 'extraction_review_required', 'document_guard_rejected', 'document_guard_review_required', 'unsupported_document', 'citation_contract_failed', 'missing_collection_date', 'missing_reference_range', 'chart_write_blocked', 'review_required'], true)) {
                 return [];
             }
             $sourceCoverage = is_array($toolOutput['source_coverage'] ?? null) ? $toolOutput['source_coverage'] : [];
@@ -7193,7 +7283,7 @@ function aiCopilotBuildSources(array $context, string $mode = 'general_assistant
     if (!empty($context['attached_lab_pdf_tool_output']) || !empty($context['retrieved_lab_pdf_context'])) {
         $toolOutput = is_array($context['attached_lab_pdf_tool_output'] ?? null) ? $context['attached_lab_pdf_tool_output'] : [];
         $toolStatus = aiCopilotCleanText((string) ($toolOutput['status'] ?? ''));
-        if (!in_array($toolStatus, ['invalid_file_type', 'role_blocked', 'ocr_required', 'extraction_review_required', 'document_guard_rejected', 'document_guard_review_required'], true)) {
+        if (!in_array($toolStatus, ['invalid_file_type', 'role_blocked', 'ocr_required', 'extraction_review_required', 'document_guard_rejected', 'document_guard_review_required', 'unsupported_document', 'citation_contract_failed', 'missing_collection_date', 'missing_reference_range', 'chart_write_blocked', 'review_required'], true)) {
             $sourceCoverage = is_array($toolOutput['source_coverage'] ?? null) ? $toolOutput['source_coverage'] : [];
             $matchedSources = array_values(array_filter($sourceCoverage['matched_sources'] ?? [], 'is_array'));
             foreach ($matchedSources as $source) {

@@ -595,4 +595,434 @@ $side-calendar-date-padding: 0.3rem !default;
       margin-#{$left}: 0;
     }
   }
+
+  /* Modern calendar dashboard shell */
+  #wrapper.modern-calendar-shell {
+    background: #f3f4f6;
+    color: #1f2937;
+    min-height: 100dvh;
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  #theform.modern-calendar-form {
+    display: flex;
+    flex-direction: column;
+    min-height: 100dvh;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .modern-calendar-toolbar-wrap {
+    flex: 0 0 auto;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    padding: 0 !important;
+    background: $white;
+    border-bottom: 1px solid $gray-300;
+    z-index: 10;
+  }
+
+  #topToolbarRight.modern-calendar-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    gap: 0.55rem;
+    min-height: 3.2rem;
+    padding: 0.4rem 0.75rem;
+    background: $white !important;
+    border-bottom: 1px solid $gray-300;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  }
+
+  #functions,
+  #dateNAV,
+  #viewPicker {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    min-height: 2rem;
+    min-width: 0;
+  }
+
+  #functions {
+    justify-content: flex-start;
+    text-align: $left;
+    flex-wrap: nowrap;
+  }
+
+  #dateNAV {
+    display: inline-flex;
+    justify-content: center;
+    gap: 0.45rem;
+    padding: 0.2rem 0.55rem;
+    border: 1px solid $gray-300;
+    border-radius: 999px;
+    background: $light;
+    box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.04);
+    color: $gray-900;
+    font-size: 0.9rem;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  #viewPicker {
+    justify-content: flex-end;
+    flex-wrap: nowrap;
+    text-align: $right;
+  }
+
+  #functions .btn,
+  #viewPicker .btn {
+    border-radius: 999px;
+    min-height: 2rem;
+    min-width: 2rem;
+    padding: 0.3rem 0.65rem;
+    width: auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8rem;
+    white-space: nowrap;
+  }
+
+  #topToolbarRight .calendar-toolbar-icon-btn {
+    width: 2rem;
+    min-width: 2rem;
+    padding-left: 0;
+    padding-right: 0;
+    flex: 0 0 2rem;
+    border-radius: 999px;
+  }
+
+  #topToolbarRight .calendar-toolbar-text-btn,
+  #dayview,
+  #weekview,
+  #monthview {
+    width: auto;
+    min-width: max-content;
+    flex: 0 0 auto;
+    padding-left: 0.8rem;
+    padding-right: 0.8rem;
+    white-space: nowrap;
+    border-radius: 0.5rem;
+  }
+
+  #dayview,
+  #weekview,
+  #monthview {
+  }
+
+  #dayview.currentview,
+  #weekview.currentview,
+  #monthview.currentview {
+    background: $white !important;
+    color: $primary !important;
+    border-color: #dbeafe !important;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+  }
+
+  .modern-calendar-layout {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    background: #f3f4f6;
+  }
+
+  #bottomLeft.modern-calendar-sidebar {
+    position: relative !important;
+    top: auto !important;
+    left: auto !important;
+    right: auto !important;
+    clear: none !important;
+    float: none !important;
+    flex: 0 0 18rem;
+    width: 18rem;
+    min-width: 16rem;
+    max-width: 20rem;
+    min-height: 0;
+    padding: 1rem;
+    margin: 0 !important;
+    overflow-y: auto;
+    background: #f3f4f6;
+    border-right: 1px solid $gray-300;
+    z-index: 1;
+  }
+
+  .page-content-wrapper.modern-calendar-content {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    width: auto !important;
+    margin: 0 !important;
+    overflow: hidden;
+    background: $white;
+  }
+
+  .modern-calendar-content .calsearch_body {
+    height: 100%;
+    min-height: 0;
+    padding: 0 !important;
+    overflow: hidden;
+  }
+
+  .modern-calendar-grid.container-fluid {
+    padding: 0 !important;
+  }
+
+  #bigCal.modern-calendar-main,
+  #bigCal {
+    height: 100%;
+    min-height: 0;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow: auto;
+    background: $white;
+    border-left: 0;
+  }
+
+  #datePicker,
+  #providerPicker,
+  #facilityColor {
+    background: $white;
+    border: 1px solid $gray-300;
+    border-radius: 0.85rem;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+    margin: 0 0 1rem 0;
+    padding: 1rem;
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .modern-calendar-panel-title {
+    margin: -1rem -1rem 0.75rem -1rem;
+    padding: 0.75rem 1rem;
+    background: $light;
+    border-bottom: 1px solid $gray-300;
+    border-radius: 0.85rem 0.85rem 0 0;
+    color: $gray-600;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  #datePicker .tdMonthName-small {
+    background: $white !important;
+    color: $gray-900 !important;
+    font-weight: 700;
+  }
+
+  #datePicker .tdDOW-small {
+    background: $white !important;
+    color: $gray-700 !important;
+    font-weight: 700;
+  }
+
+  #datePicker .tdMonthDay-small,
+  #datePicker .tdWeekend-small,
+  #datePicker .tdHoliday-small,
+  #datePicker .tdOtherMonthDay-small {
+    background: $white !important;
+    color: $gray-900;
+    border-radius: 999px;
+    text-align: center;
+  }
+
+  #datePicker .tdOtherMonthDay-small {
+    color: $gray-500;
+  }
+
+  #datePicker .currentDate,
+  #datePicker .tdDatePickerHighlightCurrent {
+    background: $primary !important;
+    color: $white !important;
+    border-radius: 999px;
+    font-weight: 700;
+  }
+
+  #providerPicker #pc_facility,
+  #providerPicker #pc_username {
+    width: 100%;
+    border-radius: 0.6rem;
+    border-color: #dbe1ea;
+    background: $white;
+    color: $gray-900;
+  }
+
+  #facilityColor {
+    overflow: hidden;
+    padding: 0;
+  }
+
+  #facilityColor .list-group-item {
+    background: $white;
+    color: $gray-700;
+    border-color: $gray-300;
+    font-weight: 600;
+  }
+
+  #times {
+    background: $light !important;
+    border-right: 1px solid $gray-300;
+    color: $gray-600;
+    width: 4rem;
+  }
+
+  .timeslot {
+    color: $gray-600;
+    font-size: 0.75rem;
+    font-weight: 600;
+
+    a {
+      color: $primary !important;
+      text-decoration: none;
+    }
+  }
+
+  .schedule {
+    background: $white !important;
+    border: 1px solid $gray-300 !important;
+    min-width: 16rem;
+  }
+
+  .providerheader,
+  .providerday {
+    background: $light !important;
+    color: $gray-900 !important;
+    border: 1px solid $gray-300 !important;
+    font-size: 0.85rem;
+    font-weight: 800;
+    min-height: 2.75rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .calendar_day {
+    background-image: repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent 19px,
+      #f1f5f9 20px
+    );
+    background-color: $white;
+    min-height: 100%;
+    position: relative;
+  }
+
+  #wrapper.toggled #bottomLeft.modern-calendar-sidebar {
+    display: none;
+  }
+
+  #wrapper.toggled .page-content-wrapper.modern-calendar-content {
+    flex-basis: 100%;
+    width: 100% !important;
+  }
+
+  @media (max-width: 992px) {
+    #topToolbarRight.modern-calendar-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 0.45rem 0.6rem;
+      min-height: auto;
+      padding: 0.45rem 0.6rem;
+    }
+
+    #functions,
+    #dateNAV,
+    #viewPicker {
+      justify-content: center;
+      width: auto;
+      flex-wrap: wrap;
+      white-space: nowrap;
+    }
+
+    #viewPicker {
+      flex-wrap: wrap;
+    }
+
+    .modern-calendar-layout {
+      flex-direction: column;
+      overflow: auto;
+    }
+
+    #bottomLeft.modern-calendar-sidebar {
+      display: block;
+      flex: 0 0 auto;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      max-height: none;
+      border-right: 0;
+      border-bottom: 1px solid $gray-300;
+      overflow: visible;
+    }
+
+    .page-content-wrapper.modern-calendar-content {
+      min-height: 65vh;
+      overflow: auto;
+    }
+
+    #bigCal .table-responsive,
+    #bigCal table {
+      min-width: 720px;
+    }
+  }
+
+  @media (max-width: 576px) {
+    #topToolbarRight.modern-calendar-toolbar {
+      padding: 0.4rem 0.5rem;
+    }
+
+    #functions .btn,
+    #viewPicker .btn {
+      min-width: 1.9rem;
+      min-height: 1.9rem;
+      font-size: 0.78rem;
+      padding: 0.28rem 0.58rem;
+    }
+
+    #topToolbarRight .calendar-toolbar-icon-btn {
+      width: 1.9rem;
+      min-width: 1.9rem;
+      flex-basis: 1.9rem;
+      padding-left: 0;
+      padding-right: 0;
+    }
+
+    #topToolbarRight .calendar-toolbar-text-btn,
+    #dayview,
+    #weekview,
+    #monthview {
+      width: auto;
+      min-width: max-content;
+      padding-left: 0.72rem;
+      padding-right: 0.72rem;
+    }
+
+    #dateNAV {
+      font-size: 0.82rem;
+      text-align: center;
+    }
+
+    #bottomLeft.modern-calendar-sidebar {
+      padding: 0.75rem;
+    }
+
+    #datePicker,
+    #providerPicker,
+    #facilityColor {
+      border-radius: 0.75rem;
+    }
+  }
 }

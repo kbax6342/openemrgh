@@ -100,9 +100,35 @@ final readonly class SymfonyBackgroundServiceSpawner implements BackgroundServic
 
     public function spawn(string $name, bool $force, int $timeoutSeconds): array
     {
+        $consolePath = $this->projectDir . '/bin/console';
+        $attemptedPhpBinaries = $this->candidatePhpBinaries();
+        $resolvedPhpBinary = $this->resolvePhpBinary();
+        if ($resolvedPhpBinary === null) {
+            $this->logger->warning(
+                'Background service subprocess cannot start because PHP binary is missing or invalid.',
+                [
+                    'service' => $this->safeServiceName($name),
+                    'configured_php_binary' => $this->safeLogSnippet($this->phpBinary),
+                    'attempted_php_binaries' => $this->safeLogContextList($attemptedPhpBinaries),
+                ],
+            );
+            return ['name' => $name, 'status' => 'error'];
+        }
+        if (!$this->isValidConsolePath($consolePath)) {
+            $this->logger->warning(
+                'Background service subprocess cannot start because bin/console is missing or invalid.',
+                [
+                    'service' => $this->safeServiceName($name),
+                    'php_binary' => $this->safeLogSnippet($resolvedPhpBinary),
+                    'console_path' => $this->safeLogSnippet($consolePath),
+                ],
+            );
+            return ['name' => $name, 'status' => 'error'];
+        }
+
         $args = [
-            $this->phpBinary,
-            $this->projectDir . '/bin/console',
+            $resolvedPhpBinary,
+            $consolePath,
             'background:services',
             'run',
             '--name=' . $name,
@@ -118,11 +144,40 @@ final readonly class SymfonyBackgroundServiceSpawner implements BackgroundServic
         // the nonce matches.
         $nonce = bin2hex(random_bytes(16));
 
+        if (!$this->isValidProcessCommand($args)) {
+            $this->logger->warning(
+                'Background service subprocess cannot start because PHP binary is missing or invalid.',
+                [
+                    'service' => $this->safeServiceName($name),
+                    'configured_php_binary' => $this->safeLogSnippet($this->phpBinary),
+                    'resolved_php_binary' => $this->safeLogSnippet($resolvedPhpBinary),
+                    'attempted_php_binaries' => $this->safeLogContextList($attemptedPhpBinaries),
+                    'console_path' => $this->safeLogSnippet($consolePath),
+                ],
+            );
+            return ['name' => $name, 'status' => 'error'];
+        }
+
         // Symfony Process merges the supplied env with the parent's env by
         // default (unlike the raw `proc_open` contract). So passing just
         // the nonce here is enough; PATH, HOME, database credentials, etc.
         // all still propagate.
-        $process = new Process($args, env: [self::NONCE_ENV_VAR => $nonce]);
+        try {
+            $process = new Process($args, env: [self::NONCE_ENV_VAR => $nonce]);
+        } catch (\Throwable $exception) {
+            $this->logger->warning(
+                'Background service subprocess cannot start because PHP binary is missing or invalid.',
+                [
+                    'service' => $this->safeServiceName($name),
+                    'configured_php_binary' => $this->safeLogSnippet($this->phpBinary),
+                    'resolved_php_binary' => $this->safeLogSnippet($resolvedPhpBinary),
+                    'attempted_php_binaries' => $this->safeLogContextList($attemptedPhpBinaries),
+                    'console_path' => $this->safeLogSnippet($consolePath),
+                    'exception_message' => $this->safeLogSnippet($exception->getMessage()),
+                ],
+            );
+            return ['name' => $name, 'status' => 'error'];
+        }
         // Wall-clock cap derived from the service's computed lease so a hung
         // child cannot block the cron slot past its DB-side lease. Idle
         // timeout mirrors the hard cap: a service that produces no output
@@ -173,6 +228,17 @@ final readonly class SymfonyBackgroundServiceSpawner implements BackgroundServic
                 [
                     'service' => $this->safeServiceName($name),
                     'timeout_seconds' => $timeoutSeconds,
+                ],
+            );
+            return ['name' => $name, 'status' => 'error'];
+        } catch (\Throwable $exception) {
+            $this->logger->warning(
+                'Background service subprocess failed to execute.',
+                [
+                    'service' => $this->safeServiceName($name),
+                    'php_binary' => $this->safeLogSnippet($resolvedPhpBinary),
+                    'console_path' => $this->safeLogSnippet($consolePath),
+                    'exception_message' => $this->safeLogSnippet($exception->getMessage()),
                 ],
             );
             return ['name' => $name, 'status' => 'error'];
@@ -228,6 +294,103 @@ final readonly class SymfonyBackgroundServiceSpawner implements BackgroundServic
             return ['name' => $name, 'status' => 'error'];
         }
         return ['name' => $name, 'status' => $status];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function candidatePhpBinaries(): array
+    {
+        $candidates = [];
+        $this->appendPhpBinaryCandidate($candidates, $this->phpBinary);
+        $this->appendPhpBinaryCandidate($candidates, PHP_BINARY);
+        $this->appendPhpBinaryCandidate($candidates, rtrim((string) PHP_BINDIR, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'php');
+        $this->appendPhpBinaryCandidate($candidates, '/usr/local/bin/php');
+        $this->appendPhpBinaryCandidate($candidates, '/usr/bin/php');
+        $this->appendPhpBinaryCandidate($candidates, $this->commandLinePhpBinary());
+        return $candidates;
+    }
+
+    private function resolvePhpBinary(): ?string
+    {
+        return $this->resolvePhpBinaryFromCandidates($this->candidatePhpBinaries());
+    }
+
+    /**
+     * @param list<string> $candidates
+     */
+    private function resolvePhpBinaryFromCandidates(array $candidates): ?string
+    {
+        foreach ($candidates as $candidate) {
+            if ($this->isValidPhpBinary($candidate)) {
+                return $candidate;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * @param list<string> $candidates
+     */
+    private function appendPhpBinaryCandidate(array &$candidates, ?string $candidate): void
+    {
+        $normalized = trim((string) $candidate);
+        if ($normalized === '' || in_array($normalized, $candidates, true)) {
+            return;
+        }
+        $candidates[] = $normalized;
+    }
+
+    private function commandLinePhpBinary(): ?string
+    {
+        if (!function_exists('shell_exec')) {
+            return null;
+        }
+
+        $disabledFunctions = array_map('trim', explode(',', (string) ini_get('disable_functions')));
+        if (in_array('shell_exec', $disabledFunctions, true)) {
+            return null;
+        }
+
+        $resolved = shell_exec('command -v php 2>/dev/null');
+        if (!is_string($resolved)) {
+            return null;
+        }
+
+        $resolved = trim($resolved);
+        return $resolved !== '' ? $resolved : null;
+    }
+
+    private function isValidPhpBinary(?string $phpBinary): bool
+    {
+        $candidate = trim((string) $phpBinary);
+        return $candidate !== '' && is_file($candidate) && is_executable($candidate);
+    }
+
+    private function isValidConsolePath(string $consolePath): bool
+    {
+        return $consolePath !== '' && is_file($consolePath) && is_readable($consolePath);
+    }
+
+    /**
+     * @param list<string> $args
+     */
+    private function isValidProcessCommand(array $args): bool
+    {
+        if (!isset($args[0]) || !is_string($args[0])) {
+            return false;
+        }
+
+        $binary = trim($args[0]);
+        if ($binary === '' || !$this->isValidPhpBinary($binary)) {
+            return false;
+        }
+
+        if (!isset($args[1]) || !is_string($args[1])) {
+            return false;
+        }
+
+        return $this->isValidConsolePath($args[1]);
     }
 
     /**
@@ -324,5 +487,14 @@ final readonly class SymfonyBackgroundServiceSpawner implements BackgroundServic
             $sanitized = substr($sanitized, 0, self::SERVICE_NAME_LOG_MAX) . '…[truncated]';
         }
         return $sanitized;
+    }
+
+    /**
+     * @param list<string> $values
+     * @return list<string>
+     */
+    private function safeLogContextList(array $values): array
+    {
+        return array_map(fn(string $value): string => $this->safeLogSnippet($value), $values);
     }
 }

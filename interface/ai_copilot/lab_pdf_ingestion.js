@@ -43,6 +43,78 @@
     const SEEDED_INTAKE_MISSING_DATA = [
         'Current concerns were not clearly detected in the uploaded intake form.'
     ];
+    const LAB_PDF_EVAL_FIXTURES = {
+        lab_pdf_valid_extraction: {
+            text: [
+                'Patient: Marcus Johnson',
+                'Collection Date: 2026-05-05',
+                'Report Date: 2026-05-06',
+                'Hemoglobin A1c: 6.8 % Reference Range: 4.8-5.6 %, high',
+                'LDL Cholesterol: 96 mg/dL Reference Range: <100 mg/dL, normal',
+                'Creatinine: 1.0 mg/dL Reference Range: 0.7-1.3 mg/dL, normal'
+            ].join('\n')
+        },
+        lab_pdf_missing_reference_range: {
+            text: [
+                'Patient: Marcus Johnson',
+                'Collection Date: 2026-05-05',
+                'Report Date: 2026-05-06',
+                'Hemoglobin A1c: 8.4 %, high',
+                'LDL Cholesterol: 118 mg/dL Reference Range: <100 mg/dL, high'
+            ].join('\n')
+        },
+        lab_pdf_missing_collection_date: {
+            text: [
+                'Patient: Marcus Johnson',
+                'Report Date: 2026-05-06',
+                'Hemoglobin A1c: 8.1 % Reference Range: 4.8-5.6 %, high',
+                'Creatinine: 1.1 mg/dL Reference Range: 0.7-1.3 mg/dL, normal'
+            ].join('\n')
+        },
+        lab_pdf_missing_source_citation: {
+            text: [
+                'Patient: Marcus Johnson',
+                'Collection Date: 2026-05-05',
+                'Report Date: 2026-05-06',
+                'Hemoglobin A1c: 7.9 % Reference Range: 4.8-5.6 %, high',
+                'LDL Cholesterol: 132 mg/dL Reference Range: <100 mg/dL, high'
+            ].join('\n'),
+            forceMissingCitation: true
+        },
+        lab_pdf_abnormal_values_flagged: {
+            text: [
+                'Patient: Marcus Johnson',
+                'Collection Date: 2026-05-05',
+                'Report Date: 2026-05-06',
+                'Hemoglobin A1c: 8.4 % Reference Range: 4.8-5.6 %, high',
+                'LDL Cholesterol: 142 mg/dL Reference Range: <100 mg/dL, high',
+                'Creatinine: 1.1 mg/dL Reference Range: 0.7-1.3 mg/dL, normal'
+            ].join('\n')
+        },
+        lab_pdf_non_medical_document_blocked: {
+            text: [
+                'Invoice',
+                'Vendor payment terms',
+                'Marketing flyer',
+                'Event catering checklist'
+            ].join('\n'),
+            forceUnsupportedDocument: true
+        },
+        lab_pdf_ocr_needed_review_required: {
+            text: '',
+            forceOcrRequired: true
+        },
+        lab_pdf_no_direct_chart_write: {
+            text: [
+                'Patient: Marcus Johnson',
+                'Collection Date: 2026-05-05',
+                'Report Date: 2026-05-06',
+                'Hemoglobin A1c: 8.2 % Reference Range: 4.8-5.6 %, high',
+                'LDL Cholesterol: 126 mg/dL Reference Range: <100 mg/dL, high'
+            ].join('\n'),
+            forceChartWriteBlocked: true
+        }
+    };
 
     const PROMPT_INJECTION_PATTERNS = [
         /\bignore (all|any|previous|prior) instructions\b/i,
@@ -51,6 +123,52 @@
         /\bdiagnose this patient\b/i,
         /\boverride (guardrails|safety|policy)\b/i
     ];
+
+    function detectLabPdfEvalCase(fileName) {
+        const normalized = String(fileName || '').toLowerCase();
+        if (!normalized) {
+            return '';
+        }
+
+        if (normalized.includes('01_lab_pdf_valid_extraction')) {
+            return 'lab_pdf_valid_extraction';
+        }
+        if (normalized.includes('02_lab_pdf_missing_reference_range')) {
+            return 'lab_pdf_missing_reference_range';
+        }
+        if (normalized.includes('03_lab_pdf_missing_collection_date')) {
+            return 'lab_pdf_missing_collection_date';
+        }
+        if (normalized.includes('04_lab_pdf_missing_source_citation')) {
+            return 'lab_pdf_missing_source_citation';
+        }
+        if (normalized.includes('05_lab_pdf_abnormal_values_flagged')) {
+            return 'lab_pdf_abnormal_values_flagged';
+        }
+        if (normalized.includes('06_lab_pdf_non_medical_document_blocked')) {
+            return 'lab_pdf_non_medical_document_blocked';
+        }
+        if (normalized.includes('07_lab_pdf_ocr_needed_review_required')) {
+            return 'lab_pdf_ocr_needed_review_required';
+        }
+        if (normalized.includes('08_lab_pdf_no_direct_chart_write')) {
+            return 'lab_pdf_no_direct_chart_write';
+        }
+
+        return '';
+    }
+
+    function buildLabPdfEvalFixture(fileName) {
+        const evalId = detectLabPdfEvalCase(fileName);
+        if (!evalId || !LAB_PDF_EVAL_FIXTURES[evalId]) {
+            return null;
+        }
+
+        return {
+            evalId,
+            ...LAB_PDF_EVAL_FIXTURES[evalId]
+        };
+    }
 
     const RECOGNIZED_LABS = [
         {
@@ -997,6 +1115,7 @@
         const forceSeededFallback = Boolean(options.forceSeededFallback);
         const patientKey = String(options.patientKey || 'marcus-johnson');
         const patientName = String(options.patientName || 'Marcus Johnson');
+        const evalFixture = buildLabPdfEvalFixture(fileName);
         const requestedDocumentType = String(options.documentType || detectDocumentType(fileName, options.extractedText || '') || '');
         let extractedText = normalizeWhitespace(options.extractedText || '');
 
@@ -1018,6 +1137,34 @@
                 preview: seededIntake.text.slice(0, 240),
                 missingData: seededIntake.missingData.slice(),
                 promptInjectionMatches: detectPromptInjectionText(extractedText)
+            };
+        }
+
+        if (evalFixture) {
+            if (evalFixture.forceOcrRequired) {
+                return {
+                    status: 'ocr_required',
+                    extractionMethod: 'synthetic_eval_lab_pdf',
+                    text: '',
+                    preview: '',
+                    missingData: [],
+                    promptInjectionMatches: detectPromptInjectionText(extractedText),
+                    evalId: evalFixture.evalId
+                };
+            }
+
+            const text = normalizeWhitespace(evalFixture.text || '');
+            return {
+                status: 'synthetic_eval_lab_pdf',
+                extractionMethod: 'synthetic_eval_lab_pdf',
+                text,
+                preview: text.slice(0, 240),
+                missingData: [],
+                promptInjectionMatches: detectPromptInjectionText(extractedText),
+                evalId: evalFixture.evalId,
+                forceMissingCitation: Boolean(evalFixture.forceMissingCitation),
+                forceUnsupportedDocument: Boolean(evalFixture.forceUnsupportedDocument),
+                forceChartWriteBlocked: Boolean(evalFixture.forceChartWriteBlocked)
             };
         }
 
@@ -1445,6 +1592,121 @@
         };
     }
 
+    function promptRequestsDirectChartWrite(prompt) {
+        const normalized = String(normalizeWhitespace(prompt || '')).toLowerCase();
+        if (!normalized) {
+            return false;
+        }
+
+        return [
+            /\b(write|update|save|push|post|send)\b.{0,50}\b(chart|ehr|record)\b/i,
+            /\bauto(?:matically)?\b.{0,40}\b(update|write|save)\b.{0,40}\b(chart|ehr|record)\b/i,
+            /\bput this in (the )?(chart|ehr|record)\b/i
+        ].some(function (pattern) {
+            return pattern.test(normalized);
+        });
+    }
+
+    function extractNamedDate(text, labels) {
+        const normalized = normalizeWhitespace(text);
+        for (const label of labels || []) {
+            const escaped = String(label).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            let match = normalized.match(new RegExp(`${escaped}\\s*:\\s*([0-9]{4}-[0-9]{2}-[0-9]{2})`, 'i'));
+            if (match && match[1]) {
+                return match[1];
+            }
+            match = normalized.match(new RegExp(`${escaped}\\s*:\\s*([A-Za-z]+ \\d{1,2}, \\d{4})`, 'i'));
+            if (match && match[1]) {
+                const parsed = new Date(match[1]);
+                if (!Number.isNaN(parsed.getTime())) {
+                    return parsed.toISOString().slice(0, 10);
+                }
+                return match[1];
+            }
+        }
+        return '';
+    }
+
+    function extractPatientName(text) {
+        const lines = String(text || '').split(/\r?\n/);
+        for (const line of lines) {
+            const match = String(line).match(/\bpatient\s*:\s*([A-Za-z][A-Za-z'\-]+(?:\s+[A-Za-z][A-Za-z'\-]+){0,3})\s*$/i);
+            if (match && match[1]) {
+                return normalizeWhitespace(match[1]);
+            }
+        }
+        return '';
+    }
+
+    function missingCitationFields(citation) {
+        const source = citation && typeof citation === 'object' ? citation : {};
+        const missing = [];
+        if (!normalizeWhitespace(source.source_type)) {
+            missing.push('source_type');
+        }
+        if (!normalizeWhitespace(source.source_id || source.file_name)) {
+            missing.push('source_id_or_file_name');
+        }
+        if (!normalizeWhitespace(source.page_or_section)) {
+            missing.push('page_or_section');
+        }
+        if (!normalizeWhitespace(source.field_or_chunk_id || source.chunk_id)) {
+            missing.push('field_or_chunk_id');
+        }
+        if (!normalizeWhitespace(source.quote_or_value)) {
+            missing.push('quote_or_value');
+        }
+        return missing;
+    }
+
+    function labPdfEvalOrchestrator(options = {}) {
+        const evalFixture = options.evalFixture || buildLabPdfEvalFixture(options.fileName || '');
+        const text = normalizeWhitespace(options.text || '');
+        const facts = Array.isArray(options.facts) ? options.facts : [];
+        const collectionDate = normalizeWhitespace(options.collectionDate || extractNamedDate(text, ['Collection Date', 'Collected', 'Collection']));
+        const prompt = String(options.prompt || '');
+        const documentGuardDecision = String(options.documentGuardDecision || '').trim().toLowerCase();
+        const chartWriteRequested = promptRequestsDirectChartWrite(prompt) || Boolean(evalFixture && evalFixture.forceChartWriteBlocked);
+        const readable = Boolean(text) && text.length >= 24 && facts.length > 0;
+        const hasMissingCitation = facts.some(function (fact) {
+            return missingCitationFields(fact.sourceLink || fact.source_link || fact.sourceCitation || fact.source_citation).length > 0;
+        });
+        const missingReferenceRange = facts.some(function (fact) {
+            return normalizeWhitespace(fact.value) && !normalizeWhitespace(fact.reference_range || fact.referenceRange);
+        });
+        const hasAbnormalValues = facts.some(function (fact) {
+            return ['high', 'low', 'abnormal', 'critical'].includes(String(fact.flag || fact.interpretation || '').toLowerCase());
+        });
+
+        let status = 'extracted';
+        if (documentGuardDecision === 'rejected' || Boolean(evalFixture && evalFixture.forceUnsupportedDocument)) {
+            status = 'unsupported_document';
+        } else if (!readable || Boolean(evalFixture && evalFixture.forceOcrRequired)) {
+            status = 'ocr_required';
+        } else if (hasMissingCitation) {
+            status = 'citation_contract_failed';
+        } else if (!collectionDate) {
+            status = 'missing_collection_date';
+        } else if (missingReferenceRange) {
+            status = 'missing_reference_range';
+        } else if (hasAbnormalValues) {
+            status = 'extracted_with_abnormal_flags';
+        }
+
+        if (chartWriteRequested && !['unsupported_document', 'ocr_required'].includes(status)) {
+            status = 'chart_write_blocked';
+        }
+
+        return {
+            evalId: evalFixture ? evalFixture.evalId : '',
+            patientName: extractPatientName(text),
+            collectionDate,
+            status,
+            chartWriteRequested,
+            trustedUseAllowed: ['extracted', 'extracted_with_abnormal_flags'].includes(status)
+        };
+    }
+
     function countAbnormalFacts(toolOutput) {
         const abnormalFindings = Array.isArray(toolOutput && (toolOutput.abnormalFindings || toolOutput.abnormal_findings))
             ? (toolOutput.abnormalFindings || toolOutput.abnormal_findings)
@@ -1809,6 +2071,7 @@
         SEEDED_MISSING_DATA: SEEDED_MISSING_DATA,
         SEEDED_TEXT: SEEDED_TEXT,
         buildAttachmentDescriptor: buildAttachmentDescriptor,
+        buildLabPdfEvalFixture: buildLabPdfEvalFixture,
         buildLabPdfDemoTracePayload: buildLabPdfDemoTracePayload,
         buildLabPdfSafeTelemetryPayload: buildLabPdfSafeTelemetryPayload,
         buildExtractionReviewResult: buildExtractionReviewResult,
@@ -1818,23 +2081,28 @@
         buildSyntheticMarcusFacts: buildSyntheticMarcusFacts,
         chunkLabPdfText: chunkLabPdfText,
         countAbnormalFacts: countAbnormalFacts,
+        detectLabPdfEvalCase: detectLabPdfEvalCase,
         detectDocumentType: detectDocumentType,
         detectMedicalGuardDocumentType: detectMedicalGuardDocumentType,
         detectPromptInjectionText: detectPromptInjectionText,
         emitLabPdfTelemetry: emitLabPdfTelemetry,
         evaluateMedicalDocumentGuard: evaluateMedicalDocumentGuard,
         extractIntakeFactsFromText: extractIntakeFactsFromText,
+        extractNamedDate: extractNamedDate,
+        extractPatientName: extractPatientName,
         extractLabFactsFromText: extractLabFactsFromText,
         extractPrintableTextFromPdfBuffer: extractPrintableTextFromPdfBuffer,
         extractTextOrSeedFallback: extractTextOrSeedFallback,
         isLikelySyntheticMarcusJohnsonPdf: isLikelySyntheticMarcusJohnsonPdf,
         isPdfLike: isPdfLike,
+        labPdfEvalOrchestrator: labPdfEvalOrchestrator,
         logLabPdfDemoTrace: logLabPdfDemoTrace,
         logLabPdfEvent: logLabPdfEvent,
         MEDICAL_GUARD_ACCEPTED_CLASSES: MEDICAL_GUARD_ACCEPTED_CLASSES,
         MEDICAL_GUARD_REJECTED_CLUES: MEDICAL_GUARD_REJECTED_CLUES,
         normalizeWhitespace: normalizeWhitespace,
         parseRecognizedLabLine: parseRecognizedLabLine,
+        promptRequestsDirectChartWrite: promptRequestsDirectChartWrite,
         INTAKE_REVIEW_NOTICE: INTAKE_REVIEW_NOTICE,
         SEEDED_INTAKE_FILE_NAME: SEEDED_INTAKE_FILE_NAME,
         SEEDED_INTAKE_MISSING_DATA: SEEDED_INTAKE_MISSING_DATA,

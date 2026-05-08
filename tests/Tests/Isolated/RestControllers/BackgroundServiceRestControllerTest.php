@@ -79,6 +79,27 @@ class BackgroundServiceRestControllerTest extends TestCase
         $this->assertSame(['results' => $results], $this->decodeJsonBody($response));
     }
 
+    public function testRunAllDueReturnsStructuredJsonWhenRunnerThrows(): void
+    {
+        $controller = new BackgroundServiceRestController(
+            runner: new ThrowingBackgroundServiceRunnerFixture(),
+        );
+
+        $response = $controller->runAllDue();
+
+        $this->assertSame(Response::HTTP_OK, $response->getStatusCode());
+        $this->assertSame(
+            [
+                'results' => [
+                    ['name' => 'orchestrator', 'status' => 'error'],
+                ],
+                'error' => 'An error occurred',
+                'message' => 'Background service execution failed.',
+            ],
+            $this->decodeJsonBody($response),
+        );
+    }
+
     /**
      * @return array<mixed>
      */
@@ -116,5 +137,13 @@ class BackgroundServiceRunnerFixture extends BackgroundServiceRunner
         $this->lastServiceName = $serviceName;
         $this->lastForce = $force;
         return $this->results;
+    }
+}
+
+class ThrowingBackgroundServiceRunnerFixture extends BackgroundServiceRunner
+{
+    public function run(?string $serviceName = null, bool $force = false): array
+    {
+        throw new \RuntimeException('synthetic background service failure');
     }
 }

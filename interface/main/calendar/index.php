@@ -147,11 +147,32 @@ if (isset($catid)) {
 }
 
 if (pnModAvailable($module)) {
-    if (pnModLoad($module, $type)) {
-        // Run the function
-        $return = pnModFunc($module, $type, $func);
-    } else {
-        $return = false;
+    try {
+        if (pnModLoad($module, $type)) {
+            // Run the function
+            $return = pnModFunc($module, $type, $func);
+        } else {
+            $return = false;
+        }
+    } catch (\Throwable $exception) {
+        try {
+            \OpenEMR\BC\ServiceContainer::getLogger()->error(
+                'Calendar module request failed.',
+                [
+                    'module' => $module,
+                    'type' => $type,
+                    'func' => $func,
+                    'viewtype' => $_REQUEST['viewtype'] ?? null,
+                    'pc_username' => $_REQUEST['pc_username'] ?? null,
+                    'pc_facility' => $_REQUEST['pc_facility'] ?? null,
+                    'exception_class' => $exception::class,
+                    'exception_message' => $exception->getMessage(),
+                ],
+            );
+        } catch (\Throwable) {
+            error_log('OpenEMR Calendar module request failed: ' . $exception->getMessage());
+        }
+        $return = "<div class='alert alert-warning m-3' role='alert'><strong>" . xlt('Calendar temporarily unavailable') . "</strong><br>" . xlt('The selected calendar view could not be loaded safely. Please refresh the page or choose a different provider or view.') . "</div>";
     }
 } else {
     $return = false;
