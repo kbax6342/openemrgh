@@ -30,16 +30,25 @@ html {
   border: 0;
   display: flex;
   flex-direction: column;
+  max-width: 100%;
+  min-width: 0;
   height: 100%;
+  min-height: 100%;
   margin: 0;
+  overflow: hidden;
   padding: 0;
+  width: 100%;
 }
 
 body {
   display: flex;
   flex: 1 0 auto;
   flex-direction: column;
+  max-width: 100%;
   margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  width: 100%;
 }
 
 #mainBox {
@@ -48,7 +57,12 @@ body {
   display: flex;
   flex: 1 0 auto;
   flex-direction: column;
+  height: var(--openemr-shell-height, 100dvh);
   margin: 0;
+  max-width: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
   padding: 0;
   width: 100%;
 
@@ -86,12 +100,16 @@ body {
 #mainBox > div {
   flex: 0 1 auto;
   margin: 0;
+  max-width: 100%;
+  min-width: 0;
 
   &.mainFrames {
     display: flex;
     flex: 1 0 auto;
     flex-direction: column;
     margin: 0;
+    min-height: 0;
+    overflow: hidden;
     padding: 0;
     z-index: 3;
   }
@@ -101,6 +119,12 @@ body {
   display: flex;
   flex: 1 0 auto;
   flex-direction: row;
+  height: 100%;
+  max-width: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  width: 100%;
 
   > div {
     align-content: stretch;
@@ -108,24 +132,40 @@ body {
     display: flex;
     flex: 1 0 auto;
     flex-direction: column;
+    height: 100%;
     margin: 0;
+    max-width: 100%;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
     padding: 0;
+    width: 100%;
 
     > iframe {
       border: 0 solid var(--black);
       flex: 1 0 auto;
+      height: 100%;
+      max-width: 100%;
+      min-height: 0;
+      min-width: 0;
       width: 100%;
     }
   }
 }
 
 .tabControls {
+  align-items: center;
   display: flex;
   flex-direction: row;
   margin: 0;
-  overflow: auto;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
   padding: 0;
   padding-top: 4px;
+  white-space: nowrap;
+  width: 100%;
 }
 
 .tabSpan {
@@ -134,7 +174,7 @@ body {
   border-right: 1px solid var(--primary);
   border-top: 4px solid var(--primary);
   cursor: pointer;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   font-size: 0.9rem;
   margin: 0;
   overflow: visible;
@@ -167,6 +207,11 @@ body {
 
 #attendantData {
   background-color: var(--light);
+  flex-shrink: 0;
+  max-width: 100%;
+  min-width: 0;
+  overflow: visible;
+  width: 100%;
 }
 
 .patientInfo a {
@@ -243,6 +288,8 @@ body {
 
 #userData {
   float: $right;
+  max-width: 100%;
+  min-width: 0;
   position: relative;
 }
 
@@ -458,7 +505,7 @@ div.menuLabel:hover {
   }
 
   #framesDisplay > div {
-    height: 100vh;
+    height: 100%;
     width: 100%;
   }
 }

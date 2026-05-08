@@ -11,8 +11,58 @@ const copilotCssSource = fs.readFileSync(path.join(__dirname, 'copilot.css'), 'u
 const medicalDocumentGuardPhpSource = fs.readFileSync(path.join(__dirname, 'medical_document_guard.php'), 'utf8');
 const awsMedicalDocumentGuardSource = fs.readFileSync(path.join(__dirname, 'aws_medical_document_guard.js'), 'utf8');
 const pdfTextExtractorSource = fs.readFileSync(path.join(__dirname, 'pdf_text_extractor.js'), 'utf8');
+const supervisorAgentSource = fs.readFileSync(path.join(__dirname, 'agents', 'SupervisorAgent.php'), 'utf8');
+const schemaValidationWorkerSource = fs.readFileSync(path.join(__dirname, 'agents', 'SchemaValidationWorker.php'), 'utf8');
+const clinicianReviewWorkerSource = fs.readFileSync(path.join(__dirname, 'agents', 'ClinicianReviewWorker.php'), 'utf8');
+const documentStoreSource = fs.readFileSync(path.join(__dirname, 'api', 'document_ingestion_store.php'), 'utf8');
+const documentReviewApiSource = fs.readFileSync(path.join(__dirname, 'api', 'document_review.php'), 'utf8');
+const labSchemaSource = fs.readFileSync(path.join(__dirname, 'schemas', 'lab_pdf.schema.json'), 'utf8');
+const intakeSchemaSource = fs.readFileSync(path.join(__dirname, 'schemas', 'intake_form.schema.json'), 'utf8');
+const validateExtractionSource = fs.readFileSync(path.join(__dirname, 'validation', 'validate_extraction.php'), 'utf8');
+const validateLabPdfSource = fs.readFileSync(path.join(__dirname, 'validation', 'validate_lab_pdf.php'), 'utf8');
+const validateIntakeFormSource = fs.readFileSync(path.join(__dirname, 'validation', 'validate_intake_form.php'), 'utf8');
+const labSchemaPhpTestSource = fs.readFileSync(path.join(__dirname, 'tests', 'lab_pdf_schema_test.php'), 'utf8');
+const intakeSchemaPhpTestSource = fs.readFileSync(path.join(__dirname, 'tests', 'intake_form_schema_test.php'), 'utf8');
+const integrationSchemaPhpTestSource = fs.readFileSync(path.join(__dirname, 'tests', 'attach_and_extract_schema_integration_test.php'), 'utf8');
+const citationContractPhpTestSource = fs.readFileSync(path.join(__dirname, 'tests', 'citation_contract_test.php'), 'utf8');
+const citationPreviewPhpTestSource = fs.readFileSync(path.join(__dirname, 'tests', 'citation_source_preview_test.php'), 'utf8');
+const ingestionArchitectureSource = fs.readFileSync(path.join(__dirname, 'docs', 'INGESTION_ARCHITECTURE.md'), 'utf8');
+const week2DeployedChecklistSource = fs.readFileSync(path.join(__dirname, 'docs', 'WEEK2_DEPLOYED_APP_CHECKLIST.md'), 'utf8');
+const documentEvalCases = JSON.parse(fs.readFileSync(path.join(__dirname, 'evals', 'document_ingestion_cases.json'), 'utf8'));
+const documentEvalRunnerSource = fs.readFileSync(path.join(__dirname, 'evals', 'run_document_ingestion_evals.php'), 'utf8');
+const citationContractSource = fs.readFileSync(path.join(__dirname, 'citations', 'CitationContract.php'), 'utf8');
+const citationValidatorSource = fs.readFileSync(path.join(__dirname, 'citations', 'CitationValidator.php'), 'utf8');
+const citationMapperSource = fs.readFileSync(path.join(__dirname, 'citations', 'ClaimCitationMapper.php'), 'utf8');
+const citationResolverSource = fs.readFileSync(path.join(__dirname, 'citations', 'CitationSourceResolver.php'), 'utf8');
+const citationValidationWorkerSource = fs.readFileSync(path.join(__dirname, 'agents', 'CitationValidationWorker.php'), 'utf8');
+const citationSourceApiSource = fs.readFileSync(path.join(__dirname, 'api', 'citation_source.php'), 'utf8');
+const documentPreviewApiSource = fs.readFileSync(path.join(__dirname, 'api', 'document_preview.php'), 'utf8');
+const week2SmokeChecklistSource = fs.readFileSync(path.join(__dirname, 'tests', 'week2_deployed_flow_smoke_test.md'), 'utf8');
+const copilotAgentsSource = fs.readFileSync(path.join(__dirname, 'agents', 'copilot_agents.js'), 'utf8');
+const chunkGuidelinesSource = fs.readFileSync(path.join(__dirname, 'rag', 'chunk_guidelines.php'), 'utf8');
+const guidelineCorpusSource = fs.readFileSync(path.join(__dirname, 'rag', 'guideline_corpus.php'), 'utf8');
+const keywordRetrieverSource = fs.readFileSync(path.join(__dirname, 'rag', 'keyword_retriever.php'), 'utf8');
+const vectorRetrieverSource = fs.readFileSync(path.join(__dirname, 'rag', 'vector_retriever.php'), 'utf8');
+const hybridRetrieverSource = fs.readFileSync(path.join(__dirname, 'rag', 'hybrid_retriever.php'), 'utf8');
+const rerankerSource = fs.readFileSync(path.join(__dirname, 'rag', 'reranker.php'), 'utf8');
+const groundedAnswerSource = fs.readFileSync(path.join(__dirname, 'rag', 'grounded_answer.php'), 'utf8');
+const ragTypesSource = fs.readFileSync(path.join(__dirname, 'rag', 'rag_types.php'), 'utf8');
+const guidelineChunkingPhpTestSource = fs.readFileSync(path.join(__dirname, 'tests', 'guideline_chunking_test.php'), 'utf8');
+const sparseRetrievalPhpTestSource = fs.readFileSync(path.join(__dirname, 'tests', 'sparse_retrieval_test.php'), 'utf8');
+const denseRetrievalPhpTestSource = fs.readFileSync(path.join(__dirname, 'tests', 'dense_retrieval_test.php'), 'utf8');
+const hybridRetrievalPhpTestSource = fs.readFileSync(path.join(__dirname, 'tests', 'hybrid_retrieval_test.php'), 'utf8');
+const rerankerPhpTestSource = fs.readFileSync(path.join(__dirname, 'tests', 'reranker_test.php'), 'utf8');
+const groundedAnswerPhpTestSource = fs.readFileSync(path.join(__dirname, 'tests', 'grounded_answer_test.php'), 'utf8');
 const packageJsonSource = fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8');
 const envExampleSource = fs.readFileSync(path.join(__dirname, '..', '..', '.env.example'), 'utf8');
+const guidelineDir = path.join(__dirname, 'rag', 'guidelines');
+const guidelineFiles = fs.readdirSync(guidelineDir).filter((file) => file.endsWith('.md'));
+const guidelineContents = guidelineFiles.map((file) => ({
+    file,
+    content: fs.readFileSync(path.join(guidelineDir, file), 'utf8')
+}));
+const labSchemaJson = JSON.parse(labSchemaSource);
+const intakeSchemaJson = JSON.parse(intakeSchemaSource);
 
 function evaluateGuardrails(input) {
     return guardrails.evaluate({
@@ -971,6 +1021,269 @@ const tests = [
         assert.strictEqual(tracePayload.vectorSummary[0].embeddingDimensions, 6);
         assert.strictEqual(tracePayload.syntheticFactsSummary.length, 4);
         assert.strictEqual(tracePayload.safetySummary.ragGrounded, true);
+    },
+    function documentTypeSelectorAndClinicianReviewControlsArePresent() {
+        assert.ok(copilotIndexSource.includes('copilot-document-type-select'));
+        assert.ok(copilotIndexSource.includes('Lab PDF'));
+        assert.ok(copilotIndexSource.includes('Intake Form'));
+        assert.ok(copilotIndexSource.includes('document_type_selected'));
+        assert.ok(copilotIndexSource.includes('clinician_review_opened'));
+        assert.ok(copilotIndexSource.includes('clinician_fact_approved'));
+        assert.ok(copilotIndexSource.includes('clinician_fact_rejected'));
+        assert.ok(copilotIndexSource.includes('clinician_review_completed'));
+        assert.ok(copilotIndexSource.includes('document_upload_started'));
+        assert.ok(copilotIndexSource.includes('document_upload_failed'));
+        assert.ok(copilotIndexSource.includes('document_uploaded'));
+        assert.ok(copilotCssSource.includes('.copilot-review-panel'));
+        assert.ok(copilotCssSource.includes('.copilot-review-button'));
+    },
+    function strictSchemasAndPendingReviewPersistenceExist() {
+        assert.ok(labSchemaSource.includes('"document_type"'));
+        assert.ok(labSchemaSource.includes('"lab_pdf"'));
+        assert.ok(intakeSchemaSource.includes('"intake_form"'));
+        assert.ok(intakeSchemaSource.includes('"chief_concern"'));
+        assert.ok(intakeSchemaSource.includes('"current_medications"'));
+        assert.ok(intakeSchemaSource.includes('"family_history"'));
+        assert.ok(documentStoreSource.includes('ai_copilot_documents'));
+        assert.ok(documentStoreSource.includes('ai_copilot_extracted_facts'));
+        assert.ok(documentStoreSource.includes('ai_copilot_fact_reviews'));
+        assert.ok(documentStoreSource.includes('ai_copilot_rag_chunks'));
+        assert.ok(documentStoreSource.includes('ai_copilot_agent_traces'));
+        assert.ok(documentStoreSource.includes('pending_clinician_review'));
+    },
+    function canonicalSchemasAndValidationWorkersExist() {
+        assert.ok(Array.isArray(labSchemaJson.required));
+        assert.ok(labSchemaJson.required.includes('labs'));
+        assert.ok(labSchemaJson.required.includes('source_citations'));
+        assert.ok(labSchemaJson.required.includes('review_status'));
+        assert.ok(labSchemaJson.$defs.labItem.required.includes('test_name'));
+        assert.ok(labSchemaJson.$defs.labItem.required.includes('value'));
+        assert.ok(labSchemaJson.$defs.labItem.required.includes('unit'));
+        assert.ok(labSchemaJson.$defs.labItem.required.includes('reference_range'));
+        assert.ok(labSchemaJson.$defs.labItem.required.includes('collection_date'));
+        assert.ok(labSchemaJson.$defs.labItem.required.includes('abnormal_flag'));
+        assert.ok(labSchemaJson.$defs.labItem.required.includes('source_citation'));
+
+        assert.ok(Array.isArray(intakeSchemaJson.required));
+        assert.ok(intakeSchemaJson.required.includes('demographics'));
+        assert.ok(intakeSchemaJson.required.includes('chief_concern'));
+        assert.ok(intakeSchemaJson.required.includes('current_medications'));
+        assert.ok(intakeSchemaJson.required.includes('allergies'));
+        assert.ok(intakeSchemaJson.required.includes('family_history'));
+        assert.ok(intakeSchemaJson.required.includes('source_citations'));
+        assert.ok(intakeSchemaJson.properties.demographics.required.includes('first_name'));
+        assert.ok(intakeSchemaJson.properties.demographics.required.includes('emergency_contact'));
+
+        assert.ok(schemaValidationWorkerSource.includes('SchemaValidationWorker'));
+        assert.ok(schemaValidationWorkerSource.includes('extraction_schema_validated'));
+        assert.ok(validateExtractionSource.includes('aiCopilotValidateStrictExtraction'));
+        assert.ok(validateLabPdfSource.includes('Lab result is missing value'));
+        assert.ok(validateIntakeFormSource.includes('medication_name'));
+    },
+    function supervisorWorkflowAndReviewApiArePresent() {
+        assert.ok(supervisorAgentSource.includes('DocumentIntakeWorker'));
+        assert.ok(supervisorAgentSource.includes('LabExtractionWorker'));
+        assert.ok(supervisorAgentSource.includes('IntakeExtractionWorker'));
+        assert.ok(supervisorAgentSource.includes('SchemaValidationWorker'));
+        assert.ok(supervisorAgentSource.includes('RAGIndexWorker'));
+        assert.ok(supervisorAgentSource.includes('RAGRetrievalWorker'));
+        assert.ok(supervisorAgentSource.includes('EvidenceSafetyWorker'));
+        assert.ok(supervisorAgentSource.includes('ClinicianReviewWorker'));
+        assert.ok(supervisorAgentSource.includes('workflow_trace'));
+        assert.ok(supervisorAgentSource.includes('trusted_persistence_allowed'));
+        assert.ok(supervisorAgentSource.includes('trusted_rag_index_allowed'));
+        assert.ok(supervisorAgentSource.includes('aiCopilotLabPdfClearVectorRecords'));
+        assert.ok(clinicianReviewWorkerSource.includes('Approved for demo review — not written to chart automatically.'));
+        assert.ok(documentReviewApiSource.includes('review_status'));
+        assert.ok(documentReviewApiSource.includes('approvedCount'));
+        assert.ok(documentReviewApiSource.includes('pendingCount'));
+    },
+    function clientToolOutputCarriesSourceAndReviewMetadata() {
+        assert.ok(copilotApiSource.includes('sourceDocumentId'));
+        assert.ok(copilotApiSource.includes('openemrDocumentId'));
+        assert.ok(copilotApiSource.includes('fhirDocumentReferenceId'));
+        assert.ok(copilotApiSource.includes('fhirBinaryId'));
+        assert.ok(copilotApiSource.includes('reviewQueue'));
+        assert.ok(copilotApiSource.includes('strictExtraction'));
+        assert.ok(copilotApiSource.includes('schemaValidation'));
+        assert.ok(copilotApiSource.includes('sourceCitations'));
+        assert.ok(copilotApiSource.includes('validationErrors'));
+        assert.ok(copilotApiSource.includes('agent_architecture'));
+        assert.ok(copilotApiSource.includes('php_supervisor_worker'));
+    },
+    function schemaValidationUiAndPhpTestsExist() {
+        assert.ok(copilotIndexSource.includes('buildSchemaValidationPanel'));
+        assert.ok(copilotIndexSource.includes('Strict schema passed'));
+        assert.ok(copilotIndexSource.includes('Schema validation failed'));
+        assert.ok(copilotIndexSource.includes('Missing source citation'));
+        assert.ok(copilotIndexSource.includes('Missing required field'));
+        assert.ok(copilotIndexSource.includes('Unsupported document type'));
+        assert.ok(copilotCssSource.includes('.copilot-schema-panel'));
+        assert.ok(copilotCssSource.includes('.copilot-schema-badge'));
+        assert.ok(labSchemaPhpTestSource.includes('lab_pdf missing test_name fails'));
+        assert.ok(labSchemaPhpTestSource.includes('lab_pdf missing collection_date becomes review_required'));
+        assert.ok(intakeSchemaPhpTestSource.includes('intake_form missing demographics fails'));
+        assert.ok(intakeSchemaPhpTestSource.includes('medication without medication_name fails'));
+        assert.ok(integrationSchemaPhpTestSource.includes('schema failure prevents trusted fact persistence'));
+        assert.ok(integrationSchemaPhpTestSource.includes('schema failure prevents trusted RAG indexing'));
+    },
+    function citationContractLayerFilesAndUiHooksExist() {
+        assert.ok(citationContractSource.includes('SOURCE_TYPES'));
+        assert.ok(citationContractSource.includes('source_type'));
+        assert.ok(citationContractSource.includes('field_or_chunk_id'));
+        assert.ok(citationContractSource.includes('quote_or_value'));
+        assert.ok(citationContractSource.includes("'demo_guideline'"));
+        assert.ok(citationValidatorSource.includes('Citation source_id is required.'));
+        assert.ok(citationValidatorSource.includes('Citation page_or_section is required.'));
+        assert.ok(citationValidatorSource.includes('Citation field_or_chunk_id is required.'));
+        assert.ok(citationValidatorSource.includes('Citation quote_or_value is required.'));
+        assert.ok(citationValidatorSource.includes('Citation belongs to the wrong patient.'));
+        assert.ok(citationValidatorSource.includes('Citation points to a rejected fact.'));
+        assert.ok(citationValidatorSource.includes('Citation is outside the current role scope.'));
+        assert.ok(citationMapperSource.includes('aiCopilotBuildClaimsFromToolOutput'));
+        assert.ok(citationResolverSource.includes('preview_mode'));
+        assert.ok(citationResolverSource.includes('wrong_patient'));
+        assert.ok(citationResolverSource.includes('demo_guideline'));
+        assert.ok(citationValidationWorkerSource.includes('citation_contract_validated'));
+        assert.ok(copilotApiSource.includes("'validated_claims' => $validatedClaims"));
+        assert.ok(copilotApiSource.includes("'sources_used' => $validatedSourcesUsed"));
+        assert.ok(copilotApiSource.includes("'uncited_claims_blocked' => $claimValidation['uncited_claims_blocked']"));
+        assert.ok(groundedAnswerSource.includes('I do not have enough source-grounded information to answer that safely.'));
+        assert.ok(copilotIndexSource.includes('buildCitationContractPanel'));
+        assert.ok(copilotIndexSource.includes('openCitationSourcePreview'));
+        assert.ok(copilotIndexSource.includes('Exact PDF highlight unavailable for this source.'));
+        assert.ok(copilotIndexSource.includes('citation_contract_validated'));
+        assert.ok(copilotIndexSource.includes('copilotConfig.citationSourceUrl'));
+        assert.ok(copilotIndexSource.includes('copilotConfig.documentPreviewUrl'));
+        assert.ok(copilotCssSource.includes('.copilot-citation-panel'));
+        assert.ok(copilotCssSource.includes('.copilot-citation-chip'));
+        assert.ok(copilotCssSource.includes('.copilot-citation-preview-frame'));
+        assert.ok(copilotCssSource.includes('.copilot-pdf-overlay-box'));
+    },
+    function citationPreviewEndpointsAndPhpTestsExist() {
+        assert.ok(citationSourceApiSource.includes('aiCopilotCitationResolveSourcePreview'));
+        assert.ok(citationSourceApiSource.includes("'preview'"));
+        assert.ok(documentPreviewApiSource.includes('getDownloadLink'));
+        assert.ok(documentPreviewApiSource.includes('not available for this patient'));
+        assert.ok(documentPreviewApiSource.includes('current role does not have access'));
+        assert.ok(citationContractPhpTestSource.includes('valid clinical claim with citation passes'));
+        assert.ok(citationContractPhpTestSource.includes('citation missing source_id fails'));
+        assert.ok(citationContractPhpTestSource.includes('citation outside role scope is blocked'));
+        assert.ok(citationPreviewPhpTestSource.includes('click-to-source preview returns safe snippet data'));
+        assert.ok(citationPreviewPhpTestSource.includes('billing role preview is blocked for clinical citations'));
+    },
+    function basicHybridRagCorpusAndPipelineFilesExist() {
+        assert.ok(guidelineFiles.length >= 7);
+        guidelineContents.forEach(({ content }) => {
+            assert.ok(content.includes('source_type: "demo_guideline"'));
+            assert.ok(content.includes('source_id:'));
+            assert.ok(content.includes('title:'));
+            assert.ok(content.includes('review_status: "demo_only"'));
+            assert.ok(content.includes('allowed_roles:'));
+            assert.ok(content.includes('workflow_tags:'));
+        });
+        assert.ok(guidelineCorpusSource.includes('aiCopilotGuidelineParseFrontmatter'));
+        assert.ok(guidelineCorpusSource.includes('guideline_corpus_loaded'));
+        assert.ok(chunkGuidelinesSource.includes('aiCopilotGuidelineSplitSections'));
+        assert.ok(chunkGuidelinesSource.includes('guideline_chunks_created'));
+        assert.ok(keywordRetrieverSource.includes('aiCopilotRagSparseRetrieve'));
+        assert.ok(keywordRetrieverSource.includes('sparse_retrieval_completed'));
+        assert.ok(vectorRetrieverSource.includes('aiCopilotRagDenseRetrieve'));
+        assert.ok(vectorRetrieverSource.includes('Dense retrieval disabled because embeddings are not configured.'));
+        assert.ok(vectorRetrieverSource.includes('dense_retrieval_completed'));
+        assert.ok(hybridRetrieverSource.includes('aiCopilotHybridRetrieve'));
+        assert.ok(hybridRetrieverSource.includes('retrieval_mode'));
+        assert.ok(hybridRetrieverSource.includes('hybrid_retrieval_completed'));
+        assert.ok(rerankerSource.includes('https://api.cohere.ai/v2/rerank'));
+        assert.ok(rerankerSource.includes('fallback_score_sort'));
+        assert.ok(groundedAnswerSource.includes('aiCopilotGroundedBuildDraft'));
+        assert.ok(groundedAnswerSource.includes('grounded_answer_generated'));
+        assert.ok(ragTypesSource.includes('AI_COPILOT_GUIDELINE_RAG_ENABLED'));
+        assert.ok(ragTypesSource.includes('AI_COPILOT_HYBRID_RAG_ENABLED'));
+    },
+    function basicHybridRagUiAndSupervisorWiringExist() {
+        assert.ok(copilotApiSource.includes('aiCopilotAgentRetrieveGuidelineEvidenceTool'));
+        assert.ok(copilotApiSource.includes("'evidence_snippets' => $evidenceSnippets"));
+        assert.ok(copilotApiSource.includes("'retrieval_mode' => $retrievalMode !== '' ? $retrievalMode : 'no_grounded_evidence'"));
+        assert.ok(copilotApiSource.includes("'guideline_chunk_count' => count($guidelineChunks)"));
+        assert.ok(copilotApiSource.includes("'uploaded_chunk_count' => count($uploadedChunks)"));
+        assert.ok(copilotApiSource.includes("'claims' => $groundedDraft['claims'] ?? []"));
+        assert.ok(copilotApiSource.includes("'sources_used' => $groundedDraft['sources_used'] ?? []"));
+        assert.ok(copilotApiSource.includes("'evidence_snippets' => $groundedDraft['evidence_snippets'] ?? []"));
+        assert.ok(copilotAgentsSource.includes('evidence_snippets: Array.isArray(draftResult.evidence_snippets)'));
+        assert.ok(copilotAgentsSource.includes('const evidenceSnippets = Array.isArray(draftResult?.evidence_snippets)'));
+        assert.ok(copilotAgentsSource.includes('claims: claims'));
+        assert.ok(copilotAgentsSource.includes('sources_used: sourcesUsed'));
+        assert.ok(copilotAgentsSource.includes('uncited_claims_blocked: uncitedClaimsBlocked'));
+        assert.ok(copilotIndexSource.includes('buildEvidenceSnippetsPanel'));
+        assert.ok(copilotIndexSource.includes('emitBasicHybridRagAuditEvents'));
+        assert.ok(copilotIndexSource.includes('guideline_corpus_loaded'));
+        assert.ok(copilotIndexSource.includes('hybrid_retrieval_completed'));
+        assert.ok(copilotIndexSource.includes('rerank_completed'));
+        assert.ok(copilotIndexSource.includes('no_grounded_evidence_found'));
+        assert.ok(copilotIndexSource.includes('evidenceSnippets: Array.isArray(options.evidenceSnippets) ? options.evidenceSnippets : []'));
+        assert.ok(copilotCssSource.includes('.copilot-evidence-panel'));
+        assert.ok(copilotCssSource.includes('.copilot-evidence-summary'));
+        assert.ok(copilotCssSource.includes('.copilot-evidence-item'));
+    },
+    function basicHybridRagPhpTestsAndEnvKnobsExist() {
+        assert.ok(guidelineChunkingPhpTestSource.includes('guideline files load'));
+        assert.ok(guidelineChunkingPhpTestSource.includes('every chunk has source metadata'));
+        assert.ok(sparseRetrievalPhpTestSource.includes('keyword search finds A1c guideline'));
+        assert.ok(denseRetrievalPhpTestSource.includes('dense retrieval fails gracefully when embeddings disabled'));
+        assert.ok(hybridRetrievalPhpTestSource.includes('returns no answer when no evidence exists'));
+        assert.ok(rerankerPhpTestSource.includes('fallback reranker works when Cohere missing'));
+        assert.ok(groundedAnswerPhpTestSource.includes('no retrieved evidence returns safe no-answer'));
+        assert.ok(envExampleSource.includes('AI_COPILOT_RAG_ENABLED=true'));
+        assert.ok(envExampleSource.includes('AI_COPILOT_GUIDELINE_RAG_ENABLED=true'));
+        assert.ok(envExampleSource.includes('AI_COPILOT_HYBRID_RAG_ENABLED=true'));
+        assert.ok(envExampleSource.includes('AI_COPILOT_TOP_K_DENSE=8'));
+        assert.ok(envExampleSource.includes('AI_COPILOT_TOP_K_SPARSE=8'));
+        assert.ok(envExampleSource.includes('AI_COPILOT_RERANK_PROVIDER=cohere'));
+        assert.ok(envExampleSource.includes('COHERE_API_KEY='));
+    },
+    function evalFixtureAndArchitectureDocsExist() {
+        assert.ok(ingestionArchitectureSource.includes('LangGraph / LangChain / LangSmith adapters'));
+        assert.ok(ingestionArchitectureSource.includes('Approved for demo review — not written to chart automatically.'));
+        assert.ok(Array.isArray(documentEvalCases.cases));
+        assert.ok(documentEvalCases.cases.length >= 50);
+        assert.ok(documentEvalRunnerSource.includes('At least 50 MVP ingestion eval cases are required'));
+        assert.ok(documentEvalRunnerSource.includes('document_ingestion_cases.json'));
+        assert.ok(envExampleSource.includes('AI_COPILOT_LANGGRAPH_ENABLED=false'));
+        assert.ok(envExampleSource.includes('LANGSMITH_TRACING=false'));
+        assert.ok(envExampleSource.includes('AI_COPILOT_DOCUMENT_INGESTION_ENABLED=true'));
+        assert.ok(fs.existsSync(path.join(__dirname, 'agents', 'langgraph', 'graph.ts')));
+        assert.ok(fs.existsSync(path.join(__dirname, 'agents', 'langgraph', 'state.ts')));
+        assert.ok(fs.existsSync(path.join(__dirname, 'agents', 'langgraph', 'tools.ts')));
+        assert.ok(fs.existsSync(path.join(__dirname, 'agents', 'langgraph', 'langsmithTracing.ts')));
+    },
+    function week2DeployedUiPanelsExist() {
+        assert.ok(copilotIndexSource.includes('buildExtractionResultsPanel'));
+        assert.ok(copilotIndexSource.includes('Clinician review required: extracted document facts are draft-only and are not written to the chart automatically.'));
+        assert.ok(copilotIndexSource.includes('Extraction Results'));
+        assert.ok(copilotIndexSource.includes('Document type: Intake Form'));
+        assert.ok(copilotIndexSource.includes('Document type: Lab PDF'));
+        assert.ok(copilotCssSource.includes('.copilot-extraction-panel'));
+        assert.ok(copilotCssSource.includes('.copilot-extraction-review-banner'));
+        assert.ok(copilotCssSource.includes('.copilot-extraction-fact-grid'));
+        assert.ok(copilotCssSource.includes('.copilot-extraction-fact-category'));
+    },
+    function citationPreviewRuntimeFixesExist() {
+        assert.ok(citationResolverSource.includes("dirname(__DIR__, 3) . '/src/Services/DocumentService.php'"));
+        assert.ok(citationResolverSource.includes('use OpenEMR\\Core\\OEGlobalsBag;'));
+        assert.ok(citationResolverSource.includes('citation_access_blocked'));
+        assert.ok(documentPreviewApiSource.includes('role does not have access'));
+    },
+    function week2DeploymentDocsExist() {
+        assert.ok(week2DeployedChecklistSource.includes('https://ineloquent-unsaliently-alida.ngrok-free.dev'));
+        assert.ok(week2DeployedChecklistSource.includes('Lab PDF upload tested: yes'));
+        assert.ok(week2DeployedChecklistSource.includes('Click-to-source works: yes'));
+        assert.ok(week2DeployedChecklistSource.includes('Observability panel visible: yes'));
+        assert.ok(week2SmokeChecklistSource.includes('Week 2 Deployed Flow Smoke Test'));
+        assert.ok(week2SmokeChecklistSource.includes('Choose `Lab PDF`.'));
+        assert.ok(week2SmokeChecklistSource.includes('Choose `Intake Form`.'));
+        assert.ok(week2SmokeChecklistSource.includes('Expand `Observability`.'));
+        assert.ok(week2SmokeChecklistSource.includes('Switch role to `Billing Staff`.'));
     },
     function telemetryUnavailableWarnsSafely() {
         const originalWarn = console.warn;

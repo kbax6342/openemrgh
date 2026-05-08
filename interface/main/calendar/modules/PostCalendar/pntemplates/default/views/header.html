@@ -26,12 +26,45 @@
         echo "<!-- Module Styles Ended -->";
     }
 [-/php-]
+    <link rel="stylesheet" href="[-php-]echo $GLOBALS['webroot'].'/interface/main/calendar/modules/PostCalendar/pntemplates/default/views/modern_calendar.css';[-/php-]">
 <!-- the javascript used for the ajax_* style calendars -->
 <script src="[-php-] echo $GLOBALS['webroot'] [-/php-]/library/js/calendarDirectSelect.js"></script>
 <script>
     function event_time_click(elem) {
         EditEvent($(elem).parents("div.event_appointment").get(0));
     }
+
+    function openEmrCalendarDebugEnabled() {
+        try {
+            const rawValue = typeof top.userDebug === 'undefined' ? '' : String(top.userDebug).toLowerCase();
+            return ['1', 'true', 'on', 'yes'].includes(rawValue);
+        } catch (error) {
+            return false;
+        }
+    }
+
+    function verifyModernCalendarSelectors() {
+        if (!openEmrCalendarDebugEnabled() || typeof document.querySelector !== 'function') {
+            return;
+        }
+
+        const requiredSelectors = [
+            '#menu-toggle',
+            '#printview',
+            '#dayview',
+            '#weekview',
+            '#monthview',
+            '#pc_username',
+            '#bigCal',
+            '#theform'
+        ];
+        const missing = requiredSelectors.filter((selector) => !document.querySelector(selector));
+        if (missing.length > 0 && window.console && typeof console.warn === 'function') {
+            console.warn('[OpenEMR Calendar UI] Missing required selectors', missing);
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', verifyModernCalendarSelectors);
 </script>
 <style>
     .schedule.work-day,
@@ -63,5 +96,5 @@ function create_event_time_anchor($displayString)
 [-php-]
 $session = \OpenEMR\Common\Session\SessionWrapperFactory::getInstance()->getActiveSession();
 $language_direction = $session->get('language_direction');
-echo "<body class = '" . attr($language_direction) . " calsearch_body w-100'>";
+echo "<body class = '" . attr($language_direction) . " calsearch_body w-100 openemr-modern-calendar'>";
 [-/php-]

@@ -136,8 +136,10 @@ function aiCopilotLabPdfCreateVectorRecord(array $input): array
 
     return [
         'id' => (string) ($input['id'] ?? ($recordPrefix . '_' . $requestId . '_' . $chunkIndex)),
+        'patientId' => isset($input['patient_id']) && is_numeric($input['patient_id']) ? (int) $input['patient_id'] : null,
         'patientKey' => (string) ($input['patient_key'] ?? ''),
         'patientDisplayName' => (string) ($input['patient_display_name'] ?? ''),
+        'sourceDocumentId' => isset($input['source_document_id']) && is_numeric($input['source_document_id']) ? (int) $input['source_document_id'] : null,
         'fileName' => $originalFileName,
         'displayFileName' => $displayFileName,
         'chunkText' => $chunkText,
@@ -151,6 +153,7 @@ function aiCopilotLabPdfCreateVectorRecord(array $input): array
             'originalFileName' => $originalFileName,
             'displayFileName' => $displayFileName,
             'sourceId' => $sourceId,
+            'sourceDocumentId' => isset($input['source_document_id']) && is_numeric($input['source_document_id']) ? (int) $input['source_document_id'] : null,
             'chunkIndex' => $chunkIndex,
             'uploadedAt' => (string) ($input['uploaded_at'] ?? gmdate('c')),
             'sourcePage' => $input['source_page'] ?? null,
@@ -159,6 +162,7 @@ function aiCopilotLabPdfCreateVectorRecord(array $input): array
             'requestId' => $requestId,
             'seededDemo' => !empty($input['seeded_demo']),
             'ingestionOrigin' => $ingestionOrigin,
+            'reviewStatus' => (string) ($input['review_status'] ?? 'pending_clinician_review'),
         ],
     ];
 }
@@ -364,6 +368,9 @@ function aiCopilotLabPdfClearVectorRecords(array $options = []): array
     $store = aiCopilotLabPdfReadVectorStore();
     $patientKey = (string) ($options['patient_key'] ?? '');
     $sourceType = preg_replace('/[^a-z_]/', '', strtolower((string) ($options['source_type'] ?? '')));
+    $sourceDocumentId = isset($options['source_document_id']) && is_numeric($options['source_document_id']) ? (int) $options['source_document_id'] : null;
+    $sourceId = trim((string) ($options['source_id'] ?? ''));
+    $requestId = trim((string) ($options['request_id'] ?? ''));
     $kept = [];
     $removed = [];
 
@@ -372,10 +379,13 @@ function aiCopilotLabPdfClearVectorRecords(array $options = []): array
             continue;
         }
 
-        $matchesPatient = $patientKey !== '' && (string) ($record['patientKey'] ?? '') === $patientKey;
-        $matchesSourceType = $sourceType !== '' && strtolower((string) ($record['metadata']['sourceType'] ?? '')) === $sourceType;
+        $matchesPatient = $patientKey === '' || (string) ($record['patientKey'] ?? '') === $patientKey;
+        $matchesSourceType = $sourceType === '' || strtolower((string) ($record['metadata']['sourceType'] ?? '')) === $sourceType;
+        $matchesSourceDocument = $sourceDocumentId === null || ((isset($record['sourceDocumentId']) && is_numeric($record['sourceDocumentId']) ? (int) $record['sourceDocumentId'] : null) === $sourceDocumentId) || ((isset($record['metadata']['sourceDocumentId']) && is_numeric($record['metadata']['sourceDocumentId']) ? (int) $record['metadata']['sourceDocumentId'] : null) === $sourceDocumentId);
+        $matchesSourceId = $sourceId === '' || (string) ($record['metadata']['sourceId'] ?? '') === $sourceId;
+        $matchesRequestId = $requestId === '' || (string) ($record['metadata']['requestId'] ?? '') === $requestId;
 
-        if ($matchesPatient && $matchesSourceType) {
+        if ($matchesPatient && $matchesSourceType && $matchesSourceDocument && $matchesSourceId && $matchesRequestId) {
             $removed[] = $record;
             continue;
         }

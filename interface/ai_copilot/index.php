@@ -197,6 +197,8 @@ $appConfig = [
     'visitSummaryButtonLabel' => xla('View Summary of Visit'),
     'sendReminderEmailButtonLabel' => xla('Send Reminder Email'),
     'footerText' => xla('AI-assisted clinical support • Always verify with clinical judgment'),
+    'citationSourceUrl' => 'api/citation_source.php',
+    'documentPreviewUrl' => 'api/document_preview.php',
     'noPatientSelectedText' => xla('No demo patient selected. Patient-specific answers require selecting a demo patient.'),
     'noPatientSelectedShortText' => xla('No demo patient selected'),
     'selectedPatientPrefix' => xla('Using demo patient:'),
@@ -213,6 +215,8 @@ $appConfig = [
 ];
 
 $cssVersion = file_exists(__DIR__ . '/copilot.css') ? (string) filemtime(__DIR__ . '/copilot.css') : '1';
+$redactionVersion = file_exists(__DIR__ . '/observability/redact_phi.js') ? (string) filemtime(__DIR__ . '/observability/redact_phi.js') : '1';
+$observabilityVersion = file_exists(__DIR__ . '/observability/copilot_observability.js') ? (string) filemtime(__DIR__ . '/observability/copilot_observability.js') : '1';
 $guardrailsVersion = file_exists(__DIR__ . '/copilot_guardrails.js') ? (string) filemtime(__DIR__ . '/copilot_guardrails.js') : '1';
 $agentTraceVersion = file_exists(__DIR__ . '/agents/copilot_agent_trace.js') ? (string) filemtime(__DIR__ . '/agents/copilot_agent_trace.js') : '1';
 $agentSafetyVersion = file_exists(__DIR__ . '/agents/copilot_agent_safety.js') ? (string) filemtime(__DIR__ . '/agents/copilot_agent_safety.js') : '1';
@@ -221,6 +225,13 @@ $agentVersion = file_exists(__DIR__ . '/agents/copilot_agents.js') ? (string) fi
 $ragDemoVersion = file_exists(__DIR__ . '/copilot_rag_demo_data.js') ? (string) filemtime(__DIR__ . '/copilot_rag_demo_data.js') : '1';
 $labPdfVersion = file_exists(__DIR__ . '/lab_pdf_ingestion.js') ? (string) filemtime(__DIR__ . '/lab_pdf_ingestion.js') : '1';
 $visitReviewVersion = file_exists(__DIR__ . '/copilot_visit_review.js') ? (string) filemtime(__DIR__ . '/copilot_visit_review.js') : '1';
+$modelCostConfig = [];
+if (is_file(__DIR__ . '/observability/model_cost_config.json')) {
+    $decodedModelCostConfig = json_decode((string) file_get_contents(__DIR__ . '/observability/model_cost_config.json'), true);
+    if (is_array($decodedModelCostConfig)) {
+        $modelCostConfig = $decodedModelCostConfig;
+    }
+}
 ?>
 <!doctype html>
 <html lang="en">
@@ -379,6 +390,15 @@ $visitReviewVersion = file_exists(__DIR__ . '/copilot_visit_review.js') ? (strin
                                 type="file"
                                 accept="application/pdf,.pdf"
                             >
+                            <label class="copilot-visually-hidden" for="copilot-document-type-select"><?php echo xlt('Document type'); ?></label>
+                            <select
+                                id="copilot-document-type-select"
+                                class="form-control copilot-select copilot-document-type-select"
+                                aria-label="<?php echo attr(xl('Document type')); ?>"
+                            >
+                                <option value="lab_pdf"><?php echo xlt('Lab PDF'); ?></option>
+                                <option value="intake_form"><?php echo xlt('Intake Form'); ?></option>
+                            </select>
                             <button
                                 type="button"
                                 id="copilot-lab-pdf-attach"
@@ -446,6 +466,11 @@ $visitReviewVersion = file_exists(__DIR__ . '/copilot_visit_review.js') ? (strin
 </main>
 
 <script src="copilot_guardrails.js?v=<?php echo attr_url($guardrailsVersion); ?>"></script>
+<script>
+window.OPENEMR_AI_COPILOT_MODEL_COST_CONFIG = <?php echo json_encode($modelCostConfig, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
+</script>
+<script src="observability/redact_phi.js?v=<?php echo attr_url($redactionVersion); ?>"></script>
+<script src="observability/copilot_observability.js?v=<?php echo attr_url($observabilityVersion); ?>"></script>
 <script src="agents/copilot_agent_trace.js?v=<?php echo attr_url($agentTraceVersion); ?>"></script>
 <script src="agents/copilot_agent_safety.js?v=<?php echo attr_url($agentSafetyVersion); ?>"></script>
 <script src="agents/copilot_agent_tools.js?v=<?php echo attr_url($agentToolVersion); ?>"></script>
@@ -475,6 +500,7 @@ const guardrailsSection = document.getElementById('copilot-guardrails-section');
 const guardrailsToggle = document.getElementById('copilot-guardrails-toggle');
 const guardrailsPanel = document.getElementById('copilot-guardrails-panel');
 const labPdfInput = document.getElementById('copilot-lab-pdf-input');
+const documentTypeSelect = document.getElementById('copilot-document-type-select');
 const labPdfAttachButton = document.getElementById('copilot-lab-pdf-attach');
 const labPdfChip = document.getElementById('copilot-lab-pdf-chip');
 const labPdfChipText = document.getElementById('copilot-lab-pdf-chip-text');
@@ -503,12 +529,22 @@ const state = {
         file: null,
         descriptor: null,
         useDemoSeed: false,
-        requestId: null
+        requestId: null,
+        selectedDocumentType: 'lab_pdf'
+    },
+    citationPreview: {
+        open: false,
+        loading: false,
+        error: '',
+        data: null,
+        title: ''
     }
 };
 
 const copiedStateTimers = new Map();
 let uploadNoticeTimer = null;
+const reviewSubmissionState = new Set();
+let citationPreviewShell = null;
 
 function createId(prefix) {
     if (window.crypto && typeof window.crypto.randomUUID === 'function') {
@@ -560,6 +596,8 @@ function ensureTelemetryHost(targetWindow) {
     const allowedKeys = new Set([
         'requestId',
         'responseId',
+        'encounterId',
+        'sessionIdHash',
         'role',
         'selectedRole',
         'previousRole',
@@ -567,6 +605,9 @@ function ensureTelemetryHost(targetWindow) {
         'mode',
         'selectedMode',
         'selectedPatientKey',
+        'patientContextPresent',
+        'patientContextHash',
+        'patientIdentifierRedacted',
         'visibleQuickActions',
         'messageLength',
         'responseLength',
@@ -603,16 +644,40 @@ function ensureTelemetryHost(targetWindow) {
         'completionTokens',
         'totalTokens',
         'estimatedCostUsd',
+        'tokenUsageEstimated',
         'costNote',
         'openaiErrorCategory',
         'openaiHttpStatus',
         'openaiErrorMessageSafe',
+        'stepName',
         'toolName',
         'toolStatus',
+        'retrievalHitCount',
+        'topK',
+        'retrievalMode',
+        'rerankProvider',
+        'sparseHitCount',
+        'denseHitCount',
+        'hybridCandidateCount',
+        'rerankedHitCount',
+        'finalEvidenceCount',
+        'topSourceTypes',
         'attachmentPurpose',
         'documentTitle',
         'documentType',
         'documentSource',
+        'schemaName',
+        'schemaValid',
+        'validationErrorCount',
+        'missingRequiredFieldCount',
+        'citationCount',
+        'claimCount',
+        'citedClaimCount',
+        'uncitedClaimCount',
+        'invalidCitationCount',
+        'blockedClaimCount',
+        'citationContractStatus',
+        'extractionStatus',
         'extractionMethod',
         'requestedDocumentTypes',
         'matchedSourceTitles',
@@ -639,7 +704,21 @@ function ensureTelemetryHost(targetWindow) {
         'sourceCount',
         'sourceTitles',
         'sourceCategories',
-        'latestAmbientVisitFound'
+        'latestAmbientVisitFound',
+        'docType',
+        'extractionStatus',
+        'citationContractValid',
+        'extractedFactCount',
+        'evalCaseId',
+        'evalPassed',
+        'evalRubricFailures',
+        'regressionGateStatus',
+        'safeRefusal',
+        'phiRedacted',
+        'rawDocumentTextLogged',
+        'rawScreenshotLogged',
+        'screenshotCaptureAttempted',
+        'screenshotBlockedReason'
     ]);
 
     const metrics = targetWindow.CopilotMetrics || {
@@ -657,20 +736,30 @@ function ensureTelemetryHost(targetWindow) {
     };
 
     function sanitizePayload(payload) {
+        const helper = window.OpenEMRCopilotRedaction;
+        if (helper && typeof helper.sanitizeTelemetryPayload === 'function') {
+            return helper.sanitizeTelemetryPayload(payload || {}, allowedKeys);
+        }
+
         const safePayload = {};
         Object.keys(payload || {}).forEach((key) => {
             if (!allowedKeys.has(key)) {
                 return;
             }
-
             const value = payload[key];
             if (value === undefined || value === null || value === '') {
                 return;
             }
-
+            if (key === 'selectedPatientKey') {
+                safePayload.patientContextPresent = true;
+                safePayload.patientIdentifierRedacted = true;
+                return;
+            }
             safePayload[key] = value;
         });
-
+        safePayload.phiRedacted = true;
+        safePayload.rawDocumentTextLogged = false;
+        safePayload.rawScreenshotLogged = false;
         return safePayload;
     }
 
@@ -804,8 +893,76 @@ function currentSelectedPatientKey() {
     return selectedPatientKeyForValue(patientSelect.value);
 }
 
+function currentSafePatientTelemetryContext() {
+    const helper = window.OpenEMRCopilotObservability;
+    const selectedPatientKey = currentSelectedPatientKey();
+    if (helper && typeof helper.hashIdentifier === 'function') {
+        return {
+            patientContextPresent: Boolean(selectedPatientKey),
+            patientContextHash: selectedPatientKey ? helper.hashIdentifier(selectedPatientKey) : null,
+            patientIdentifierRedacted: true
+        };
+    }
+
+    return {
+        patientContextPresent: Boolean(selectedPatientKey),
+        patientContextHash: null,
+        patientIdentifierRedacted: true
+    };
+}
+
 function currentVisibleQuickActions() {
     return availableQuickActions().map((action) => action.mode);
+}
+
+function buildBasicHybridRagAuditPayload(meta, options = {}) {
+    const safeMeta = meta && typeof meta === 'object' ? meta : {};
+    return {
+        requestId: options.requestId || null,
+        role: options.role || state.activeRole,
+        mode: options.mode || 'general_assistant',
+        selectedPatientKey: options.selectedPatientKey || currentSelectedPatientKey(),
+        retrievalMode: String(safeMeta.retrieval_mode || '').trim() || 'no_grounded_evidence',
+        rerankProvider: String(safeMeta.rerank_provider || '').trim() || 'fallback_score_sort',
+        guidelineChunkCount: Number(safeMeta.guideline_chunk_count || 0),
+        uploadedChunkCount: Number(safeMeta.uploaded_chunk_count || 0),
+        sparseResultCount: Number(safeMeta.sparse_result_count || 0),
+        denseResultCount: Number(safeMeta.dense_result_count || 0),
+        hybridCandidateCount: Number(safeMeta.hybrid_candidate_count || 0),
+        rerankedResultCount: Number(safeMeta.reranked_result_count || 0),
+        sourceCount: Number(safeMeta.source_count || 0),
+        claimCount: Number(safeMeta.claim_count || 0),
+        ragGrounded: Boolean(safeMeta.rag_grounded)
+    };
+}
+
+function emitBasicHybridRagAuditEvents(meta, options = {}) {
+    if (!CopilotTelemetry || !meta || typeof meta !== 'object') {
+        return;
+    }
+
+    const payload = buildBasicHybridRagAuditPayload(meta, options);
+    if (payload.guidelineChunkCount > 0) {
+        CopilotTelemetry.log('guideline_corpus_loaded', payload);
+        CopilotTelemetry.log('guideline_chunks_created', payload);
+    }
+    if (payload.sparseResultCount > 0) {
+        CopilotTelemetry.log('sparse_retrieval_completed', payload);
+    }
+    if (payload.denseResultCount > 0) {
+        CopilotTelemetry.log('dense_retrieval_completed', payload);
+    }
+    if (payload.hybridCandidateCount > 0 || payload.retrievalMode === 'hybrid') {
+        CopilotTelemetry.log('hybrid_retrieval_completed', payload);
+    }
+    if (payload.rerankedResultCount > 0) {
+        CopilotTelemetry.log('rerank_completed', payload);
+    }
+    if (payload.ragGrounded && payload.rerankedResultCount > 0) {
+        CopilotTelemetry.log('grounded_answer_generated', payload);
+    } else if (payload.retrievalMode === 'no_grounded_evidence') {
+        CopilotTelemetry.log('no_grounded_evidence_found', payload);
+    }
 }
 
 function contextScopeFor(role, patientId) {
@@ -853,13 +1010,19 @@ function createMessage(role, content, options = {}) {
         traceId: options.traceId || options.requestId || '',
         requestPrompt: options.requestPrompt || '',
         meta: options.meta || {},
+        claims: Array.isArray(options.claims) ? options.claims : [],
+        sourcesUsed: Array.isArray(options.sourcesUsed) ? options.sourcesUsed : [],
+        uncitedClaimsBlocked: Array.isArray(options.uncitedClaimsBlocked) ? options.uncitedClaimsBlocked : [],
+        evidenceSnippets: Array.isArray(options.evidenceSnippets) ? options.evidenceSnippets : [],
+        safetyStatus: options.safetyStatus || '',
         guardrails: options.guardrails || null,
         feedback: options.feedback || '',
         copied: Boolean(options.copied),
         isLoading: Boolean(options.isLoading),
         showResponseActions: options.showResponseActions !== false,
         metadataLogged: Boolean(options.metadataLogged),
-        agentWorkflowTraceLogged: Boolean(options.agentWorkflowTraceLogged)
+        agentWorkflowTraceLogged: Boolean(options.agentWorkflowTraceLogged),
+        observabilityLogged: Boolean(options.observabilityLogged)
     };
 }
 
@@ -898,6 +1061,15 @@ function hydrateAssistantWorkflowTrace(message, options = {}) {
         safetyModule: window.OpenEMRCopilotAgentSafety || null
     });
     nextMeta.visible_agent_workflow_trace = traceData;
+    if (!nextMeta.observability) {
+        const synthesizedObservability = synthesizeObservabilityFromMessage({
+            ...message,
+            meta: nextMeta
+        }, traceData);
+        if (synthesizedObservability) {
+            nextMeta.observability = synthesizedObservability;
+        }
+    }
     message.meta = nextMeta;
 
     if (
@@ -911,10 +1083,29 @@ function hydrateAssistantWorkflowTrace(message, options = {}) {
             responseId: message.responseId || null,
             role: message.staffRole || state.activeRole,
             mode: message.mode || 'general_assistant',
-            selectedPatientKey: message.selectedPatientKey || currentSelectedPatientKey(),
-            blockedReason: nextMeta.restriction_type || message.guardrails?.blockedReason || ''
+            patientContextPresent: currentSafePatientTelemetryContext().patientContextPresent,
+            patientContextHash: currentSafePatientTelemetryContext().patientContextHash,
+            blockedReason: nextMeta.restriction_type || message.guardrails?.blockedReason || '',
+            supervisorDecisions: Array.isArray(nextMeta.supervisor_decisions) ? nextMeta.supervisor_decisions : [],
+            workerHandoffs: Array.isArray(nextMeta.worker_handoffs) ? nextMeta.worker_handoffs : []
         });
         message.agentWorkflowTraceLogged = true;
+    }
+
+    if (
+        options.emitObservability === true
+        && !message.observabilityLogged
+        && typeof window.OpenEMRCopilotAgentTrace.emitEncounterObservability === 'function'
+        && CopilotTelemetry
+        && nextMeta.observability
+    ) {
+        window.OpenEMRCopilotAgentTrace.emitEncounterObservability(nextMeta.observability, CopilotTelemetry, {
+            requestId: message.requestId || null,
+            responseId: message.responseId || null,
+            role: message.staffRole || state.activeRole,
+            mode: message.mode || 'general_assistant'
+        });
+        message.observabilityLogged = true;
     }
 
     return traceData;
@@ -940,6 +1131,100 @@ function buildAgentWorkflowTraceCard(message) {
         toolModule: window.OpenEMRCopilotAgentTools || null,
         safetyModule: window.OpenEMRCopilotAgentSafety || null
     });
+}
+
+function synthesizeObservabilityFromMessage(message, traceData) {
+    if (!window.OpenEMRCopilotObservability || typeof window.OpenEMRCopilotObservability.buildEncounterObservability !== 'function') {
+        return null;
+    }
+
+    const attachmentEvidence = buildAttachmentEvidenceMeta(message.tool_output);
+    const sourceEntries = buildVisibleSourceEntries(message);
+    const steps = Array.isArray(traceData?.steps) ? traceData.steps : [];
+
+    return window.OpenEMRCopilotObservability.buildEncounterObservability({
+        request_id: message.requestId || null,
+        encounter_id: message.requestId || message.responseId || null,
+        role: message.staffRole || state.activeRole,
+        mode: message.mode || 'general_assistant',
+        selectedPatientKey: message.selectedPatientKey || currentSelectedPatientKey() || '',
+        tool_sequence: steps.map((step, index) => ({
+            order: index + 1,
+            step: step.name || 'Worker',
+            decision: step.id === 'supervisor' ? (step.description || '') : '',
+            status: step.status || 'completed',
+            latency_ms: 0,
+            retrieval_hits: step.id === 'evidence_retriever' ? Number(message.meta?.source_count || sourceEntries.length || 0) : 0
+        })),
+        latency: {
+            total_ms: Number(message.meta?.latency_ms || 0),
+            steps: {
+                total_response_ms: Number(message.meta?.latency_ms || 0)
+            }
+        },
+        token_usage: message.meta?.token_usage || null,
+        model: message.meta?.model || null,
+        provider: message.meta?.provider || null,
+        estimated_cost_usd: message.meta?.estimated_cost_usd ?? null,
+        retrieval: {
+            hit_count: Number(message.meta?.source_count || sourceEntries.length || 0),
+            top_k: Number(message.meta?.reranked_result_count || 0),
+            retrieval_mode: message.meta?.retrieval_mode || (message.meta?.rag_grounded ? 'hybrid' : 'none'),
+            rerank_provider: message.meta?.rerank_provider || 'none',
+            sparse_hit_count: Number(message.meta?.sparse_result_count || 0),
+            dense_hit_count: Number(message.meta?.dense_result_count || 0),
+            hybrid_candidate_count: Number(message.meta?.hybrid_candidate_count || 0),
+            reranked_hit_count: Number(message.meta?.reranked_result_count || 0),
+            final_evidence_count: Array.isArray(message.evidenceSnippets) ? message.evidenceSnippets.length : 0,
+            top_source_types: sourceEntries.map((entry) => entry.sourceType || entry.documentType || entry.category || '').filter(Boolean).slice(0, 8),
+            citation_count: Array.isArray(message.claims)
+                ? message.claims.reduce((count, claim) => count + (Array.isArray(claim.citations) ? claim.citations.length : 0), 0)
+                : 0
+        },
+        extraction: attachmentEvidence && attachmentEvidence.attempted ? {
+            doc_type: attachmentEvidence.documentType || 'none',
+            extraction_status: attachmentEvidence.status || 'none',
+            confidence: Number.isFinite(Number(message.tool_output?.confidence)) ? Number(message.tool_output.confidence) : null,
+            schema_valid: message.tool_output?.schemaValid ?? message.tool_output?.schema_valid ?? null,
+            citation_contract_valid: message.meta?.citation_contract_status ? String(message.meta.citation_contract_status).toLowerCase() === 'passed' : null,
+            review_status: message.tool_output?.reviewStatus || message.tool_output?.review_status || 'pending_clinician_review',
+            extracted_fact_count: Array.isArray(message.tool_output?.extractedFacts) ? message.tool_output.extractedFacts.length : 0,
+            missing_data_count: Array.isArray(message.tool_output?.missingData) ? message.tool_output.missingData.length : 0
+        } : {
+            doc_type: 'none',
+            extraction_status: 'none',
+            confidence: null,
+            schema_valid: null,
+            citation_contract_valid: null,
+            review_status: null,
+            extracted_fact_count: 0,
+            missing_data_count: 0
+        },
+        safety: {
+            safe_refusal: Boolean(message.meta?.restricted_by_role || message.safetyStatus === 'safe_refusal'),
+            blocked_reason: message.meta?.restriction_type || null,
+            phi_redacted: true,
+            raw_document_text_logged: false,
+            raw_screenshot_logged: false,
+            screenshot_capture_attempted: false,
+            screenshot_blocked_reason: 'PHI_SAFE_DEFAULT'
+        }
+    });
+}
+
+function buildObservabilityTraceCard(message) {
+    if (
+        !message
+        || message.role !== 'assistant'
+        || message.isLoading
+        || message.showResponseActions === false
+        || !window.OpenEMRCopilotAgentTrace
+        || typeof window.OpenEMRCopilotAgentTrace.buildObservabilityCard !== 'function'
+    ) {
+        return null;
+    }
+
+    return window.OpenEMRCopilotAgentTrace.buildObservabilityCard(message);
 }
 
 function formatTimestamp(date) {
@@ -1557,6 +1842,30 @@ function attachmentWorkflowContextLabel(documentType) {
     return 'document context';
 }
 
+function currentSelectedDocumentType() {
+    const value = normalizeAttachmentDocumentType(documentTypeSelect?.value || state.labPdf.selectedDocumentType || 'lab_pdf');
+    return value === 'unknown' ? 'lab_pdf' : value;
+}
+
+function syncDocumentTypeSelection(value, options = {}) {
+    const nextType = normalizeAttachmentDocumentType(value || 'lab_pdf');
+    state.labPdf.selectedDocumentType = nextType === 'unknown' ? 'lab_pdf' : nextType;
+    if (documentTypeSelect) {
+        documentTypeSelect.value = state.labPdf.selectedDocumentType;
+        documentTypeSelect.disabled = state.loading;
+    }
+
+    if (options.emitTelemetry && CopilotTelemetry) {
+        CopilotTelemetry.log('document_type_selected', {
+            role: state.activeRole,
+            mode: state.activeMode,
+            selectedPatientKey: currentSelectedPatientKey(),
+            documentType: state.labPdf.selectedDocumentType,
+            toolStatus: 'selected'
+        });
+    }
+}
+
 function hasActiveLabPdfAttachment() {
     return Boolean(state.labPdf.file || state.labPdf.useDemoSeed);
 }
@@ -1600,6 +1909,9 @@ function clearLabPdfAttachment(options = {}) {
     if (options.keepStatusMessage) {
         setLabPdfStatus(options.keepStatusMessage, options.tone || 'neutral');
     }
+    if (options.keepDocumentType !== true) {
+        syncDocumentTypeSelection(state.labPdf.selectedDocumentType || 'lab_pdf');
+    }
 
     if (options.emitTelemetry !== false && previousDescriptor) {
         emitLabPdfAuditEvent('copilot_lab_pdf_removed', {
@@ -1621,6 +1933,9 @@ function applyLabPdfAttachmentDescriptor(descriptor, options = {}) {
     state.labPdf.useDemoSeed = Boolean(options.useDemoSeed);
     state.labPdf.descriptor = descriptor || null;
     state.labPdf.requestId = options.requestId || state.labPdf.requestId || null;
+    if (descriptor?.documentType) {
+        syncDocumentTypeSelection(descriptor.documentType);
+    }
     refreshLabPdfAttachmentUi();
     updateSendState();
 }
@@ -1650,14 +1965,17 @@ function setUploadedLabPdfAttachment(file) {
         return false;
     }
 
+    const selectedDocumentType = currentSelectedDocumentType();
     const descriptor = helper && typeof helper.buildAttachmentDescriptor === 'function'
-        ? helper.buildAttachmentDescriptor(file)
+        ? helper.buildAttachmentDescriptor(file, {
+            documentType: selectedDocumentType
+        })
         : {
             kind: 'uploaded_file',
             fileName: file.name || 'attached-document.pdf',
             displayLabel: `Attached: ${file.name || 'attached-document.pdf'}`,
             mimeType: file.type || 'application/pdf',
-            documentType: /\b(intake|intake-form|patient-intake|questionnaire|form)\b/i.test(file?.name || '') ? 'intake_form' : 'lab_pdf'
+            documentType: selectedDocumentType
         };
     const attachmentRequestId = createId('request');
     const documentType = normalizeAttachmentDocumentType(descriptor.documentType);
@@ -1709,6 +2027,9 @@ function updateSendState() {
     input.disabled = state.loading;
     if (labPdfAttachButton) {
         labPdfAttachButton.disabled = state.loading;
+    }
+    if (documentTypeSelect) {
+        documentTypeSelect.disabled = state.loading;
     }
     if (labPdfRemoveButton) {
         labPdfRemoveButton.disabled = state.loading || !hasActiveLabPdfAttachment();
@@ -1777,12 +2098,21 @@ function logResponseMetadataIfNeeded(message) {
         patientKey: message.selectedPatientKey || currentSelectedPatientKey(),
         ragGrounded: Boolean(message.meta?.rag_grounded)
     });
-    const safeSources = sourcePayload.sources.map((source) => source.title).slice(0, 8);
+    const visibleSourceEntries = buildVisibleSourceEntries(message);
+    const safeSources = visibleSourceEntries.map((source) => source.title).slice(0, 8);
     const safeContextTags = Array.isArray(message.tags) ? Array.from(new Set(message.tags)).slice(0, 5) : [];
     const safeSafetyLabels = message.safety ? [message.safety] : [];
     const safeRole = message.staffRole || state.activeRole;
     const safeMode = message.mode || 'general_assistant';
-    const safePatientKey = message.selectedPatientKey || currentSelectedPatientKey() || null;
+    const safePatientContext = window.OpenEMRCopilotObservability && typeof window.OpenEMRCopilotObservability.hashIdentifier === 'function'
+        ? {
+            patientContextPresent: Boolean(message.selectedPatientKey || currentSelectedPatientKey()),
+            patientContextHash: (message.selectedPatientKey || currentSelectedPatientKey())
+                ? window.OpenEMRCopilotObservability.hashIdentifier(message.selectedPatientKey || currentSelectedPatientKey())
+                : null,
+            patientIdentifierRedacted: true
+        }
+        : currentSafePatientTelemetryContext();
     const safeMeta = message.meta && typeof message.meta === 'object' ? {
         engine: message.meta.engine || null,
         provider: message.meta.provider || null,
@@ -1806,10 +2136,10 @@ function logResponseMetadataIfNeeded(message) {
         console.info('responseId', message.responseId || null);
         console.info('role', safeRole);
         console.info('focusMode', safeMode);
-        console.info('demoPatientKey', safePatientKey);
-        console.info('sourceCount', sourcePayload.sources.length);
-        console.info('sourceTitles', sourcePayload.sourceTitles);
-        console.info('sourceCategories', sourcePayload.sourceCategories);
+        console.info('patientContext', safePatientContext);
+        console.info('sourceCount', visibleSourceEntries.length);
+        console.info('sourceTitles', visibleSourceEntries.map((source) => source.title));
+        console.info('sourceCategories', visibleSourceEntries.map((source) => source.category));
         console.info('latestAmbientVisitFound', sourcePayload.latestAmbientVisitFound);
         console.info('sources', safeSources);
         console.info('contextTags', safeContextTags);
@@ -1823,10 +2153,10 @@ function logResponseMetadataIfNeeded(message) {
             responseId: message.responseId || null,
             role: safeRole,
             focusMode: safeMode,
-            demoPatientKey: safePatientKey,
-            sourceCount: sourcePayload.sources.length,
-            sourceTitles: sourcePayload.sourceTitles,
-            sourceCategories: sourcePayload.sourceCategories,
+            patientContext: safePatientContext,
+            sourceCount: visibleSourceEntries.length,
+            sourceTitles: visibleSourceEntries.map((source) => source.title),
+            sourceCategories: visibleSourceEntries.map((source) => source.category),
             latestAmbientVisitFound: sourcePayload.latestAmbientVisitFound,
             sources: safeSources,
             contextTags: safeContextTags,
@@ -1855,6 +2185,9 @@ function logLabPdfDataToConsole(prompt, toolOutput, options = {}) {
     }
 
     const documentTitle = toolOutput.documentMetadata?.title || toolOutput.sourceMetadata?.fileName || '';
+    const documentTitleHash = window.OpenEMRCopilotObservability && typeof window.OpenEMRCopilotObservability.hashIdentifier === 'function'
+        ? window.OpenEMRCopilotObservability.hashIdentifier(documentTitle || '')
+        : null;
     const extractionMethod = toolOutput.extractionMethod || '';
     const extractedTextPreview = toolOutput.extractedTextPreview || '';
     const extractedTextLength = Number.isFinite(toolOutput.extractedTextLength)
@@ -1872,31 +2205,43 @@ function logLabPdfDataToConsole(prompt, toolOutput, options = {}) {
 
     if (toolOutput.textExtractionStatus === 'success') {
         console.info('[Lab PDF Ingestion Debug] lab_pdf_text_extracted', {
-            documentTitle,
+            documentTitlePresent: Boolean(documentTitle),
+            documentTitleHash,
             extractionMethod,
             extractedTextLength,
-            extractedTextPreview
+            extractedTextPreview: extractedTextPreview ? '[REDACTED_RAW_DOCUMENT_TEXT]' : ''
         });
     }
     if (extractedFacts.length > 0) {
         console.info('[Lab PDF Ingestion Debug] lab_pdf_facts_extracted', {
-            documentTitle,
+            documentTitlePresent: Boolean(documentTitle),
+            documentTitleHash,
             extractionMethod,
             extractedFactCount: extractedFacts.length,
-            extractedFacts
+            extractedFacts: extractedFacts.map((fact, index) => ({
+                factIndex: index,
+                fieldType: fact.name || fact.field_name || 'fact',
+                reviewStatus: fact.reviewStatus || fact.review_status || 'pending_clinician_review'
+            }))
         });
     }
     if (vectorChunks.length > 0) {
         console.info('[Lab PDF Ingestion Debug] lab_pdf_vectorized', {
-            documentTitle,
+            documentTitlePresent: Boolean(documentTitle),
+            documentTitleHash,
             extractionMethod,
             vectorChunkCount: vectorChunks.length,
-            vectorChunks
+            vectorChunks: vectorChunks.map((record) => ({
+                chunkId: record.chunkId || '',
+                chunkIndex: record.chunkIndex ?? null,
+                textPreview: record.textPreview ? '[REDACTED_RAW_DOCUMENT_TEXT]' : ''
+            }))
         });
     }
     if (retrievalChunkIds.length > 0) {
         console.info('[Lab PDF Ingestion Debug] rag_context_retrieved', {
-            documentTitle,
+            documentTitlePresent: Boolean(documentTitle),
+            documentTitleHash,
             extractionMethod,
             retrievalChunkIds
         });
@@ -1914,7 +2259,11 @@ function logLabPdfDataToConsole(prompt, toolOutput, options = {}) {
         requestId: options.requestId || null,
         role: options.role || null,
         mode: options.mode || null,
-        selectedPatientKey: options.selectedPatientKey || null,
+        selectedPatientKey: '',
+        patientContextPresent: Boolean(options.selectedPatientKey),
+        patientContextHash: window.OpenEMRCopilotObservability && typeof window.OpenEMRCopilotObservability.hashIdentifier === 'function'
+            ? window.OpenEMRCopilotObservability.hashIdentifier(options.selectedPatientKey || '')
+            : null,
         ragGrounded: Boolean(options.ragGrounded)
     });
     helper.logLabPdfDemoTrace('Pipeline trace', demoTracePayload);
@@ -1937,7 +2286,12 @@ function normalizeSourceEntry(value) {
 
         return {
             title,
-            category: category || title.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
+            category: category || title.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, ''),
+            sourceId: String(value.sourceId || value.source_id || '').trim(),
+            sourceType: String(value.sourceType || value.source_type || '').trim(),
+            documentType: String(value.documentType || value.document_type || '').trim(),
+            pageOrSection: String(value.pageOrSection || value.page_or_section || '').trim(),
+            fieldOrChunkId: String(value.fieldOrChunkId || value.field_or_chunk_id || '').trim()
         };
     }
 
@@ -2054,12 +2408,1351 @@ function messageHasSourcesSection(message) {
 }
 
 function buildVisibleSourceEntries(message) {
+    const citationSources = uniqueSourceEntries(
+        (Array.isArray(message.sourcesUsed) ? message.sourcesUsed : [])
+            .map(normalizeSourceEntry)
+            .filter(Boolean)
+    );
+    if (citationSources.length > 0) {
+        return citationSources;
+    }
+
     return buildResponseSourcePayload(message.sources || [], {
         role: message.staffRole || state.activeRole,
         mode: message.mode || 'general_assistant',
         patientKey: message.selectedPatientKey || currentSelectedPatientKey(),
         ragGrounded: Boolean(message.meta?.rag_grounded)
     }).sources;
+}
+
+function messageCitationClaims(message) {
+    return Array.isArray(message?.claims)
+        ? message.claims.filter((claim) => claim && typeof claim === 'object')
+        : [];
+}
+
+function normalizeSearchText(value) {
+    return String(value || '')
+        .toLowerCase()
+        .replace(/[\u2018\u2019]/g, "'")
+        .replace(/[^a-z0-9%/.\-\s]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function buildSearchTokenSet(value) {
+    return new Set(
+        normalizeSearchText(value)
+            .split(' ')
+            .map((token) => token.trim())
+            .filter((token) => token.length >= 3 || /[%/.\-]/.test(token))
+    );
+}
+
+function textOverlapScore(left, right) {
+    const leftTokens = buildSearchTokenSet(left);
+    const rightTokens = buildSearchTokenSet(right);
+    let overlap = 0;
+    leftTokens.forEach((token) => {
+        if (rightTokens.has(token)) {
+            overlap += 1;
+        }
+    });
+    return overlap;
+}
+
+function claimMatchesSectionItem(claim, itemText, sectionTitle = '') {
+    if (!claim || typeof claim !== 'object') {
+        return false;
+    }
+
+    const item = normalizeSearchText(itemText);
+    const section = normalizeSearchText(sectionTitle);
+    const claimText = normalizeSearchText(claim.text || '');
+    if (!item || !claimText) {
+        return false;
+    }
+
+    if (item.includes(claimText) || claimText.includes(item)) {
+        return true;
+    }
+
+    if (textOverlapScore(item, claimText) >= 2) {
+        return true;
+    }
+
+    const citations = Array.isArray(claim.citations) ? claim.citations : [];
+    return citations.some((citation) => {
+        if (!citation || typeof citation !== 'object') {
+            return false;
+        }
+
+        const quote = normalizeSearchText(citation.quote_or_value || '');
+        const pageOrSection = normalizeSearchText(citation.page_or_section || '');
+        const fieldOrChunkId = normalizeSearchText(citation.field_or_chunk_id || '');
+
+        if (quote && (item.includes(quote) || quote.includes(item) || textOverlapScore(item, quote) >= 2)) {
+            return true;
+        }
+        if (section && pageOrSection && (section.includes(pageOrSection) || pageOrSection.includes(section))) {
+            return true;
+        }
+        if (fieldOrChunkId && item && (fieldOrChunkId.includes(item) || item.includes(fieldOrChunkId))) {
+            return true;
+        }
+
+        return false;
+    });
+}
+
+function findMatchingClaimsForSectionItem(message, itemText, sectionTitle = '') {
+    return messageCitationClaims(message).filter((claim) => claimMatchesSectionItem(claim, itemText, sectionTitle));
+}
+
+function dedupeCitationList(citations) {
+    const seen = new Set();
+    return (Array.isArray(citations) ? citations : []).filter((citation) => {
+        if (!citation || typeof citation !== 'object') {
+            return false;
+        }
+
+        const key = [
+            String(citation.source_id || ''),
+            String(citation.field_or_chunk_id || ''),
+            String(citation.page_or_section || '')
+        ].join('::');
+        if (!key || seen.has(key)) {
+            return false;
+        }
+
+        seen.add(key);
+        return true;
+    });
+}
+
+function citationSourceTypeLabel(citation) {
+    const sourceType = String(citation?.source_type || '').trim().toLowerCase();
+    const documentType = String(citation?.document_type || '').trim().toLowerCase();
+
+    if (sourceType === 'demo_guideline') {
+        return 'Demo Guideline';
+    }
+    if (sourceType === 'lab_pdf' || documentType === 'lab_pdf' || documentType === 'lab_results') {
+        return 'Lab PDF';
+    }
+    if (sourceType === 'intake_form' || documentType === 'intake_form') {
+        return 'Intake Form';
+    }
+    if (sourceType === 'rag_chunk') {
+        return 'RAG Snippet';
+    }
+    if (sourceType === 'openemr_chart') {
+        return 'Chart';
+    }
+    if (sourceType === 'fhir_resource') {
+        return 'FHIR';
+    }
+    if (sourceType === 'clinician_reviewed_fact') {
+        return 'Reviewed Fact';
+    }
+    if (sourceType === 'ambient_encounter') {
+        return 'Ambient';
+    }
+
+    return 'Source';
+}
+
+function retrievalModeLabel(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    return {
+        hybrid: 'hybrid',
+        sparse_only: 'sparse_only',
+        dense_only: 'dense_only',
+        no_grounded_evidence: 'no_grounded_evidence'
+    }[normalized] || (normalized || 'unknown');
+}
+
+function rerankProviderLabel(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    return {
+        cohere: 'cohere',
+        fallback_score_sort: 'fallback_score_sort'
+    }[normalized] || (normalized || 'unknown');
+}
+
+function citationPreviewTitle(citation) {
+    const sourceLabel = citationSourceTypeLabel(citation);
+    const pageOrSection = String(citation?.page_or_section || '').trim();
+    return pageOrSection ? `${sourceLabel} · ${pageOrSection}` : sourceLabel;
+}
+
+function normalizeCitationConfidence(value) {
+    return Number.isFinite(Number(value)) ? Number(value) : 0;
+}
+
+function citationConfidenceLabel(value) {
+    const normalized = normalizeCitationConfidence(value);
+    return `${Math.round(normalized * 100)}%`;
+}
+
+function findCitationForSourceEntry(message, entry) {
+    const claims = messageCitationClaims(message);
+    for (const claim of claims) {
+        const citations = Array.isArray(claim.citations) ? claim.citations : [];
+        const match = citations.find((citation) => {
+            if (!citation || typeof citation !== 'object') {
+                return false;
+            }
+
+            if (entry.sourceId && String(citation.source_id || '') === String(entry.sourceId)) {
+                return true;
+            }
+
+            const citationDocumentType = String(citation.document_type || '').trim().toLowerCase();
+            const entryDocumentType = String(entry.documentType || '').trim().toLowerCase();
+            const citationSourceType = String(citation.source_type || '').trim().toLowerCase();
+            const entrySourceType = String(entry.sourceType || '').trim().toLowerCase();
+            const citationPageOrSection = String(citation.page_or_section || '').trim().toLowerCase();
+            const entryPageOrSection = String(entry.pageOrSection || '').trim().toLowerCase();
+
+            if (entryDocumentType && citationDocumentType && entryDocumentType === citationDocumentType) {
+                return true;
+            }
+            if (entrySourceType && citationSourceType && entrySourceType === citationSourceType) {
+                return true;
+            }
+            if (entryPageOrSection && citationPageOrSection && entryPageOrSection === citationPageOrSection) {
+                return true;
+            }
+
+            return false;
+        });
+
+        if (match) {
+            return match;
+        }
+    }
+
+    return null;
+}
+
+function buildCitationChipsForMessage(citations, message, options = {}) {
+    const uniqueCitations = dedupeCitationList(citations);
+    if (uniqueCitations.length === 0) {
+        return null;
+    }
+
+    const wrapper = document.createElement('div');
+    wrapper.className = options.className || 'copilot-citation-chip-list';
+
+    uniqueCitations.forEach((citation) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = options.buttonClassName || 'copilot-citation-chip';
+        button.textContent = options.compact
+            ? citationSourceTypeLabel(citation)
+            : citationPreviewTitle(citation);
+        button.addEventListener('click', () => {
+            openCitationSourcePreview(message, citation);
+        });
+        wrapper.appendChild(button);
+    });
+
+    return wrapper;
+}
+
+function buildCitationContractPanel(message) {
+    if (!message || message.role !== 'assistant' || message.isLoading) {
+        return null;
+    }
+
+    const claims = messageCitationClaims(message);
+    const blockedClaims = Array.isArray(message.uncitedClaimsBlocked)
+        ? message.uncitedClaimsBlocked.filter((claim) => claim && typeof claim === 'object')
+        : [];
+    const toolOutput = message.meta?.tool_output && typeof message.meta.tool_output === 'object'
+        ? message.meta.tool_output
+        : null;
+    const citationValidation = toolOutput?.citationValidation && typeof toolOutput.citationValidation === 'object'
+        ? toolOutput.citationValidation
+        : null;
+    const citationContractStatus = String(
+        citationValidation?.citationContractStatus
+        || message.meta?.citation_contract_status
+        || message.safetyStatus
+        || ''
+    ).trim();
+
+    if (!citationValidation && claims.length === 0 && blockedClaims.length === 0) {
+        return null;
+    }
+
+    const citedClaimCount = Number(
+        message.meta?.cited_claim_count
+        ?? citationValidation?.citationCount
+        ?? claims.length
+        ?? 0
+    );
+    const uncitedClaimCount = Number(
+        message.meta?.uncited_claim_count
+        ?? blockedClaims.length
+        ?? 0
+    );
+    const invalidCitationCount = Number(
+        message.meta?.invalid_citation_count
+        ?? citationValidation?.invalidCitationCount
+        ?? 0
+    );
+    const blockedClaimCount = Number(
+        message.meta?.blocked_claim_count
+        ?? citationValidation?.blockedClaimCount
+        ?? blockedClaims.length
+        ?? 0
+    );
+    const sourceEntries = buildVisibleSourceEntries(message);
+    const status =
+        citationContractStatus
+        || (blockedClaimCount > 0
+            ? 'blocked'
+            : (invalidCitationCount > 0 || uncitedClaimCount > 0 ? 'review_required' : 'passed'));
+
+    const wrapper = document.createElement('section');
+    wrapper.className = 'copilot-citation-panel';
+
+    const header = document.createElement('div');
+    header.className = 'copilot-citation-header';
+
+    const title = document.createElement('h3');
+    title.className = 'copilot-citation-title';
+    title.textContent = 'Citation Contract';
+    header.appendChild(title);
+
+    const badge = document.createElement('span');
+    badge.className = 'copilot-citation-badge';
+    badge.dataset.status = status;
+    badge.textContent = status === 'passed'
+        ? 'All clinical claims cited'
+        : (status === 'blocked' ? 'Uncited claims blocked' : 'Clinician review required');
+    header.appendChild(badge);
+    wrapper.appendChild(header);
+
+    const summary = document.createElement('p');
+    summary.className = 'copilot-citation-summary';
+    summary.textContent = citationValidation?.userMessage
+        || message.meta?.citation_contract_user_message
+        || (status === 'blocked'
+            ? 'Some clinical claims were hidden because they were not linked to source evidence.'
+            : 'Clinical claims remain draft-only and linked back to source evidence.');
+    wrapper.appendChild(summary);
+
+    const meta = document.createElement('div');
+    meta.className = 'copilot-citation-meta';
+    [
+        `Claims: ${Number(message.meta?.claim_count ?? claims.length)}`,
+        `Cited: ${citedClaimCount}`,
+        `Blocked: ${blockedClaimCount}`,
+        `Sources: ${Number(message.meta?.source_count ?? sourceEntries.length)}`
+    ].forEach((value) => {
+        const chip = document.createElement('span');
+        chip.className = 'copilot-citation-meta-chip';
+        chip.textContent = value;
+        meta.appendChild(chip);
+    });
+    wrapper.appendChild(meta);
+
+    const sourceCitations = dedupeCitationList(
+        claims.flatMap((claim) => Array.isArray(claim.citations) ? claim.citations : [])
+    );
+    const sourceChips = buildCitationChipsForMessage(sourceCitations.slice(0, 6), message, {
+        compact: false
+    });
+    if (sourceChips) {
+        wrapper.appendChild(sourceChips);
+    }
+
+    if (blockedClaims.length > 0) {
+        const warning = document.createElement('div');
+        warning.className = 'copilot-citation-warning';
+        warning.textContent = 'Some clinical claims were hidden because they were not linked to source evidence.';
+        wrapper.appendChild(warning);
+
+        const blockedList = document.createElement('ul');
+        blockedList.className = 'copilot-citation-blocked-list';
+        blockedClaims.slice(0, 4).forEach((claim) => {
+            const item = document.createElement('li');
+            const claimText = String(claim.text || '').trim();
+            const issues = Array.isArray(claim.issues) ? claim.issues.filter(Boolean) : [];
+            item.textContent = claimText
+                ? `${claimText} — ${issues.join(' ')}`
+                : issues.join(' ');
+            blockedList.appendChild(item);
+        });
+        wrapper.appendChild(blockedList);
+    }
+
+    return wrapper;
+}
+
+function extractionStatusDescriptor(status, options = {}) {
+    const normalized = String(status || '').trim().toLowerCase();
+    const schemaValid = Boolean(options.schemaValid);
+    const defaultReviewLabel = options.reviewStatus === 'clinician_approved'
+        ? 'Clinician approved'
+        : (options.reviewStatus === 'clinician_rejected' ? 'Clinician rejected' : 'Pending clinician review');
+    const statusMap = {
+        uploaded: { tone: 'neutral', label: 'Uploaded' },
+        extraction_pending: { tone: 'neutral', label: 'Extraction pending' },
+        ok: { tone: schemaValid ? 'success' : 'warning', label: schemaValid ? 'Extraction complete' : defaultReviewLabel },
+        review_required: { tone: 'warning', label: 'Extraction review required' },
+        extraction_review_required: { tone: 'warning', label: 'Extraction review required' },
+        extraction_failed: { tone: 'error', label: 'Extraction failed' },
+        failed: { tone: 'error', label: 'Extraction failed' },
+        ocr_required: { tone: 'warning', label: 'OCR / text review required' },
+        seeded_demo_fallback: { tone: 'warning', label: 'Pending clinician review' },
+        synthetic_demo_pdf_fallback: { tone: 'warning', label: 'Pending clinician review' },
+        synthetic_marcus_intake_demo: { tone: 'warning', label: 'Pending clinician review' },
+        pending_clinician_review: { tone: 'warning', label: 'Pending clinician review' },
+        clinician_approved: { tone: 'success', label: 'Clinician approved' },
+        clinician_rejected: { tone: 'error', label: 'Clinician rejected' },
+        role_blocked: { tone: 'error', label: 'Blocked by role guardrails' },
+        invalid_file_type: { tone: 'error', label: 'Unsupported file type' },
+        document_guard_rejected: { tone: 'error', label: 'Unsupported medical document' }
+    };
+
+    if (statusMap[normalized]) {
+        return statusMap[normalized];
+    }
+
+    if (normalized.includes('review')) {
+        return { tone: 'warning', label: 'Extraction review required' };
+    }
+    if (normalized.includes('fail') || normalized.includes('reject') || normalized.includes('block')) {
+        return { tone: 'error', label: 'Extraction failed' };
+    }
+
+    return { tone: 'neutral', label: normalized ? normalized.replace(/_/g, ' ') : defaultReviewLabel };
+}
+
+function buildExtractionFactCard(options = {}) {
+    const card = document.createElement('article');
+    card.className = 'copilot-extraction-fact';
+
+    if (options.category) {
+        const category = document.createElement('span');
+        category.className = 'copilot-extraction-fact-category';
+        category.textContent = options.category;
+        card.appendChild(category);
+    }
+
+    const title = document.createElement('h4');
+    title.className = 'copilot-extraction-fact-title';
+    title.textContent = String(options.title || 'Extracted fact');
+    card.appendChild(title);
+
+    if (options.value) {
+        const value = document.createElement('p');
+        value.className = 'copilot-extraction-fact-value';
+        value.textContent = String(options.value);
+        card.appendChild(value);
+    }
+
+    const metaItems = Array.isArray(options.metaItems)
+        ? options.metaItems.filter((item) => item && String(item).trim() !== '')
+        : [];
+    if (metaItems.length > 0) {
+        const meta = document.createElement('div');
+        meta.className = 'copilot-extraction-fact-meta';
+        metaItems.forEach((item) => {
+            const chip = document.createElement('span');
+            chip.className = 'copilot-extraction-fact-chip';
+            chip.textContent = String(item);
+            meta.appendChild(chip);
+        });
+        card.appendChild(meta);
+    }
+
+    if (options.note) {
+        const note = document.createElement('p');
+        note.className = 'copilot-extraction-fact-note';
+        note.textContent = String(options.note);
+        card.appendChild(note);
+    }
+
+    const citations = Array.isArray(options.citations)
+        ? options.citations.filter((citation) => citation && typeof citation === 'object')
+        : [];
+    const citationChips = buildCitationChipsForMessage(citations, options.message, {
+        compact: false,
+        className: 'copilot-extraction-citation-list'
+    });
+    if (citationChips) {
+        card.appendChild(citationChips);
+    }
+
+    return card;
+}
+
+function buildSchemaValidationFallback(message, strictExtraction = null) {
+    const traceEntries = Array.isArray(message?.meta?.agent_trace)
+        ? message.meta.agent_trace.filter((entry) => entry && typeof entry === 'object')
+        : [];
+    const schemaTrace = traceEntries.find((entry) => String(entry.agent || '').trim() === 'SchemaValidationWorker')
+        || traceEntries.find((entry) => String(entry.metadata?.status || '').trim() === 'extraction_schema_validated');
+    if (!schemaTrace) {
+        return null;
+    }
+
+    const metadata = schemaTrace.metadata && typeof schemaTrace.metadata === 'object'
+        ? schemaTrace.metadata
+        : {};
+    const schemaValid = Boolean(metadata.schema_valid);
+    const reviewStatus = String(metadata.review_status || 'pending_clinician_review').trim();
+    const citationCount = Number(metadata.citation_count || 0);
+    const documentType = normalizeAttachmentDocumentType(
+        strictExtraction?.document_type
+        || message?.meta?.tool_output?.documentMetadata?.documentType
+        || message?.meta?.tool_output?.sourceMetadata?.sourceType
+        || ''
+    );
+
+    return {
+        schemaValid,
+        valid: schemaValid,
+        reviewSafe: reviewStatus === 'pending_clinician_review',
+        trustedPersistenceAllowed: false,
+        trustedRagIndexAllowed: false,
+        schemaName: schemaValid
+            ? (documentType === 'intake_form' ? 'IntakeFormExtraction' : 'LabPdfExtraction')
+            : 'Strict extraction schema',
+        schemaFile: '',
+        statusLabel: schemaValid ? 'Clinician review required' : 'Schema validation failed',
+        userMessage: schemaValid
+            ? 'Structured extraction passed the strict schema gate and remains pending clinician review.'
+            : 'Extraction completed, but the result did not pass strict validation. Clinician review is required before this information can be used.',
+        validationErrors: [],
+        validationErrorCount: 0,
+        missingRequiredFieldCount: 0,
+        citationCount,
+        extractionStatus: schemaValid ? 'review_required' : 'failed',
+        reviewStatus,
+        errors: []
+    };
+}
+
+function buildExtractionResultsPanel(message) {
+    if (!message || message.role !== 'assistant' || message.isLoading) {
+        return null;
+    }
+
+    const toolOutput = message.meta?.tool_output && typeof message.meta.tool_output === 'object'
+        ? message.meta.tool_output
+        : null;
+    if (!toolOutput) {
+        return null;
+    }
+
+    const strictExtraction = toolOutput.strictExtraction
+        && typeof toolOutput.strictExtraction === 'object'
+        && !Array.isArray(toolOutput.strictExtraction)
+        && Object.keys(toolOutput.strictExtraction).length > 0
+        ? toolOutput.strictExtraction
+        : null;
+    const schemaValidationRaw = toolOutput.schemaValidation && typeof toolOutput.schemaValidation === 'object'
+        ? toolOutput.schemaValidation
+        : null;
+    const schemaValidation = schemaValidationRaw && Object.keys(schemaValidationRaw).some((key) => {
+        const value = schemaValidationRaw[key];
+        return value !== '' && value !== null && value !== false && (!Array.isArray(value) || value.length > 0);
+    })
+        ? schemaValidationRaw
+        : buildSchemaValidationFallback(message, strictExtraction);
+    const reviewQueue = toolOutput.reviewQueue && typeof toolOutput.reviewQueue === 'object'
+        ? toolOutput.reviewQueue
+        : null;
+    const reviewQueueFacts = Array.isArray(reviewQueue?.facts) ? reviewQueue.facts.filter((fact) => fact && typeof fact === 'object') : [];
+    const legacyExtractedFacts = Array.isArray(toolOutput.extractedFacts)
+        ? toolOutput.extractedFacts.filter((fact) => fact && typeof fact === 'object')
+        : [];
+    const intakeFields = toolOutput.intakeFields && typeof toolOutput.intakeFields === 'object' && !Array.isArray(toolOutput.intakeFields)
+        ? toolOutput.intakeFields
+        : null;
+    const documentType = normalizeAttachmentDocumentType(
+        strictExtraction?.document_type
+        || toolOutput.documentMetadata?.documentType
+        || toolOutput.sourceMetadata?.sourceType
+        || (intakeFields ? 'intake_form' : (legacyExtractedFacts.length > 0 ? 'lab_pdf' : ''))
+    );
+
+    if (!['lab_pdf', 'intake_form'].includes(documentType)) {
+        return null;
+    }
+    if (!strictExtraction && legacyExtractedFacts.length === 0 && !intakeFields && reviewQueueFacts.length === 0) {
+        return null;
+    }
+
+    const reviewStatus = String(
+        reviewQueue?.status
+        || schemaValidation?.reviewStatus
+        || strictExtraction?.review_status
+        || toolOutput.documentMetadata?.reviewStatus
+        || 'pending_clinician_review'
+    ).trim();
+    const descriptor = extractionStatusDescriptor(
+        toolOutput.status || strictExtraction?.extraction_status || reviewStatus,
+        {
+            schemaValid: Boolean(schemaValidation?.schemaValid ?? schemaValidation?.valid),
+            reviewStatus
+        }
+    );
+    const missingData = Array.isArray(strictExtraction?.missing_or_ambiguous_data)
+        ? strictExtraction.missing_or_ambiguous_data.filter(Boolean)
+        : (Array.isArray(toolOutput.missingData)
+            ? toolOutput.missingData.filter(Boolean)
+            : (Array.isArray(toolOutput.missingDataFlags) ? toolOutput.missingDataFlags.filter(Boolean) : []));
+    let sourceCitations = Array.isArray(strictExtraction?.source_citations)
+        ? strictExtraction.source_citations.filter((citation) => citation && typeof citation === 'object')
+        : [];
+    if (sourceCitations.length === 0 && Array.isArray(toolOutput.sourceCitations)) {
+        sourceCitations = toolOutput.sourceCitations.filter((citation) => citation && typeof citation === 'object');
+    }
+    if (sourceCitations.length === 0 && reviewQueueFacts.length > 0) {
+        sourceCitations = reviewQueueFacts
+            .map((fact) => (fact.citation && typeof fact.citation === 'object' ? fact.citation : null))
+            .filter(Boolean);
+    }
+    if (sourceCitations.length === 0) {
+        sourceCitations = dedupeCitationList(
+            (Array.isArray(message.claims) ? message.claims : []).flatMap((claim) => Array.isArray(claim.citations) ? claim.citations : [])
+        );
+    }
+    const safetyWarnings = Array.isArray(strictExtraction?.safety_warnings)
+        ? strictExtraction.safety_warnings.filter(Boolean)
+        : (toolOutput.safeMessage ? [toolOutput.safeMessage] : []);
+    const citationContractStatus = String(
+        toolOutput.citationValidation?.citationContractStatus
+        || message.meta?.citation_contract_status
+        || ''
+    ).trim();
+    const isDemoFallback = /seeded_demo|synthetic_demo|synthetic_marcus/i.test(String(toolOutput.extractionMethod || ''))
+        || Boolean(toolOutput.documentMetadata?.seededDemo);
+
+    const wrapper = document.createElement('section');
+    wrapper.className = 'copilot-extraction-panel';
+
+    const header = document.createElement('div');
+    header.className = 'copilot-extraction-header';
+
+    const titleWrap = document.createElement('div');
+    titleWrap.className = 'copilot-extraction-title-wrap';
+
+    const title = document.createElement('h3');
+    title.className = 'copilot-extraction-title';
+    title.textContent = 'Extraction Results';
+    titleWrap.appendChild(title);
+
+    const subtitle = document.createElement('p');
+    subtitle.className = 'copilot-extraction-subtitle';
+    subtitle.textContent = documentType === 'intake_form'
+        ? 'Structured intake facts extracted for draft-only clinician review.'
+        : 'Structured lab facts extracted for draft-only clinician review.';
+    titleWrap.appendChild(subtitle);
+    header.appendChild(titleWrap);
+
+    const badge = document.createElement('span');
+    badge.className = 'copilot-extraction-badge';
+    badge.dataset.status = descriptor.tone;
+    badge.textContent = descriptor.label;
+    header.appendChild(badge);
+    wrapper.appendChild(header);
+
+    const reviewBanner = document.createElement('div');
+    reviewBanner.className = 'copilot-extraction-review-banner';
+    reviewBanner.textContent = 'Clinician review required: extracted document facts are draft-only and are not written to the chart automatically.';
+    wrapper.appendChild(reviewBanner);
+
+    const meta = document.createElement('div');
+    meta.className = 'copilot-extraction-meta';
+    [
+        documentType === 'intake_form' ? 'Document type: Intake Form' : 'Document type: Lab PDF',
+        `Review status: ${String(reviewStatus || 'pending_clinician_review').replace(/_/g, ' ')}`,
+        `Schema valid: ${schemaValidation ? (Boolean(schemaValidation.schemaValid ?? schemaValidation.valid) ? 'Yes' : 'No') : 'Unknown'}`,
+        `Citation contract: ${citationContractStatus ? citationContractStatus.replace(/_/g, ' ') : 'pending validation'}`,
+        isDemoFallback ? 'Demo fallback extraction: Yes' : '',
+        toolOutput.documentMetadata?.title ? `Source: ${String(toolOutput.documentMetadata.title)}` : ''
+    ].filter(Boolean).forEach((value) => {
+        const chip = document.createElement('span');
+        chip.className = 'copilot-extraction-meta-chip';
+        chip.textContent = value;
+        meta.appendChild(chip);
+    });
+    wrapper.appendChild(meta);
+
+    const factGrid = document.createElement('div');
+    factGrid.className = 'copilot-extraction-fact-grid';
+
+    if (documentType === 'lab_pdf') {
+        const labs = Array.isArray(strictExtraction?.labs)
+            ? strictExtraction.labs.filter((lab) => lab && typeof lab === 'object')
+            : (legacyExtractedFacts.length > 0
+                ? legacyExtractedFacts.map((fact) => ({
+                    test_name: fact.name || 'Lab result',
+                    value: fact.value || '',
+                    unit: '',
+                    reference_range: '',
+                    abnormal_flag: fact.interpretation || '',
+                    collection_date: '',
+                    resulted_date: '',
+                    confidence: 0.9,
+                    source_quote_or_value: '',
+                    source_citation: Array.isArray(fact.sourceLink) ? fact.sourceLink[0] || null : null
+                }))
+                : reviewQueueFacts.map((fact) => ({
+                    test_name: fact.label || 'Lab result',
+                    value: fact.value || '',
+                    unit: '',
+                    reference_range: '',
+                    abnormal_flag: '',
+                    collection_date: '',
+                    resulted_date: '',
+                    confidence: Number(fact.confidence || 0),
+                    source_quote_or_value: '',
+                    source_citation: fact.citation || null
+                })));
+        labs.slice(0, 8).forEach((lab) => {
+            factGrid.appendChild(buildExtractionFactCard({
+                message,
+                category: 'Lab result',
+                title: String(lab.test_name || 'Lab result'),
+                value: [lab.value, lab.unit].filter((item) => String(item || '').trim() !== '').join(' '),
+                metaItems: [
+                    lab.reference_range ? `Reference range: ${lab.reference_range}` : '',
+                    lab.abnormal_flag ? `Flag: ${String(lab.abnormal_flag).replace(/_/g, ' ')}` : '',
+                    lab.collection_date ? `Collected: ${lab.collection_date}` : '',
+                    lab.resulted_date ? `Resulted: ${lab.resulted_date}` : '',
+                    lab.proposed_fhir_resource_type ? `Proposed target: ${lab.proposed_fhir_resource_type}` : '',
+                    Number.isFinite(Number(lab.confidence)) ? `Confidence: ${Math.round(Number(lab.confidence) * 100)}%` : ''
+                ],
+                note: lab.source_quote_or_value ? `Source value: ${lab.source_quote_or_value}` : '',
+                citations: [lab.source_citation || null]
+            }));
+        });
+    } else {
+        const demographics = strictExtraction?.demographics && typeof strictExtraction.demographics === 'object'
+            ? strictExtraction.demographics
+            : {};
+        [
+            ['First name', demographics.first_name],
+            ['Last name', demographics.last_name],
+            ['Date of birth', demographics.date_of_birth],
+            ['Phone', demographics.phone],
+            ['Email', demographics.email],
+            ['Address', demographics.address],
+            ['Emergency contact', demographics.emergency_contact]
+        ].forEach(([label, field]) => {
+            if (!field || typeof field !== 'object') {
+                return;
+            }
+            factGrid.appendChild(buildExtractionFactCard({
+                message,
+                category: 'Demographics',
+                title: label,
+                value: String(field.value || 'Pending clarification'),
+                metaItems: [
+                    Number.isFinite(Number(field.confidence)) ? `Confidence: ${Math.round(Number(field.confidence) * 100)}%` : ''
+                ],
+                citations: [field.source_citation || null]
+            }));
+        });
+
+        const chiefConcern = strictExtraction?.chief_concern && typeof strictExtraction.chief_concern === 'object'
+            ? strictExtraction.chief_concern
+            : (intakeFields?.reasonForVisit ? {
+                value: intakeFields.reasonForVisit,
+                source_citation: sourceCitations[0] || null,
+                confidence: 0.9
+            } : null);
+        if (chiefConcern) {
+            factGrid.appendChild(buildExtractionFactCard({
+                message,
+                category: 'Chief concern',
+                title: 'Chief concern',
+                value: String(chiefConcern.value || 'Pending clarification'),
+                metaItems: [
+                    chiefConcern.duration ? `Duration: ${chiefConcern.duration}` : '',
+                    chiefConcern.severity ? `Severity: ${chiefConcern.severity}` : '',
+                    Number.isFinite(Number(chiefConcern.confidence)) ? `Confidence: ${Math.round(Number(chiefConcern.confidence) * 100)}%` : ''
+                ],
+                citations: [chiefConcern.source_citation || null]
+            }));
+        }
+
+        const intakeCollections = [
+            ['Current medication', strictExtraction?.current_medications || [], (item) => ({
+                title: String(item.medication_name || 'Medication'),
+                value: [item.dose, item.frequency].filter(Boolean).join(' • '),
+                metaItems: [
+                    item.route ? `Route: ${item.route}` : '',
+                    item.review_status ? `Review: ${String(item.review_status).replace(/_/g, ' ')}` : '',
+                    Number.isFinite(Number(item.confidence)) ? `Confidence: ${Math.round(Number(item.confidence) * 100)}%` : ''
+                ],
+                note: item.normalized_value ? `Normalized: ${item.normalized_value}` : '',
+                citations: [item.source_citation || null]
+            })],
+            ['Allergy', strictExtraction?.allergies || [], (item) => ({
+                title: String(item.allergen || 'Allergy'),
+                value: [item.reaction, item.severity].filter(Boolean).join(' • '),
+                metaItems: [
+                    item.review_status ? `Review: ${String(item.review_status).replace(/_/g, ' ')}` : '',
+                    Number.isFinite(Number(item.confidence)) ? `Confidence: ${Math.round(Number(item.confidence) * 100)}%` : ''
+                ],
+                citations: [item.source_citation || null]
+            })],
+            ['Family history', strictExtraction?.family_history || [], (item) => ({
+                title: [item.relation, item.condition].filter(Boolean).join(': ') || 'Family history',
+                value: item.age_of_onset ? `Age of onset: ${item.age_of_onset}` : 'Pending clarification',
+                metaItems: [
+                    item.review_status ? `Review: ${String(item.review_status).replace(/_/g, ' ')}` : '',
+                    Number.isFinite(Number(item.confidence)) ? `Confidence: ${Math.round(Number(item.confidence) * 100)}%` : ''
+                ],
+                citations: [item.source_citation || null]
+            })]
+        ];
+
+        intakeCollections.forEach(([category, collection, mapper]) => {
+            if (!Array.isArray(collection)) {
+                return;
+            }
+            collection.slice(0, 4).forEach((item) => {
+                if (!item || typeof item !== 'object') {
+                    return;
+                }
+                const card = mapper(item);
+                factGrid.appendChild(buildExtractionFactCard({
+                    message,
+                    category,
+                    title: card.title,
+                    value: card.value,
+                    metaItems: card.metaItems,
+                    note: card.note,
+                    citations: card.citations
+                }));
+            });
+        });
+
+        if (factGrid.childElementCount === 0 && intakeFields) {
+            [
+                ['Reason for visit', intakeFields.reasonForVisit],
+                ['Current concerns', intakeFields.currentConcerns],
+                ['Medication adherence', intakeFields.medicationAdherence],
+                ['Allergies', intakeFields.allergies],
+                ['Insurance update', intakeFields.insuranceUpdate],
+                ['Care preferences', intakeFields.carePreferences]
+            ].forEach(([titleText, value]) => {
+                if (!String(value || '').trim()) {
+                    return;
+                }
+                factGrid.appendChild(buildExtractionFactCard({
+                    message,
+                    category: 'Intake field',
+                    title: titleText,
+                    value: String(value),
+                    citations: sourceCitations.slice(0, 1)
+                }));
+            });
+        }
+    }
+
+    if (factGrid.childElementCount > 0) {
+        wrapper.appendChild(factGrid);
+    }
+
+    if (missingData.length > 0) {
+        const missingSection = document.createElement('section');
+        missingSection.className = 'copilot-extraction-list-block';
+
+        const missingTitle = document.createElement('h4');
+        missingTitle.className = 'copilot-extraction-list-title';
+        missingTitle.textContent = 'Missing / ambiguous data';
+        missingSection.appendChild(missingTitle);
+
+        const list = document.createElement('ul');
+        list.className = 'copilot-extraction-list';
+        missingData.slice(0, 8).forEach((entry) => {
+            const item = document.createElement('li');
+            item.className = 'copilot-extraction-list-item';
+            item.textContent = typeof entry === 'string'
+                ? entry
+                : `${String(entry.field || 'Field')}: ${String(entry.issue || 'Requires clinician review.')}`;
+            list.appendChild(item);
+        });
+        missingSection.appendChild(list);
+        wrapper.appendChild(missingSection);
+    }
+
+    if (safetyWarnings.length > 0) {
+        const warning = document.createElement('div');
+        warning.className = 'copilot-extraction-warning';
+        warning.textContent = safetyWarnings.slice(0, 2).join(' ');
+        wrapper.appendChild(warning);
+    }
+
+    if (sourceCitations.length > 0) {
+        const sources = document.createElement('section');
+        sources.className = 'copilot-extraction-list-block';
+
+        const sourcesTitle = document.createElement('h4');
+        sourcesTitle.className = 'copilot-extraction-list-title';
+        sourcesTitle.textContent = 'Sources Used';
+        sources.appendChild(sourcesTitle);
+
+        const chips = buildCitationChipsForMessage(sourceCitations.slice(0, 8), message, {
+            compact: false,
+            className: 'copilot-extraction-citation-list'
+        });
+        if (chips) {
+            sources.appendChild(chips);
+        }
+
+        wrapper.appendChild(sources);
+    }
+
+    return wrapper;
+}
+
+function buildEvidenceSnippetsPanel(message) {
+    if (!message || message.role !== 'assistant' || message.isLoading) {
+        return null;
+    }
+
+    const snippets = Array.isArray(message.evidenceSnippets)
+        ? message.evidenceSnippets.filter((snippet) => snippet && typeof snippet === 'object')
+        : [];
+    const retrievalMode = String(message.meta?.retrieval_mode || snippets[0]?.retrieval_mode || '').trim();
+    const rerankProvider = String(message.meta?.rerank_provider || snippets[0]?.rerank_provider || '').trim();
+    if (snippets.length === 0 && !retrievalMode) {
+        return null;
+    }
+
+    const wrapper = document.createElement('details');
+    wrapper.className = 'copilot-evidence-panel';
+    wrapper.open = false;
+
+    const summary = document.createElement('summary');
+    summary.className = 'copilot-evidence-summary';
+
+    const titleWrap = document.createElement('div');
+    titleWrap.className = 'copilot-evidence-summary-copy';
+
+    const title = document.createElement('h3');
+    title.className = 'copilot-evidence-title';
+    title.textContent = 'Evidence Snippets';
+    titleWrap.appendChild(title);
+
+    const copy = document.createElement('p');
+    copy.className = 'copilot-evidence-summary-text';
+    copy.textContent = snippets.length > 0
+        ? 'Top grounded evidence returned to the response workflow.'
+        : 'No grounded evidence snippets were retrieved for this request.';
+    titleWrap.appendChild(copy);
+    summary.appendChild(titleWrap);
+
+    const countChip = document.createElement('span');
+    countChip.className = 'copilot-evidence-toggle-chip';
+    countChip.textContent = `${snippets.length} snippet${snippets.length === 1 ? '' : 's'}`;
+    summary.appendChild(countChip);
+    wrapper.appendChild(summary);
+
+    const body = document.createElement('div');
+    body.className = 'copilot-evidence-body';
+
+    const meta = document.createElement('div');
+    meta.className = 'copilot-evidence-meta';
+    [
+        retrievalMode ? `Retrieval mode: ${retrievalModeLabel(retrievalMode)}` : '',
+        rerankProvider ? `Reranker: ${rerankProviderLabel(rerankProvider)}` : '',
+        Number.isFinite(Number(message.meta?.reranked_result_count)) ? `Top snippets: ${Number(message.meta.reranked_result_count || 0)}` : '',
+        Number.isFinite(Number(message.meta?.hybrid_candidate_count)) ? `Candidates: ${Number(message.meta.hybrid_candidate_count || 0)}` : ''
+    ].filter(Boolean).forEach((value) => {
+        const chip = document.createElement('span');
+        chip.className = 'copilot-evidence-meta-chip';
+        chip.textContent = value;
+        meta.appendChild(chip);
+    });
+    body.appendChild(meta);
+
+    if (snippets.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'copilot-evidence-empty';
+        empty.textContent = 'I do not have enough source-grounded information to answer that safely.';
+        body.appendChild(empty);
+    } else {
+        const list = document.createElement('div');
+        list.className = 'copilot-evidence-list';
+
+        snippets.slice(0, 5).forEach((snippet) => {
+            const item = document.createElement('article');
+            item.className = 'copilot-evidence-item';
+
+            const snippetText = document.createElement('p');
+            snippetText.className = 'copilot-evidence-text';
+            snippetText.textContent = String(snippet.text || '').trim() || 'No evidence text was returned for this snippet.';
+            item.appendChild(snippetText);
+
+            const detailRow = document.createElement('div');
+            detailRow.className = 'copilot-evidence-item-meta';
+            [
+                snippet.source_title || citationSourceTypeLabel(snippet.citation || {}),
+                Number.isFinite(Number(snippet.relevance_score)) ? `Relevance: ${Math.round(Number(snippet.relevance_score) * 100)}%` : '',
+                snippet.retrieval_mode ? `Mode: ${retrievalModeLabel(snippet.retrieval_mode)}` : '',
+                snippet.rerank_provider ? `Reranker: ${rerankProviderLabel(snippet.rerank_provider)}` : ''
+            ].filter(Boolean).forEach((value) => {
+                const chip = document.createElement('span');
+                chip.className = 'copilot-evidence-item-chip';
+                chip.textContent = value;
+                detailRow.appendChild(chip);
+            });
+            item.appendChild(detailRow);
+
+            const citation = snippet.citation && typeof snippet.citation === 'object'
+                ? snippet.citation
+                : null;
+            if (citation) {
+                const chips = buildCitationChipsForMessage([citation], message, {
+                    compact: false,
+                    className: 'copilot-evidence-citation-list'
+                });
+                if (chips) {
+                    item.appendChild(chips);
+                }
+            }
+
+            list.appendChild(item);
+        });
+
+        body.appendChild(list);
+    }
+
+    wrapper.appendChild(body);
+    return wrapper;
+}
+
+function ensureCitationPreviewShell() {
+    if (citationPreviewShell) {
+        return citationPreviewShell;
+    }
+
+    const root = document.createElement('div');
+    root.className = 'copilot-citation-preview-root copilot-ambient-modal-root';
+    root.hidden = true;
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'copilot-citation-preview-backdrop copilot-ambient-modal-backdrop';
+    backdrop.addEventListener('click', (event) => {
+        if (event.target === backdrop) {
+            closeCitationSourcePreview();
+        }
+    });
+
+    const modal = document.createElement('div');
+    modal.className = 'copilot-citation-preview-modal copilot-ambient-modal copilot-ambient-modal-wide';
+
+    root.appendChild(backdrop);
+    backdrop.appendChild(modal);
+    document.body.appendChild(root);
+    citationPreviewShell = { root, backdrop, modal };
+    return citationPreviewShell;
+}
+
+function closeCitationSourcePreview() {
+    state.citationPreview = {
+        open: false,
+        loading: false,
+        error: '',
+        data: null,
+        title: ''
+    };
+    renderCitationPreviewShell();
+}
+
+function setCitationPreviewState(nextState) {
+    state.citationPreview = {
+        ...state.citationPreview,
+        ...nextState
+    };
+    renderCitationPreviewShell();
+}
+
+function buildBoundingBoxPercent(box) {
+    if (!box || typeof box !== 'object') {
+        return null;
+    }
+
+    if (String(box.coordinate_system || 'normalized_0_1') === 'pdf_points') {
+        const pageWidth = 612;
+        const pageHeight = 792;
+        return {
+            left: `${Math.max(0, Math.min(100, (Number(box.x || 0) / pageWidth) * 100))}%`,
+            top: `${Math.max(0, Math.min(100, (Number(box.y || 0) / pageHeight) * 100))}%`,
+            width: `${Math.max(2, Math.min(100, (Number(box.width || 0) / pageWidth) * 100))}%`,
+            height: `${Math.max(2, Math.min(100, (Number(box.height || 0) / pageHeight) * 100))}%`
+        };
+    }
+
+    return {
+        left: `${Math.max(0, Math.min(100, Number(box.x || 0) * 100))}%`,
+        top: `${Math.max(0, Math.min(100, Number(box.y || 0) * 100))}%`,
+        width: `${Math.max(2, Math.min(100, Number(box.width || 0) * 100))}%`,
+        height: `${Math.max(2, Math.min(100, Number(box.height || 0) * 100))}%`
+    };
+}
+
+function buildPdfEvidenceOverlay(citation) {
+    const boundingBoxes = [];
+    if (Array.isArray(citation?.bounding_boxes)) {
+        citation.bounding_boxes.forEach((box) => {
+            if (box && typeof box === 'object') {
+                boundingBoxes.push(box);
+            }
+        });
+    } else if (citation?.bounding_box && typeof citation.bounding_box === 'object') {
+        boundingBoxes.push(citation.bounding_box);
+    }
+
+    const wrapper = document.createElement('section');
+    wrapper.className = 'copilot-pdf-overlay';
+
+    const title = document.createElement('p');
+    title.className = 'copilot-pdf-overlay-title';
+    title.textContent = 'PDF Evidence Overlay';
+    wrapper.appendChild(title);
+
+    if (boundingBoxes.length === 0) {
+        const note = document.createElement('p');
+        note.className = 'copilot-pdf-overlay-note';
+        note.textContent = 'Exact PDF highlight unavailable for this source.';
+        wrapper.appendChild(note);
+        return wrapper;
+    }
+
+    const page = document.createElement('div');
+    page.className = 'copilot-pdf-overlay-page';
+
+    boundingBoxes.forEach((box) => {
+        const percent = buildBoundingBoxPercent(box);
+        if (!percent) {
+            return;
+        }
+        const highlight = document.createElement('div');
+        highlight.className = 'copilot-pdf-overlay-box';
+        highlight.style.left = percent.left;
+        highlight.style.top = percent.top;
+        highlight.style.width = percent.width;
+        highlight.style.height = percent.height;
+        page.appendChild(highlight);
+    });
+
+    wrapper.appendChild(page);
+    return wrapper;
+}
+
+function buildCitationPreviewBody(data) {
+    const fragment = document.createDocumentFragment();
+    const fallbackPreviewUrl = (
+        !data.preview_url
+        && copilotConfig.documentPreviewUrl
+        && Number(data.document?.source_document_id || 0) > 0
+        && Number(data.document?.patient_id || 0) > 0
+    )
+        ? `${copilotConfig.documentPreviewUrl}?source_document_id=${encodeURIComponent(String(data.document.source_document_id))}&patient_id=${encodeURIComponent(String(data.document.patient_id))}&role=${encodeURIComponent(String(state.activeRole || 'doctor'))}`
+        : '';
+    const previewUrl = data.preview_url || fallbackPreviewUrl;
+
+    const meta = document.createElement('div');
+    meta.className = 'copilot-citation-preview-meta';
+    [
+        `Source type: ${citationSourceTypeLabel(data.citation || data)}`,
+        data.page_or_section ? `Location: ${data.page_or_section}` : '',
+        data.field_or_chunk_id ? `Field / chunk: ${data.field_or_chunk_id}` : '',
+        (data.citation?.source_document_id || data.document?.source_document_id)
+            ? `Source document: ${String(data.citation?.source_document_id || data.document?.source_document_id)}`
+            : '',
+        data.confidence !== undefined ? `Confidence: ${citationConfidenceLabel(data.confidence)}` : '',
+        data.review_status ? `Review: ${String(data.review_status).replace(/_/g, ' ')}` : ''
+    ].filter(Boolean).forEach((value) => {
+        const chip = document.createElement('span');
+        chip.className = 'copilot-citation-preview-chip';
+        chip.textContent = value;
+        meta.appendChild(chip);
+    });
+    fragment.appendChild(meta);
+
+    const quote = document.createElement('section');
+    quote.className = 'copilot-citation-preview-copy';
+
+    const quoteTitle = document.createElement('h4');
+    quoteTitle.textContent = 'Cited evidence';
+    quote.appendChild(quoteTitle);
+
+    const quoteText = document.createElement('pre');
+    quoteText.className = 'copilot-citation-preview-quote';
+    quoteText.textContent = String(data.quote_or_value || data.preview_text || 'No source snippet was available.');
+    quote.appendChild(quoteText);
+    fragment.appendChild(quote);
+
+    if (data.preview_mode === 'pdf') {
+        const pdfWrap = document.createElement('section');
+        pdfWrap.className = 'copilot-citation-preview-pdf';
+
+        if (previewUrl) {
+            const iframe = document.createElement('iframe');
+            iframe.className = 'copilot-citation-preview-frame';
+            iframe.src = previewUrl;
+            iframe.loading = 'lazy';
+            iframe.title = data.source_label || 'Document preview';
+            pdfWrap.appendChild(iframe);
+        }
+
+        pdfWrap.appendChild(buildPdfEvidenceOverlay(data.citation || data));
+        fragment.appendChild(pdfWrap);
+    } else if (data.preview_mode === 'rag_snippet') {
+        const snippet = document.createElement('section');
+        snippet.className = 'copilot-citation-preview-copy';
+
+        const title = document.createElement('h4');
+        title.textContent = data.field_or_chunk_id
+            ? `Retrieved snippet · ${data.field_or_chunk_id}`
+            : 'Retrieved snippet';
+        snippet.appendChild(title);
+
+        const copy = document.createElement('pre');
+        copy.className = 'copilot-citation-preview-quote';
+        copy.textContent = String(data.preview_text || data.quote_or_value || '');
+        snippet.appendChild(copy);
+        fragment.appendChild(snippet);
+    }
+
+    if (previewUrl) {
+        const linkRow = document.createElement('div');
+        linkRow.className = 'copilot-citation-preview-links';
+
+        const openLink = document.createElement('a');
+        openLink.className = 'copilot-citation-preview-link';
+        openLink.href = previewUrl;
+        openLink.target = '_blank';
+        openLink.rel = 'noopener noreferrer';
+        openLink.textContent = 'Open source document';
+        linkRow.appendChild(openLink);
+
+        fragment.appendChild(linkRow);
+    }
+
+    return fragment;
+}
+
+function renderCitationPreviewShell() {
+    const shell = ensureCitationPreviewShell();
+    const { root, modal } = shell;
+    modal.innerHTML = '';
+
+    if (!state.citationPreview.open) {
+        root.hidden = true;
+        return;
+    }
+
+    root.hidden = false;
+
+    const header = document.createElement('div');
+    header.className = 'copilot-ambient-modal-header';
+
+    const copy = document.createElement('div');
+    const title = document.createElement('h3');
+    title.textContent = state.citationPreview.title || 'Source preview';
+    copy.appendChild(title);
+
+    const subtitle = document.createElement('p');
+    subtitle.textContent = state.citationPreview.loading
+        ? 'Loading cited source material...'
+        : 'Review the supporting source evidence for this clinical claim.';
+    copy.appendChild(subtitle);
+    header.appendChild(copy);
+
+    const closeButton = document.createElement('button');
+    closeButton.type = 'button';
+    closeButton.className = 'copilot-ambient-modal-close';
+    closeButton.setAttribute('aria-label', 'Close source preview');
+    closeButton.textContent = '×';
+    closeButton.addEventListener('click', closeCitationSourcePreview);
+    header.appendChild(closeButton);
+    modal.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'copilot-ambient-modal-body';
+
+    if (state.citationPreview.loading) {
+        const loading = document.createElement('p');
+        loading.textContent = 'Loading source preview...';
+        body.appendChild(loading);
+    } else if (state.citationPreview.error) {
+        const error = document.createElement('div');
+        error.className = 'copilot-ambient-modal-error';
+        error.textContent = state.citationPreview.error;
+        body.appendChild(error);
+    } else if (state.citationPreview.data) {
+        body.appendChild(buildCitationPreviewBody(state.citationPreview.data));
+    }
+
+    modal.appendChild(body);
+}
+
+async function openCitationSourcePreview(message, citation) {
+    if (!message || !citation || typeof citation !== 'object') {
+        return;
+    }
+
+    setCitationPreviewState({
+        open: true,
+        loading: true,
+        error: '',
+        data: null,
+        title: citationPreviewTitle(citation)
+    });
+
+    try {
+        restoreSessionIfAvailable();
+        const response = await fetch(copilotConfig.citationSourceUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                csrf_token_form: copilotConfig.csrfToken,
+                citation,
+                patient_id: Number(message.patientId || patientSelect?.value || 0),
+                role: message.staffRole || state.activeRole
+            })
+        });
+
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+            throw new Error(data.error || 'Unable to load the cited source preview right now.');
+        }
+
+        setCitationPreviewState({
+            open: true,
+            loading: false,
+            error: '',
+            data: data.preview || null,
+            title: data.preview?.source_label || citationPreviewTitle(citation)
+        });
+    } catch (error) {
+        setCitationPreviewState({
+            open: true,
+            loading: false,
+            error: error.message || 'Unable to load the cited source preview right now.',
+            data: null
+        });
+    }
 }
 
 function buildAttachmentEvidenceMeta(toolOutput) {
@@ -2225,6 +3918,14 @@ function buildAssistantRuntimeMeta(message) {
 
     if (message.meta.rag_grounded !== undefined) {
         items.push(['RAG-grounded', message.meta.rag_grounded ? 'yes' : 'no']);
+    }
+
+    if (message.meta.retrieval_mode) {
+        items.push(['Retrieval mode', retrievalModeLabel(message.meta.retrieval_mode)]);
+    }
+
+    if (message.meta.rerank_provider) {
+        items.push(['Reranker', rerankProviderLabel(message.meta.rerank_provider)]);
     }
 
     if (message.meta.agent_architecture) {
@@ -2420,7 +4121,21 @@ function appendBubbleContent(bubble, message) {
 
             const listItem = document.createElement('li');
             listItem.className = `copilot-section-item ${itemToneClassName(section.tone || 'neutral')}`.trim();
-            listItem.textContent = item;
+            const itemText = document.createElement('span');
+            itemText.className = 'copilot-section-item-text';
+            itemText.textContent = item;
+            listItem.appendChild(itemText);
+
+            if (message.role === 'assistant') {
+                const matchingClaims = findMatchingClaimsForSectionItem(message, item, section.title || '');
+                const citations = dedupeCitationList(
+                    matchingClaims.flatMap((claim) => Array.isArray(claim.citations) ? claim.citations : [])
+                );
+                const citationChips = buildCitationChipsForMessage(citations, message);
+                if (citationChips) {
+                    listItem.appendChild(citationChips);
+                }
+            }
             list.appendChild(listItem);
         });
 
@@ -2447,7 +4162,18 @@ function appendBubbleContent(bubble, message) {
         sourceEntries.forEach((entry) => {
             const listItem = document.createElement('li');
             listItem.className = 'copilot-section-item';
-            listItem.textContent = entry.title;
+            const label = document.createElement('span');
+            label.className = 'copilot-section-item-text';
+            label.textContent = entry.title;
+            listItem.appendChild(label);
+
+            const sourceCitation = findCitationForSourceEntry(message, entry);
+            if (sourceCitation) {
+                const chips = buildCitationChipsForMessage([sourceCitation], message);
+                if (chips) {
+                    listItem.appendChild(chips);
+                }
+            }
             sourceList.appendChild(listItem);
         });
 
@@ -2511,9 +4237,39 @@ function renderMessages(shouldScrollToBottom = false) {
             stack.appendChild(agentWorkflowTrace);
         }
 
+        const observabilityTrace = buildObservabilityTraceCard(message);
+        if (observabilityTrace) {
+            stack.appendChild(observabilityTrace);
+        }
+
         const runtimeMeta = buildAssistantRuntimeMeta(message);
         if (runtimeMeta) {
             stack.appendChild(runtimeMeta);
+        }
+
+        const extractionResultsPanel = buildExtractionResultsPanel(message);
+        if (extractionResultsPanel) {
+            stack.appendChild(extractionResultsPanel);
+        }
+
+        const evidenceSnippetsPanel = buildEvidenceSnippetsPanel(message);
+        if (evidenceSnippetsPanel) {
+            stack.appendChild(evidenceSnippetsPanel);
+        }
+
+        const schemaValidationPanel = buildSchemaValidationPanel(message);
+        if (schemaValidationPanel) {
+            stack.appendChild(schemaValidationPanel);
+        }
+
+        const citationContractPanel = buildCitationContractPanel(message);
+        if (citationContractPanel) {
+            stack.appendChild(citationContractPanel);
+        }
+
+        const clinicianReviewPanel = buildClinicianReviewPanel(message);
+        if (clinicianReviewPanel) {
+            stack.appendChild(clinicianReviewPanel);
         }
 
         const assistantActions = buildAssistantActionRow(message);
@@ -2788,6 +4544,411 @@ function buildAssistantActionRow(message) {
     return actions.childElementCount > 0 ? actions : null;
 }
 
+function reviewDecisionToStatus(decision) {
+    if (decision === 'approved') {
+        return 'clinician_approved';
+    }
+    if (decision === 'rejected') {
+        return 'clinician_rejected';
+    }
+    return 'pending_clinician_review';
+}
+
+function reviewDecisionLabel(status) {
+    if (status === 'clinician_approved') {
+        return 'Approved';
+    }
+    if (status === 'clinician_rejected') {
+        return 'Rejected';
+    }
+    return 'Pending';
+}
+
+function updateReviewQueueForMessage(messageId, factId, reviewStatus, summary) {
+    const messageIndex = state.messages.findIndex((message) => message.id === messageId);
+    if (messageIndex === -1) {
+        return;
+    }
+
+    const nextMessage = {
+        ...state.messages[messageIndex],
+        meta: {
+            ...(state.messages[messageIndex].meta || {})
+        }
+    };
+    const toolOutput = nextMessage.meta.tool_output && typeof nextMessage.meta.tool_output === 'object'
+        ? { ...nextMessage.meta.tool_output }
+        : {};
+    const reviewQueue = toolOutput.reviewQueue && typeof toolOutput.reviewQueue === 'object'
+        ? { ...toolOutput.reviewQueue }
+        : {};
+    const facts = Array.isArray(reviewQueue.facts) ? reviewQueue.facts.map((fact) => {
+        if (!fact || typeof fact !== 'object' || Number(fact.id || 0) !== Number(factId)) {
+            return fact;
+        }
+
+        return {
+            ...fact,
+            reviewStatus
+        };
+    }) : [];
+
+    reviewQueue.facts = facts;
+    if (summary && typeof summary === 'object') {
+        reviewQueue.summary = {
+            ...(reviewQueue.summary || {}),
+            ...summary
+        };
+    }
+    if (summary && typeof summary.reviewStatus === 'string') {
+        reviewQueue.status = summary.reviewStatus;
+    }
+
+    toolOutput.reviewQueue = reviewQueue;
+    nextMessage.meta.tool_output = toolOutput;
+    state.messages[messageIndex] = nextMessage;
+    renderMessages(false);
+}
+
+async function submitClinicianReviewDecision(message, fact, decision) {
+    if (!message || !fact || !decision) {
+        return;
+    }
+
+    const requestKey = `${message.id}:${fact.id}:${decision}`;
+    if (reviewSubmissionState.has(requestKey)) {
+        return;
+    }
+
+    reviewSubmissionState.add(requestKey);
+    renderMessages(false);
+
+    try {
+        const response = await fetch('api/document_review.php', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                csrf_token_form: copilotConfig.csrfToken,
+                fact_id: Number(fact.id || 0),
+                decision,
+                role: message.staffRole || state.activeRole
+            })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+            throw new Error(data.error || data.message || 'Unable to record the clinician review decision.');
+        }
+
+        const reviewStatus = data.fact?.review_status || reviewDecisionToStatus(decision);
+        updateReviewQueueForMessage(message.id, fact.id, reviewStatus, data.summary || {});
+
+        if (CopilotTelemetry) {
+            const eventName = decision === 'approved'
+                ? 'clinician_fact_approved'
+                : (decision === 'rejected' ? 'clinician_fact_rejected' : 'clinician_review_completed');
+            CopilotTelemetry.log(eventName, {
+                requestId: message.requestId || null,
+                role: message.staffRole || state.activeRole,
+                mode: message.mode || 'lab_pdf_ingestion',
+                selectedPatientKey: message.selectedPatientKey || currentSelectedPatientKey(),
+                documentType: normalizeAttachmentDocumentType(message.meta?.tool_output?.documentMetadata?.documentType || 'lab_pdf'),
+                toolStatus: decision,
+                reviewStatus: reviewStatus,
+                approvedItemCount: Number(data.summary?.approvedCount || 0)
+            });
+            if ((Number(data.summary?.pendingCount || 0) === 0) || decision === 'pending') {
+                CopilotTelemetry.log('clinician_review_completed', {
+                    requestId: message.requestId || null,
+                    role: message.staffRole || state.activeRole,
+                    mode: message.mode || 'lab_pdf_ingestion',
+                    selectedPatientKey: message.selectedPatientKey || currentSelectedPatientKey(),
+                    documentType: normalizeAttachmentDocumentType(message.meta?.tool_output?.documentMetadata?.documentType || 'lab_pdf'),
+                    toolStatus: 'review_updated',
+                    reviewStatus: data.summary?.reviewStatus || reviewStatus,
+                    approvedItemCount: Number(data.summary?.approvedCount || 0)
+                });
+            }
+        }
+    } catch (error) {
+        setUploadNotice(error.message || 'Unable to save the clinician review decision right now.', 'error', {
+            timeoutMs: 5200
+        });
+    } finally {
+        reviewSubmissionState.delete(requestKey);
+        renderMessages(false);
+    }
+}
+
+function buildClinicianReviewPanel(message) {
+    if (!shouldRenderResponseActions(message)) {
+        return null;
+    }
+
+    const toolOutput = message.meta?.tool_output && typeof message.meta.tool_output === 'object'
+        ? message.meta.tool_output
+        : null;
+    const reviewQueue = toolOutput?.reviewQueue && typeof toolOutput.reviewQueue === 'object'
+        ? toolOutput.reviewQueue
+        : null;
+    const facts = Array.isArray(reviewQueue?.facts) ? reviewQueue.facts.filter((fact) => fact && typeof fact === 'object') : [];
+    if (facts.length === 0) {
+        return null;
+    }
+
+    if (!message.meta?.clinician_review_opened_logged && CopilotTelemetry) {
+        CopilotTelemetry.log('clinician_review_opened', {
+            requestId: message.requestId || null,
+            role: message.staffRole || state.activeRole,
+            mode: message.mode || 'lab_pdf_ingestion',
+            selectedPatientKey: message.selectedPatientKey || currentSelectedPatientKey(),
+            documentType: normalizeAttachmentDocumentType(toolOutput?.documentMetadata?.documentType || 'lab_pdf'),
+            toolStatus: 'clinician_review_opened',
+            reviewStatus: reviewQueue.status || 'pending_clinician_review',
+            approvedItemCount: Number(reviewQueue.summary?.approvedCount || 0)
+        });
+        message.meta.clinician_review_opened_logged = true;
+    }
+
+    const wrapper = document.createElement('section');
+    wrapper.className = 'copilot-review-panel';
+
+    const banner = document.createElement('div');
+    banner.className = 'copilot-review-banner';
+    banner.textContent = reviewQueue.banner || 'Clinician Review Required';
+    wrapper.appendChild(banner);
+
+    const helper = document.createElement('p');
+    helper.className = 'copilot-review-helper';
+    helper.textContent = reviewQueue.helperText || 'Approved for demo review — not written to chart automatically.';
+    wrapper.appendChild(helper);
+
+    const summary = document.createElement('div');
+    summary.className = 'copilot-review-summary';
+    const summaryItems = [
+        `Pending: ${Number(reviewQueue.summary?.pendingCount || facts.filter((fact) => fact.reviewStatus !== 'clinician_approved' && fact.reviewStatus !== 'clinician_rejected').length)}`,
+        `Approved: ${Number(reviewQueue.summary?.approvedCount || facts.filter((fact) => fact.reviewStatus === 'clinician_approved').length)}`,
+        `Rejected: ${Number(reviewQueue.summary?.rejectedCount || facts.filter((fact) => fact.reviewStatus === 'clinician_rejected').length)}`
+    ];
+    summaryItems.forEach((value) => {
+        const chip = document.createElement('span');
+        chip.className = 'copilot-review-summary-chip';
+        chip.textContent = value;
+        summary.appendChild(chip);
+    });
+    wrapper.appendChild(summary);
+
+    const list = document.createElement('div');
+    list.className = 'copilot-review-fact-list';
+
+    facts.forEach((fact) => {
+        const factRow = document.createElement('article');
+        factRow.className = 'copilot-review-fact';
+
+        const header = document.createElement('div');
+        header.className = 'copilot-review-fact-header';
+
+        const title = document.createElement('strong');
+        title.className = 'copilot-review-fact-title';
+        title.textContent = [fact.label || 'Pending fact', fact.value || ''].filter(Boolean).join(': ');
+        header.appendChild(title);
+
+        const status = document.createElement('span');
+        status.className = 'copilot-review-fact-status';
+        status.dataset.status = fact.reviewStatus || 'pending_clinician_review';
+        status.textContent = reviewDecisionLabel(fact.reviewStatus || 'pending_clinician_review');
+        header.appendChild(status);
+
+        factRow.appendChild(header);
+
+        const meta = document.createElement('p');
+        meta.className = 'copilot-review-fact-meta';
+        const citation = fact.citation && typeof fact.citation === 'object' ? fact.citation : {};
+        meta.textContent = [
+            fact.proposedTarget ? `Target: ${fact.proposedTarget}` : '',
+            citation.page_or_section ? `Source: ${citation.page_or_section}` : '',
+            citation.quote_or_value ? `Quote/value: ${citation.quote_or_value}` : ''
+        ].filter(Boolean).join(' • ');
+        factRow.appendChild(meta);
+
+        const factCitationChips = buildCitationChipsForMessage([citation], message, {
+            compact: false
+        });
+        if (factCitationChips) {
+            factRow.appendChild(factCitationChips);
+        }
+
+        const actions = document.createElement('div');
+        actions.className = 'copilot-review-actions';
+        const isPending = reviewSubmissionState.has(`${message.id}:${fact.id}:approved`)
+            || reviewSubmissionState.has(`${message.id}:${fact.id}:rejected`)
+            || reviewSubmissionState.has(`${message.id}:${fact.id}:pending`);
+
+        [
+            ['approved', 'Approve'],
+            ['rejected', 'Reject'],
+            ['pending', 'Leave Pending']
+        ].forEach(([decision, label]) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'copilot-review-button';
+            button.textContent = label;
+            button.disabled = isPending;
+            if (reviewDecisionToStatus(decision) === (fact.reviewStatus || 'pending_clinician_review')) {
+                button.dataset.active = 'true';
+            }
+            button.addEventListener('click', () => {
+                submitClinicianReviewDecision(message, fact, decision);
+            });
+            actions.appendChild(button);
+        });
+
+        factRow.appendChild(actions);
+        list.appendChild(factRow);
+    });
+
+    wrapper.appendChild(list);
+    return wrapper;
+}
+
+function buildSchemaValidationPanel(message) {
+    if (!message || message.role !== 'assistant') {
+        return null;
+    }
+
+    const toolOutput = message.meta?.tool_output && typeof message.meta.tool_output === 'object'
+        ? message.meta.tool_output
+        : null;
+    const schemaValidationRaw = toolOutput?.schemaValidation && typeof toolOutput.schemaValidation === 'object'
+        ? toolOutput.schemaValidation
+        : null;
+    const strictExtraction = toolOutput?.strictExtraction
+        && typeof toolOutput.strictExtraction === 'object'
+        && !Array.isArray(toolOutput.strictExtraction)
+        && Object.keys(toolOutput.strictExtraction).length > 0
+        ? toolOutput.strictExtraction
+        : null;
+    const schemaValidation = schemaValidationRaw && Object.keys(schemaValidationRaw).some((key) => {
+        const value = schemaValidationRaw[key];
+        return value !== '' && value !== null && value !== false && (!Array.isArray(value) || value.length > 0);
+    })
+        ? schemaValidationRaw
+        : buildSchemaValidationFallback(message, strictExtraction);
+    if (!schemaValidation) {
+        return null;
+    }
+    const validationErrors = Array.isArray(schemaValidation.validationErrors)
+        ? schemaValidation.validationErrors.filter((item) => item && typeof item === 'object')
+        : [];
+    const missingData = Array.isArray(strictExtraction?.missing_or_ambiguous_data)
+        ? strictExtraction.missing_or_ambiguous_data
+        : (Array.isArray(toolOutput?.missingData) ? toolOutput.missingData : []);
+    const extractionStatus = String(schemaValidation.extractionStatus || strictExtraction?.extraction_status || '').trim();
+    const schemaValid = Boolean(schemaValidation.schemaValid ?? schemaValidation.valid);
+    const badgeState = schemaValid
+        ? (extractionStatus === 'review_required' ? 'review_required' : 'passed')
+        : 'failed';
+    const schemaStatusLabels = {
+        passed: 'Strict schema passed',
+        reviewRequired: 'Clinician review required',
+        failed: 'Schema validation failed',
+        missingCitation: 'Missing source citation',
+        missingRequiredField: 'Missing required field',
+        unsupportedDocumentType: 'Unsupported document type'
+    };
+    const badgeLabel = schemaValidation.statusLabel
+        || (schemaValid
+            ? (extractionStatus === 'review_required' ? schemaStatusLabels.reviewRequired : schemaStatusLabels.passed)
+            : schemaStatusLabels.failed);
+
+    const wrapper = document.createElement('section');
+    wrapper.className = 'copilot-schema-panel';
+
+    const header = document.createElement('div');
+    header.className = 'copilot-schema-header';
+
+    const title = document.createElement('h3');
+    title.className = 'copilot-schema-title';
+    title.textContent = 'Schema Validation';
+    header.appendChild(title);
+
+    const badge = document.createElement('span');
+    badge.className = 'copilot-schema-badge';
+    badge.dataset.status = badgeState;
+    badge.textContent = badgeLabel;
+    header.appendChild(badge);
+    wrapper.appendChild(header);
+
+    const summary = document.createElement('p');
+    summary.className = 'copilot-schema-summary';
+    summary.textContent = schemaValidation.userMessage
+        || (schemaValid
+            ? 'Structured extraction passed the strict schema gate and remains pending clinician review.'
+            : 'Extraction completed, but the result did not pass strict validation. Clinician review is required before this information can be used.');
+    wrapper.appendChild(summary);
+
+    const meta = document.createElement('div');
+    meta.className = 'copilot-schema-meta';
+    [
+        `Schema: ${schemaValidation.schemaName || 'Strict extraction schema'}`,
+        `Errors: ${Number(schemaValidation.validationErrorCount || validationErrors.length || 0)}`,
+        `Citations: ${Number(schemaValidation.citationCount || 0)}`,
+        `Review status: ${schemaValidation.reviewStatus || 'pending_clinician_review'}`
+    ].forEach((value) => {
+        const chip = document.createElement('span');
+        chip.className = 'copilot-schema-meta-chip';
+        chip.textContent = value;
+        meta.appendChild(chip);
+    });
+    wrapper.appendChild(meta);
+
+    const issues = validationErrors.slice(0, 6);
+    if (issues.length > 0) {
+        const list = document.createElement('ul');
+        list.className = 'copilot-schema-issue-list';
+        issues.forEach((issue) => {
+            const item = document.createElement('li');
+            item.className = 'copilot-schema-issue';
+
+            const field = document.createElement('strong');
+            field.className = 'copilot-schema-issue-field';
+            field.textContent = String(issue.field || 'Field');
+            item.appendChild(field);
+
+            const messageText = document.createElement('span');
+            messageText.className = 'copilot-schema-issue-text';
+            messageText.textContent = ` ${String(issue.issue || 'Validation issue detected.')}`;
+            item.appendChild(messageText);
+
+            if (issue.suggested_review_action) {
+                const action = document.createElement('div');
+                action.className = 'copilot-schema-issue-action';
+                action.textContent = `Review action: ${String(issue.suggested_review_action)}`;
+                item.appendChild(action);
+            }
+
+            list.appendChild(item);
+        });
+        wrapper.appendChild(list);
+    } else if (Array.isArray(missingData) && missingData.length > 0) {
+        const list = document.createElement('ul');
+        list.className = 'copilot-schema-issue-list';
+        missingData.slice(0, 4).forEach((entry) => {
+            const item = document.createElement('li');
+            item.className = 'copilot-schema-issue';
+            item.textContent = typeof entry === 'string'
+                ? entry
+                : `${String(entry.field || 'Field')}: ${String(entry.issue || 'Requires clinician review.')}`;
+            list.appendChild(item);
+        });
+        wrapper.appendChild(list);
+    }
+
+    return wrapper;
+}
+
 function inferPromptMode(prompt) {
     const value = prompt.toLowerCase();
     if (/(lab pdf ingestion|lab pdf|attach.*lab pdf|upload.*lab pdf|ingest.*lab pdf|extract.*lab pdf|pdf lab results|uploaded lab evidence|uploaded evidence|attached lab evidence)/.test(value)) {
@@ -2897,7 +5058,7 @@ function buildAmbientVisitContextForRequest(patientKey, role) {
     };
 }
 
-function buildCopilotRequestPayload(prompt, requestId, resolvedRole, resolvedMode, resolvedPatientId, historyPayload, ambientVisitContext, extraPayload) {
+function buildCopilotRequestPayload(prompt, requestId, resolvedRole, resolvedMode, resolvedPatientId, historyPayload, ambientVisitContext, extraPayload, documentType = '') {
     return {
         action: 'chat',
         patient_id: resolvedPatientId || null,
@@ -2909,6 +5070,7 @@ function buildCopilotRequestPayload(prompt, requestId, resolvedRole, resolvedMod
         ambient_context: ambientVisitContext ? {
             latestApprovedVisit: ambientVisitContext
         } : null,
+        ...(documentType ? { doc_type: documentType } : {}),
         ...(extraPayload && typeof extraPayload === 'object' ? extraPayload : {}),
         request_id: requestId,
         csrf_token_form: copilotConfig.csrfToken
@@ -2918,6 +5080,7 @@ function buildCopilotRequestPayload(prompt, requestId, resolvedRole, resolvedMod
 function buildCopilotFormDataPayload(payload, options = {}) {
     const formData = new FormData();
     const hasLabPdfWorkflow = options.labPdfFile instanceof File || Boolean(options.useSeededLabPdf);
+    const documentType = normalizeAttachmentDocumentType(options.documentType || payload.doc_type || 'lab_pdf');
     formData.append('action', String(hasLabPdfWorkflow ? 'attach_and_extract_lab_pdf' : (payload.action || 'chat')));
     formData.append('patient_id', payload.patient_id ? String(payload.patient_id) : '');
     formData.append('role', String(payload.role || state.activeRole));
@@ -2928,7 +5091,8 @@ function buildCopilotFormDataPayload(payload, options = {}) {
     formData.append('ambient_context_json', JSON.stringify(payload.ambient_context || null));
     formData.append('request_id', String(payload.request_id || createId('request')));
     formData.append('csrf_token_form', String(payload.csrf_token_form || copilotConfig.csrfToken || ''));
-    formData.append('attachment_purpose', 'lab_pdf_ingestion');
+    formData.append('doc_type', documentType);
+    formData.append('attachment_purpose', documentType === 'intake_form' ? 'intake_form' : 'lab_pdf_ingestion');
 
     if (options.useSeededLabPdf) {
         formData.append('use_seeded_lab_pdf', '1');
@@ -3039,7 +5203,10 @@ async function requestClearLabEvidence() {
 
         console.info('[OpenEMR Copilot] Clear Lab Evidence summary', {
             requestId,
-            selectedPatientKey,
+            patientContextPresent: Boolean(selectedPatientKey),
+            patientContextHash: window.OpenEMRCopilotObservability && typeof window.OpenEMRCopilotObservability.hashIdentifier === 'function'
+                ? window.OpenEMRCopilotObservability.hashIdentifier(selectedPatientKey || '')
+                : null,
             removedLabFiles: Number(counts.removedLabFiles || 0),
             removedLabChunks: Number(counts.removedLabChunks || 0),
             removedLabExtractions: Number(counts.removedLabExtractions || 0),
@@ -3142,6 +5309,9 @@ async function requestAssistantResponse(prompt, options = {}) {
         useDemoSeed: Boolean(state.labPdf.useDemoSeed),
         requestId: state.labPdf.requestId || requestId
     } : null;
+    const attachmentDocumentType = hasLabPdfAttachment
+        ? normalizeAttachmentDocumentType(labPdfAttachment?.descriptor?.documentType || currentSelectedDocumentType())
+        : '';
     const requestedUploadedDocumentTypes = detectRequestedUploadedDocumentTypes(trimmedPrompt);
     if (hasLabPdfAttachment && labPdfAttachment?.descriptor?.documentType === 'intake_form' && !requestedUploadedDocumentTypes.includes('intake_form')) {
         requestedUploadedDocumentTypes.push('intake_form');
@@ -3160,7 +5330,6 @@ async function requestAssistantResponse(prompt, options = {}) {
     const historyPayload = buildHistoryPayload();
 
     if (hasLabPdfAttachment && !resolvedPatientId) {
-        const attachmentDocumentType = normalizeAttachmentDocumentType(state.labPdf.descriptor?.documentType);
         addAssistantMessage(`Select a demo patient before ingesting a ${attachmentWorkflowLabel(attachmentDocumentType)} so the extracted chunks can be grounded to the correct chart context.`, {
             mode: resolvedMode,
             staffRole: resolvedRole,
@@ -3307,7 +5476,26 @@ async function requestAssistantResponse(prompt, options = {}) {
     renderMessages(true);
 
     if (hasLabPdfAttachment && labPdfAttachment?.descriptor) {
-        const attachmentDocumentType = normalizeAttachmentDocumentType(labPdfAttachment.descriptor.documentType);
+        if (CopilotTelemetry) {
+            CopilotTelemetry.log('document_upload_started', {
+                requestId,
+                role: resolvedRole,
+                mode: resolvedMode,
+                selectedPatientKey,
+                documentType: attachmentDocumentType,
+                documentTitle: labPdfAttachment.descriptor.fileName || null,
+                toolStatus: 'document_upload_started'
+            });
+            CopilotTelemetry.log('extraction_started', {
+                requestId,
+                role: resolvedRole,
+                mode: resolvedMode,
+                selectedPatientKey,
+                documentType: attachmentDocumentType,
+                documentTitle: labPdfAttachment.descriptor.fileName || null,
+                toolStatus: 'extraction_started'
+            });
+        }
         emitLabPdfAuditEvent('copilot_upload_received', {
             requestId,
             role: resolvedRole,
@@ -3438,12 +5626,14 @@ async function requestAssistantResponse(prompt, options = {}) {
             resolvedPatientId,
             historyPayload,
             ambientVisitContext,
-            extraPayload
+            extraPayload,
+            attachmentDocumentType
         );
         const requestPayload = hasLabPdfAttachment
             ? buildCopilotFormDataPayload(requestPayloadObject, {
                 labPdfFile: labPdfAttachment?.file || null,
-                useSeededLabPdf: Boolean(labPdfAttachment?.useDemoSeed)
+                useSeededLabPdf: Boolean(labPdfAttachment?.useDemoSeed),
+                documentType: attachmentDocumentType
             })
             : requestPayloadObject;
         const attachmentReviewDocumentType = hasLabPdfAttachment
@@ -3545,6 +5735,11 @@ async function requestAssistantResponse(prompt, options = {}) {
                     ? 'Intake form extraction did not produce reliable intake fields. Clinician must verify the source PDF.'
                     : 'PDF text extraction did not produce reliable lab rows. Clinician must verify the source PDF.'), 'warning');
                 setUploadNotice(toolOutput.safeMessage || 'Extraction review is required before relying on the uploaded PDF.', 'warning', {
+                    timeoutMs: 5600
+                });
+            } else if (toolOutput.status === 'unsupported_doc_type') {
+                setLabPdfStatus(toolOutput.safeMessage || 'Only lab PDFs and intake forms are supported in this MVP.', 'error');
+                setUploadNotice(toolOutput.safeMessage || 'Only lab PDFs and intake forms are supported in this MVP.', 'error', {
                     timeoutMs: 5600
                 });
             } else if (toolOutput.status === 'invalid_file_type' || toolOutput.status === 'role_blocked') {
@@ -3732,6 +5927,11 @@ async function requestAssistantResponse(prompt, options = {}) {
             sections: guardrailsResult.finalSections || [],
             tags: guardrailTags,
             sources: sourcePayload.sources,
+            claims: Array.isArray(data.claims) ? data.claims : [],
+            sourcesUsed: Array.isArray(data.sources_used) ? data.sources_used : [],
+            uncitedClaimsBlocked: Array.isArray(data.uncited_claims_blocked) ? data.uncited_claims_blocked : [],
+            evidenceSnippets: Array.isArray(data.evidence_snippets) ? data.evidence_snippets : [],
+            safetyStatus: String(data.safety_status || ''),
             safety: guardrailsResult.finalSafety || data.safety_note || defaultGuardrailSafetyNote,
             guardrails: guardrailsResult,
             traceId: requestId,
@@ -3743,9 +5943,31 @@ async function requestAssistantResponse(prompt, options = {}) {
                 restriction_type: meta.restriction_type || guardrailsResult.blockedReason || '',
                 guardrails_risk_level: guardrailsResult.riskLevel || 'low',
                 latest_ambient_visit_found: sourcePayload.latestAmbientVisitFound,
-                attachment_evidence: attachmentEvidenceMeta
+                attachment_evidence: attachmentEvidenceMeta,
+                tool_output: data.tool_output || {}
             }
         });
+        emitBasicHybridRagAuditEvents(meta, {
+            requestId,
+            role: data.role || resolvedRole,
+            mode: data.mode || resolvedMode,
+            selectedPatientKey
+        });
+        if (CopilotTelemetry && (Array.isArray(data.claims) || meta.citation_contract_status)) {
+            CopilotTelemetry.log('citation_contract_validated', {
+                requestId,
+                role: data.role || resolvedRole,
+                mode: data.mode || resolvedMode,
+                selectedPatientKey,
+                claimCount: Number(meta.claim_count ?? (Array.isArray(data.claims) ? data.claims.length : 0)),
+                citedClaimCount: Number(meta.cited_claim_count ?? (Array.isArray(data.claims) ? data.claims.length : 0)),
+                uncitedClaimCount: Number(meta.uncited_claim_count ?? (Array.isArray(data.uncited_claims_blocked) ? data.uncited_claims_blocked.length : 0)),
+                invalidCitationCount: Number(meta.invalid_citation_count ?? 0),
+                blockedClaimCount: Number(meta.blocked_claim_count ?? (Array.isArray(data.uncited_claims_blocked) ? data.uncited_claims_blocked.length : 0)),
+                sourceCount: Number(meta.source_count ?? (Array.isArray(data.sources_used) ? data.sources_used.length : sourcePayload.sources.length)),
+                citationContractStatus: String(meta.citation_contract_status || data.safety_status || '')
+            });
+        }
         if (tracksUploadedDocumentRetrieval) {
             logUploadedDocumentRetrievalEvent('copilot_sources_used_finalized', {
                 requestId,
@@ -3821,6 +6043,129 @@ async function requestAssistantResponse(prompt, options = {}) {
             const extractedFacts = Array.isArray(toolOutput.extractedFacts) ? toolOutput.extractedFacts : [];
             const sourceId = toolOutput.sourceMetadata?.sourceId || toolOutput.documentMetadata?.sourceId || null;
             const hasGuardLifecycle = Boolean(documentGuardDecision || textractStatus || comprehendStatus);
+            const reviewQueue = toolOutput.reviewQueue && typeof toolOutput.reviewQueue === 'object'
+                ? toolOutput.reviewQueue
+                : {};
+            const sourceDocumentId = toolOutput.documentMetadata?.sourceDocumentId || toolOutput.sourceMetadata?.sourceDocumentId || null;
+
+            if (CopilotTelemetry) {
+                CopilotTelemetry.log('document_uploaded', {
+                    requestId,
+                    role: data.role || resolvedRole,
+                    mode: data.mode || resolvedMode,
+                    selectedPatientKey,
+                    documentType: toolDocumentType,
+                    documentTitle: toolOutput.documentMetadata?.title || toolOutput.sourceMetadata?.fileName || null,
+                    toolStatus: toolStatus || 'document_uploaded',
+                    reviewStatus: toolOutput.documentMetadata?.reviewStatus || reviewQueue.status || 'pending_clinician_review'
+                });
+                if (sourceDocumentId) {
+                    CopilotTelemetry.log('source_document_stored', {
+                        requestId,
+                        role: data.role || resolvedRole,
+                        mode: data.mode || resolvedMode,
+                        selectedPatientKey,
+                        documentType: toolDocumentType,
+                        documentTitle: toolOutput.documentMetadata?.title || toolOutput.sourceMetadata?.fileName || null,
+                        toolStatus: 'source_document_stored',
+                        reviewStatus: toolOutput.documentMetadata?.reviewStatus || reviewQueue.status || 'pending_clinician_review'
+                    });
+                }
+                CopilotTelemetry.log('rag_index_started', {
+                    requestId,
+                    role: data.role || resolvedRole,
+                    mode: data.mode || resolvedMode,
+                    selectedPatientKey,
+                    documentType: toolDocumentType,
+                    toolStatus: 'rag_index_started',
+                    reviewStatus: toolOutput.documentMetadata?.reviewStatus || reviewQueue.status || 'pending_clinician_review'
+                });
+                CopilotTelemetry.log('rag_index_completed', {
+                    requestId,
+                    role: data.role || resolvedRole,
+                    mode: data.mode || resolvedMode,
+                    selectedPatientKey,
+                    documentType: toolDocumentType,
+                    toolStatus: 'rag_index_completed',
+                    reviewStatus: toolOutput.documentMetadata?.reviewStatus || reviewQueue.status || 'pending_clinician_review'
+                });
+                CopilotTelemetry.log('evidence_safety_check_started', {
+                    requestId,
+                    role: data.role || resolvedRole,
+                    mode: data.mode || resolvedMode,
+                    selectedPatientKey,
+                    documentType: toolDocumentType,
+                    toolStatus: 'evidence_safety_check_started'
+                });
+                CopilotTelemetry.log('evidence_safety_check_completed', {
+                    requestId,
+                    role: data.role || resolvedRole,
+                    mode: data.mode || resolvedMode,
+                    selectedPatientKey,
+                    documentType: toolDocumentType,
+                    toolStatus: 'evidence_safety_check_completed',
+                    reviewStatus: toolOutput.documentMetadata?.reviewStatus || reviewQueue.status || 'pending_clinician_review'
+                });
+                if (toolOutput.schemaValidation && typeof toolOutput.schemaValidation === 'object') {
+                    CopilotTelemetry.log('extraction_schema_validated', {
+                        requestId,
+                        role: data.role || resolvedRole,
+                        mode: data.mode || resolvedMode,
+                        selectedPatientKey,
+                        documentType: toolDocumentType,
+                        toolStatus: toolOutput.schemaValidation.valid ? 'schema_valid' : 'schema_invalid',
+                        schemaName: toolOutput.schemaValidation.schemaName || '',
+                        schemaValid: Boolean(toolOutput.schemaValidation.schemaValid ?? toolOutput.schemaValidation.valid),
+                        validationErrorCount: Number(toolOutput.schemaValidation.validationErrorCount || (toolOutput.schemaValidation.validationErrors || []).length || 0),
+                        missingRequiredFieldCount: Number(toolOutput.schemaValidation.missingRequiredFieldCount || 0),
+                        citationCount: Number(toolOutput.schemaValidation.citationCount || 0),
+                        extractionStatus: toolOutput.schemaValidation.extractionStatus || '',
+                        reviewStatus: toolOutput.schemaValidation.reviewStatus || 'pending_clinician_review'
+                    });
+                }
+                if (Array.isArray(toolOutput.pendingReviewFacts) && toolOutput.pendingReviewFacts.length > 0) {
+                    CopilotTelemetry.log('facts_persisted_pending_review', {
+                        requestId,
+                        role: data.role || resolvedRole,
+                        mode: data.mode || resolvedMode,
+                        selectedPatientKey,
+                        documentType: toolDocumentType,
+                        toolStatus: 'facts_persisted_pending_review',
+                        reviewStatus: reviewQueue.status || 'pending_clinician_review',
+                        approvedItemCount: reviewQueue.summary?.approvedCount || 0
+                    });
+                }
+                if (toolStatus === 'review_required' || toolStatus === 'extraction_review_required') {
+                    CopilotTelemetry.log('extraction_review_required', {
+                        requestId,
+                        role: data.role || resolvedRole,
+                        mode: data.mode || resolvedMode,
+                        selectedPatientKey,
+                        documentType: toolDocumentType,
+                        toolStatus
+                    });
+                }
+                if (toolStatus === 'failed') {
+                    CopilotTelemetry.log('extraction_failed', {
+                        requestId,
+                        role: data.role || resolvedRole,
+                        mode: data.mode || resolvedMode,
+                        selectedPatientKey,
+                        documentType: toolDocumentType,
+                        toolStatus
+                    });
+                }
+                if (toolStatus === 'unsupported_doc_type' || toolStatus === 'invalid_file_type') {
+                    CopilotTelemetry.log('unsupported_doc_type_blocked', {
+                        requestId,
+                        role: data.role || resolvedRole,
+                        mode: data.mode || resolvedMode,
+                        selectedPatientKey,
+                        documentType: toolDocumentType,
+                        toolStatus
+                    });
+                }
+            }
 
             if (hasGuardLifecycle) {
                 emitLabPdfAuditEvent('copilot_document_guard_started', {
@@ -3959,7 +6304,7 @@ async function requestAssistantResponse(prompt, options = {}) {
                 });
             }
 
-            if (toolStatus === 'invalid_file_type' || toolStatus === 'role_blocked' || toolStatus === 'document_guard_rejected' || toolStatus === 'document_guard_review_required') {
+            if (toolStatus === 'unsupported_doc_type' || toolStatus === 'invalid_file_type' || toolStatus === 'role_blocked' || toolStatus === 'document_guard_rejected' || toolStatus === 'document_guard_review_required') {
                 emitLabPdfAuditEvent('copilot_lab_pdf_ingestion_failed', labPdfTelemetryPayload);
             } else {
                 emitLabPdfAuditEvent('ingestion_document_classified', {
@@ -4129,6 +6474,17 @@ async function requestAssistantResponse(prompt, options = {}) {
 
         if (labPdfAttachment?.descriptor) {
             const attachmentDocumentType = normalizeAttachmentDocumentType(labPdfAttachment.descriptor.documentType);
+            if (CopilotTelemetry) {
+                CopilotTelemetry.log('document_upload_failed', {
+                    requestId,
+                    role: resolvedRole,
+                    mode: resolvedMode,
+                    selectedPatientKey,
+                    documentType: attachmentDocumentType,
+                    documentTitle: labPdfAttachment.descriptor.fileName || null,
+                    toolStatus: error.errorCategory || 'request_failed'
+                });
+            }
             emitLabPdfAuditEvent('copilot_lab_pdf_ingestion_failed', {
                 requestId,
                 role: resolvedRole,
@@ -4715,7 +7071,7 @@ quickActionSelect.addEventListener('change', (event) => {
         updateSendState();
         input.focus();
         input.setSelectionRange(input.value.length, input.value.length);
-        setLabPdfStatus('Attach a PDF in the composer, then send your prompt through the normal copilot workflow.');
+        setLabPdfStatus(`Select ${attachmentWorkflowLabel(currentSelectedDocumentType())}, attach a PDF in the composer, then send your prompt through the normal copilot workflow.`);
         updateControlsSummary();
         return;
     }
@@ -4768,6 +7124,18 @@ if (labPdfInput) {
     });
 }
 
+if (documentTypeSelect) {
+    documentTypeSelect.addEventListener('change', (event) => {
+        syncDocumentTypeSelection(event.target.value, { emitTelemetry: true });
+        if (state.labPdf.descriptor) {
+            state.labPdf.descriptor.documentType = currentSelectedDocumentType();
+            state.labPdf.descriptor.displayLabel = `Attached: ${state.labPdf.descriptor.fileName || 'attached-document.pdf'}`;
+            refreshLabPdfAttachmentUi();
+        }
+        setLabPdfStatus(`Selected ${attachmentWorkflowLabel(currentSelectedDocumentType())}. Attach a PDF and send a prompt for draft-only clinician review.`, 'neutral');
+    });
+}
+
 if (labPdfRemoveButton) {
     labPdfRemoveButton.addEventListener('click', () => {
         clearLabPdfAttachment({
@@ -4796,6 +7164,7 @@ if (guardrailsToggle) {
 }
 
 updateRoleSelection(copilotConfig.defaultRole || 'doctor');
+syncDocumentTypeSelection('lab_pdf');
 setDisclosureState('controls', false);
 setDisclosureState('guardrails', false);
 resizeInput();

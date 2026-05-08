@@ -9,6 +9,21 @@
         return prefix + '_' + Date.now() + '_' + Math.random().toString(16).slice(2);
     }
 
+    function hashIdentifier(value) {
+        const input = String(value || '').trim();
+        if (!input) {
+            return null;
+        }
+
+        let hash = 2166136261;
+        for (let index = 0; index < input.length; index += 1) {
+            hash ^= input.charCodeAt(index);
+            hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+        }
+
+        return 'h_' + (hash >>> 0).toString(16).padStart(8, '0');
+    }
+
     function ensureTelemetryHost(targetWindow) {
         if (!targetWindow) {
             return null;
@@ -34,6 +49,9 @@
             'mode',
             'selectedMode',
             'selectedPatientKey',
+            'patientContextPresent',
+            'patientContextHash',
+            'patientIdentifierRedacted',
             'visibleQuickActions',
             'messageLength',
             'responseLength',
@@ -71,11 +89,62 @@
             'totalTokens',
             'estimatedCostUsd',
             'costNote',
+            'claimCount',
+            'citedClaimCount',
+            'uncitedClaimCount',
+            'invalidCitationCount',
+            'blockedClaimCount',
+            'citationContractStatus',
             'ragGrounded',
             'sourceCount',
             'sourceTitles',
             'sourceCategories',
+            'decisionType',
+            'nextWorker',
+            'decisionCount',
+            'handoffCount',
+            'fromWorker',
+            'toWorker',
+            'docType',
+            'hasAttachedFile',
+            'needsExtraction',
+            'needsEvidenceRetrieval',
+            'patientIdPresent',
+            'safeLog',
+            'worker',
+            'status',
             'latestAmbientVisitFound',
+            'encounterId',
+            'sessionIdHash',
+            'stepName',
+            'topK',
+            'retrievalMode',
+            'rerankProvider',
+            'retrievalHitCount',
+            'sparseHitCount',
+            'denseHitCount',
+            'hybridCandidateCount',
+            'rerankedHitCount',
+            'finalEvidenceCount',
+            'topSourceTypes',
+            'citationCount',
+            'extractionStatus',
+            'confidence',
+            'schemaValid',
+            'citationContractValid',
+            'extractedFactCount',
+            'missingDataCount',
+            'evalCaseId',
+            'evalPassed',
+            'evalRubricFailures',
+            'regressionGateStatus',
+            'tokenUsageEstimated',
+            'safeRefusal',
+            'phiRedacted',
+            'rawDocumentTextLogged',
+            'rawScreenshotLogged',
+            'screenshotCaptureAttempted',
+            'screenshotBlockedReason',
             'frameStatus',
             'frameMode',
             'healthCheckStatus',
@@ -101,7 +170,17 @@
         };
 
         function sanitizePayload(payload) {
+            if (window.OpenEMRCopilotRedaction && typeof window.OpenEMRCopilotRedaction.sanitizeTelemetryPayload === 'function') {
+                return window.OpenEMRCopilotRedaction.sanitizeTelemetryPayload(payload || {}, allowedKeys);
+            }
+
             const safePayload = {};
+            const patientKey = payload && payload.selectedPatientKey ? payload.selectedPatientKey : null;
+            if (patientKey) {
+                safePayload.patientContextPresent = true;
+                safePayload.patientContextHash = hashIdentifier(patientKey);
+                safePayload.patientIdentifierRedacted = true;
+            }
             Object.keys(payload || {}).forEach(function (key) {
                 if (!allowedKeys.has(key)) {
                     return;
@@ -112,8 +191,16 @@
                     return;
                 }
 
+                 if (key === 'selectedPatientKey') {
+                    return;
+                }
+
                 safePayload[key] = value;
             });
+
+            safePayload.phiRedacted = true;
+            safePayload.rawDocumentTextLogged = false;
+            safePayload.rawScreenshotLogged = false;
 
             return safePayload;
         }

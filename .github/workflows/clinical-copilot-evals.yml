@@ -1,0 +1,55 @@
+name: Clinical Co-Pilot Eval Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+      - rel-*
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && github.event.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  clinical_copilot_eval_gate:
+    name: Clinical Co-Pilot Eval Gate
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Run co-pilot agent tests
+        run: node interface/ai_copilot/agents/copilot_agents.test.js
+
+      - name: Run clinical co-pilot eval suite
+        run: node interface/ai_copilot/evals/run-clinical-copilot-evals.js
+
+      - name: Run eval hard gate
+        run: node interface/ai_copilot/evals/check-eval-gate.js
+
+      - name: Prove intentional regression fails the gate
+        run: node interface/ai_copilot/evals/simulate-regression.js
+
+      - name: Upload eval result artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clinical-copilot-eval-results
+          if-no-files-found: error
+          path: |
+            interface/ai_copilot/evals/results/clinical_copilot_eval_results.latest.json
+            interface/ai_copilot/evals/results/clinical_copilot_eval_summary.md

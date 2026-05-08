@@ -1,0 +1,17 @@
+{
+  "default_currency": "USD",
+  "models": {
+    "gpt-4o-mini": {
+      "input_per_1m_tokens_usd": 0.15,
+      "output_per_1m_tokens_usd": 0.6
+    },
+    "gpt-4.1-mini": {
+      "input_per_1m_tokens_usd": 0.4,
+      "output_per_1m_tokens_usd": 1.6
+    },
+    "local_demo_fallback": {
+      "input_per_1m_tokens_usd": 0,
+      "output_per_1m_tokens_usd": 0
+    }
+  }
+}

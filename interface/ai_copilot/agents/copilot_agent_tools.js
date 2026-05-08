@@ -91,11 +91,12 @@
         },
         retrieve_guideline_evidence: {
             name: 'retrieve_guideline_evidence',
-            description: 'Return demo policy and workflow evidence used to ground draft-only, role-safe responses.',
+            description: 'Return hybrid-retrieved demo policy, workflow, and uploaded-document evidence used to ground draft-only, role-safe responses.',
             worker: 'chart_retrieval_worker',
             input_schema: {
                 type: 'object',
                 properties: {
+                    request_id: { type: 'string' },
                     role: { type: 'string', enum: ['doctor', 'nurse', 'billing', 'front_desk'] },
                     mode: { type: 'string' },
                     prompt: { type: 'string' },
@@ -107,8 +108,11 @@
                 type: 'object',
                 properties: {
                     evidence: { type: 'array' },
+                    evidence_snippets: { type: 'array' },
                     sources: { type: 'array' },
-                    policy_flags: { type: 'array' }
+                    policy_flags: { type: 'array' },
+                    retrieval_mode: { type: 'string' },
+                    rerank_provider: { type: 'string' }
                 },
                 required: ['evidence', 'sources', 'policy_flags']
             }
@@ -120,10 +124,12 @@
             input_schema: {
                 type: 'object',
                 properties: {
+                    request_id: { type: 'string' },
                     role: { type: 'string', enum: ['doctor', 'nurse', 'billing', 'front_desk'] },
                     mode: { type: 'string' },
                     prompt: { type: 'string' },
                     draft: { type: 'object' },
+                    claims: { type: 'array' },
                     chart_context_result: { type: 'object' },
                     guideline_evidence_result: { type: 'object' },
                     attachment_result: { type: 'object' }
@@ -140,6 +146,10 @@
                     missing_data: { type: 'array' },
                     unsupported_claims: { type: 'array' },
                     validated_sources: { type: 'array' },
+                    validated_claims: { type: 'array' },
+                    sources_used: { type: 'array' },
+                    uncited_claims_blocked: { type: 'array' },
+                    citation_contract_status: { type: 'string' },
                     draft_only_note: { type: 'string' }
                 },
                 required: ['allowed', 'citation_gaps', 'missing_data', 'validated_sources']
@@ -168,7 +178,10 @@
                 properties: {
                     draft: { type: 'object' },
                     meta: { type: 'object' },
-                    tool_output: { type: 'object' }
+                    tool_output: { type: 'object' },
+                    claims: { type: 'array' },
+                    sources_used: { type: 'array' },
+                    evidence_snippets: { type: 'array' }
                 },
                 required: ['draft', 'meta']
             }
@@ -428,11 +441,30 @@
                 { statement: 'All outputs remain draft-only and require human review.', source_label: 'OpenEMR AI Copilot Draft-Only Policy' },
                 { statement: 'Role boundaries must be enforced before clinical details are shown.', source_label: 'OpenEMR AI Copilot Role Safety Policy' }
             ],
+            evidence_snippets: [
+                {
+                    text: 'All outputs remain draft-only and require human review.',
+                    relevance_score: 0.91,
+                    retrieval_mode: 'hybrid',
+                    rerank_provider: 'fallback_score_sort',
+                    citation: {
+                        source_type: 'demo_guideline',
+                        source_id: 'policy_draft_only',
+                        page_or_section: 'Draft-only Policy',
+                        field_or_chunk_id: 'policy_draft_only_chunk_001',
+                        quote_or_value: 'All outputs remain draft-only and require human review.',
+                        confidence: 0.91,
+                        review_status: 'demo_only'
+                    }
+                }
+            ],
             sources: [
                 buildDemoSource('policy_draft_only', 'OpenEMR AI Copilot Draft-Only Policy', 'policy'),
                 buildDemoSource('policy_role_safety', 'OpenEMR AI Copilot Role Safety Policy', 'policy')
             ],
-            policy_flags: policyFlags
+            policy_flags: policyFlags,
+            retrieval_mode: 'hybrid',
+            rerank_provider: 'fallback_score_sort'
         };
     }
 
@@ -601,23 +633,23 @@
         return {
             supervisor: {
                 stepId: 'supervisor',
-                actor: 'Supervisor Agent',
-                toolNames: ['retrieve_guideline_evidence', 'draft_grounded_answer']
-            },
-            chart_retrieval: {
-                stepId: 'chart_retrieval',
-                actor: 'Chart Retrieval Worker',
-                toolNames: ['retrieve_chart_context', 'attach_and_extract']
-            },
-            safety: {
-                stepId: 'safety',
-                actor: 'Evidence + Safety Worker',
-                toolNames: ['validate_citations']
-            },
-            final_draft: {
-                stepId: 'final_draft',
-                actor: 'Final Draft',
+                actor: 'Supervisor',
                 toolNames: []
+            },
+            intake_extractor: {
+                stepId: 'intake_extractor',
+                actor: 'IntakeExtractorWorker',
+                toolNames: ['attach_and_extract']
+            },
+            evidence_retriever: {
+                stepId: 'evidence_retriever',
+                actor: 'EvidenceRetrieverWorker',
+                toolNames: ['retrieve_chart_context', 'retrieve_guideline_evidence', 'validate_citations']
+            },
+            final_response: {
+                stepId: 'final_response',
+                actor: 'FinalResponse',
+                toolNames: ['draft_grounded_answer']
             }
         };
     }

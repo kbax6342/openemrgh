@@ -136,7 +136,13 @@ function makeDraftResult(overrides = {}) {
             openai_configured: false,
             fallback_used: true,
             fallback_reason: 'demo_mode',
-            rag_grounded: true
+            rag_grounded: true,
+            token_usage: {
+                prompt_tokens: 420,
+                completion_tokens: 180,
+                total_tokens: 600
+            },
+            estimated_cost_usd: 0
         },
         tool_output: null,
         ...overrides
@@ -165,6 +171,21 @@ function makeValidationResult(overrides = {}) {
 
 function findSection(result, title) {
     return (result.sections || []).find((section) => String(section.title || '').toLowerCase() === title.toLowerCase());
+}
+
+function assertNoPhiInRoutingLogs(value) {
+    const serialized = JSON.stringify(value);
+    assert.ok(!serialized.includes('Marcus Johnson'), 'routing metadata should not include patient names');
+    assert.ok(!serialized.includes('9.6%'), 'routing metadata should not include raw lab values');
+    assert.ok(!serialized.includes('marcus@example.com'), 'routing metadata should not include patient contact details');
+}
+
+function assertNoPhiInObservability(value) {
+    const serialized = JSON.stringify(value);
+    assert.ok(!serialized.includes('Marcus Johnson'), 'observability metadata should not include patient names');
+    assert.ok(!serialized.includes('DEMO-PCP-1001'), 'observability metadata should not include raw patient keys');
+    assert.ok(!serialized.includes('9.6%'), 'observability metadata should not include raw lab values');
+    assert.ok(!serialized.includes('marcus@example.com'), 'observability metadata should not include patient contact details');
 }
 
 const tests = [
@@ -209,9 +230,27 @@ const tests = [
         ['Summary', 'Key findings', 'What changed since last visit', 'Missing data / uncertainty', 'Sources Used', 'Draft-only clinician review'].forEach((title) => {
             assert.ok(findSection(result, title), `missing section: ${title}`);
         });
-        assert.strictEqual(result.meta.agent_architecture, 'supervisor_worker');
+        assert.strictEqual(result.meta.agent_architecture, 'week2_supervisor_intake_evidence');
+        assert.deepStrictEqual(
+            result.meta.agent_workers,
+            ['Supervisor', 'IntakeExtractorWorker', 'EvidenceRetrieverWorker', 'FinalResponse']
+        );
         assert.ok(Array.isArray(result.meta.agent_trace));
         assert.ok(result.meta.agent_trace.length >= 6);
+        assert.ok(Array.isArray(result.meta.supervisor_decisions));
+        assert.ok(Array.isArray(result.meta.worker_handoffs));
+        assert.ok(result.meta.supervisor_decisions.some((decision) => decision.decision === 'route_to_evidence_retriever'));
+        assert.ok(result.meta.supervisor_decisions.some((decision) => decision.decision === 'final_answer_ready'));
+        assert.ok(result.meta.worker_handoffs.some((handoff) => handoff.to === 'EvidenceRetrieverWorker'));
+        assertNoPhiInRoutingLogs(result.meta.supervisor_decisions);
+        assertNoPhiInRoutingLogs(result.meta.worker_handoffs);
+        assert.ok(result.meta.observability);
+        assert.ok(Array.isArray(result.meta.observability.tool_sequence));
+        assert.ok(result.meta.observability.tool_sequence.length >= 4);
+        assert.ok(result.meta.observability.latency.total_ms >= 0);
+        assert.strictEqual(result.meta.observability.safety.phi_redacted, true);
+        assert.strictEqual(result.meta.observability.safety.raw_document_text_logged, false);
+        assertNoPhiInObservability(result.meta.observability);
         assert.ok(Array.isArray(result.sources));
         assert.ok(result.sources.length >= 2);
     },
@@ -325,9 +364,10 @@ const tests = [
         assert.strictEqual(calls.length, 0);
         assert.strictEqual(result.engine, 'guardrail');
         assert.strictEqual(result.meta.restricted_by_role, true);
+        assert.ok(result.meta.supervisor_decisions.some((decision) => decision.decision === 'safe_refusal'));
         assert.ok(/bypass role restrictions/i.test(result.answer));
     },
-    async function labPdfRequestCallsAttachmentToolAndPropagatesToolOutput() {
+    async function labPdfUploadRoutesToIntakeExtractorWorkerAndPropagatesToolOutput() {
         const calls = [];
         const toolOutput = {
             tool: 'attach_and_extract',
@@ -389,8 +429,15 @@ const tests = [
             logger: { info() {}, groupCollapsed() {}, groupEnd() {} }
         });
 
-        assert.ok(calls.some((call) => call.toolName === 'attach_and_extract'));
+        assert.deepStrictEqual(
+            calls.map((call) => call.toolName),
+            ['attach_and_extract', 'draft_grounded_answer', 'validate_citations']
+        );
         assert.strictEqual(result.tool_output.status, 'ok');
+        assert.ok(result.meta.supervisor_decisions.some((decision) => decision.decision === 'route_to_intake_extractor'));
+        assert.ok(result.meta.worker_handoffs.some((handoff) => handoff.to === 'IntakeExtractorWorker' && handoff.payload_summary.doc_type === 'lab_pdf'));
+        assert.strictEqual(result.meta.observability.extraction.doc_type, 'lab_pdf');
+        assert.ok(result.meta.observability.tool_sequence.some((entry) => entry.tool === 'attach_and_extract'));
         assert.ok(findSection(result, 'Sources Used').items.includes('Attached Lab PDF'));
     },
     async function intakeFormExtractionCanBeRepresentedByAttachmentWorker() {
@@ -402,6 +449,166 @@ const tests = [
         assert.strictEqual(demoResult.tool_output.documentMetadata.documentType, 'intake_form');
         assert.ok(Array.isArray(demoResult.tool_output.extractedFacts));
         assert.ok(demoResult.sources.some((source) => source.title === 'Attached Intake Form'));
+    },
+    async function intakeFormUploadRoutesToIntakeExtractorWorker() {
+        const calls = [];
+        const result = await agents.runSupervisor({
+            request: baseRequest({
+                prompt: 'Extract this attached intake form for clinician review only.',
+                mode: 'clinical_notes',
+                extraPayload: {
+                    attachment_context: {
+                        documentType: 'intake_form',
+                        toolOutput: {
+                            status: 'review_required',
+                            documentMetadata: {
+                                documentType: 'intake_form'
+                            }
+                        }
+                    }
+                }
+            }),
+            callTool: createToolCaller({
+                attach_and_extract: {
+                    tool: 'attach_and_extract',
+                    worker: 'chart_retrieval_worker',
+                    tool_output: {
+                        status: 'review_required',
+                        documentMetadata: {
+                            documentType: 'intake_form'
+                        }
+                    },
+                    sources: [{ id: 'attached_intake_form', title: 'Attached Intake Form', category: 'documents' }],
+                    missing_data: ['Medication dose needs clinician review.']
+                },
+                draft_grounded_answer: makeDraftResult({
+                    draft: {
+                        answer: 'Draft intake extraction prepared for clinician review.',
+                        sections: [{ title: 'Summary', items: ['Draft intake extraction prepared for clinician review.'] }],
+                        tags: ['Review needed'],
+                        sources: [{ id: 'attached_intake_form', title: 'Attached Intake Form', category: 'documents' }],
+                        safety_note: 'Draft only. Human clinician review required.',
+                        missing_data: ['Medication dose needs clinician review.']
+                    },
+                    tool_output: {
+                        status: 'review_required',
+                        documentMetadata: {
+                            documentType: 'intake_form'
+                        }
+                    }
+                }),
+                validate_citations: makeValidationResult({
+                    validated_sources: [{ id: 'attached_intake_form', title: 'Attached Intake Form', category: 'documents' }],
+                    missing_data: ['Medication dose needs clinician review.']
+                })
+            }, calls),
+            guardrails: createAllowGuardrails(),
+            toolSchemas: agentTools.getToolSchemas(),
+            logger: { info() {}, groupCollapsed() {}, groupEnd() {} }
+        });
+
+        assert.deepStrictEqual(
+            calls.map((call) => call.toolName),
+            ['attach_and_extract', 'draft_grounded_answer', 'validate_citations']
+        );
+        assert.ok(result.meta.supervisor_decisions.some((decision) => decision.decision === 'route_to_intake_extractor'));
+        assert.ok(result.meta.worker_handoffs.some((handoff) => handoff.to === 'IntakeExtractorWorker' && handoff.payload_summary.doc_type === 'intake_form'));
+        assert.strictEqual(result.meta.observability.extraction.doc_type, 'intake_form');
+    },
+    async function uploadPlusClinicalQuestionRoutesToBothWorkers() {
+        const calls = [];
+        const result = await agents.runSupervisor({
+            request: baseRequest({
+                prompt: 'Summarize this attached lab PDF and explain what changed since the last visit.',
+                mode: 'lab_pdf_ingestion',
+                extraPayload: {
+                    lab_pdf_context: {
+                        toolOutput: {
+                            documentMetadata: {
+                                documentType: 'lab_pdf',
+                                seededDemo: true
+                            }
+                        }
+                    }
+                }
+            }),
+            callTool: createToolCaller({
+                retrieve_chart_context: makeChartContextResult(),
+                attach_and_extract: {
+                    tool: 'attach_and_extract',
+                    worker: 'chart_retrieval_worker',
+                    tool_output: {
+                        status: 'ok',
+                        documentMetadata: {
+                            documentType: 'lab_pdf',
+                            seededDemo: true
+                        }
+                    },
+                    sources: [{ id: 'attached_lab_pdf', title: 'Attached Lab PDF', category: 'documents' }],
+                    missing_data: []
+                },
+                retrieve_guideline_evidence: makeGuidelineResult(),
+                draft_grounded_answer: makeDraftResult(),
+                validate_citations: makeValidationResult()
+            }, calls),
+            guardrails: createAllowGuardrails(),
+            toolSchemas: agentTools.getToolSchemas(),
+            logger: { info() {}, groupCollapsed() {}, groupEnd() {} }
+        });
+
+        assert.ok(result.meta.supervisor_decisions.some((decision) => decision.decision === 'route_to_both'));
+        assert.ok(result.meta.worker_handoffs.some((handoff) => handoff.to === 'IntakeExtractorWorker'));
+        assert.ok(result.meta.worker_handoffs.some((handoff) => handoff.to === 'EvidenceRetrieverWorker'));
+        assert.deepStrictEqual(
+            calls.map((call) => call.toolName),
+            ['retrieve_chart_context', 'attach_and_extract', 'retrieve_guideline_evidence', 'draft_grounded_answer', 'validate_citations']
+        );
+    },
+    async function unsupportedDocumentTypeReturnsSafeRefusalBeforeToolCalls() {
+        const calls = [];
+        const result = await agents.runSupervisor({
+            request: baseRequest({
+                prompt: 'Review this attached resume and save it.',
+                extraPayload: {
+                    attachment_context: {
+                        documentType: 'resume'
+                    }
+                }
+            }),
+            callTool: createToolCaller({}, calls),
+            guardrails: createAllowGuardrails(),
+            toolSchemas: agentTools.getToolSchemas(),
+            logger: { info() {}, groupCollapsed() {}, groupEnd() {} }
+        });
+
+        assert.strictEqual(calls.length, 0);
+        assert.ok(/Only lab PDFs and intake forms are supported in this MVP/i.test(result.answer));
+        assert.ok(result.meta.supervisor_decisions.some((decision) => decision.decision === 'safe_refusal'));
+        assert.strictEqual(result.meta.restriction_type, 'unsupported_doc_type_blocked');
+    },
+    async function missingPatientForPatientSpecificUploadReturnsSafeRefusal() {
+        const calls = [];
+        const result = await agents.runSupervisor({
+            request: baseRequest({
+                patientId: null,
+                selectedPatientKey: '',
+                patientName: '',
+                prompt: 'Ingest this attached intake form for the selected patient.',
+                extraPayload: {
+                    attachment_context: {
+                        documentType: 'intake_form'
+                    }
+                }
+            }),
+            callTool: createToolCaller({}, calls),
+            guardrails: createAllowGuardrails(),
+            toolSchemas: agentTools.getToolSchemas(),
+            logger: { info() {}, groupCollapsed() {}, groupEnd() {} }
+        });
+
+        assert.strictEqual(calls.length, 0);
+        assert.ok(/Select a demo patient/i.test(result.answer));
+        assert.strictEqual(result.meta.restriction_type, 'patient_required');
     },
     async function noPatientSelectedSkipsChartRetrieval() {
         const calls = [];
@@ -475,13 +682,13 @@ const tests = [
     },
     async function traceCollectorBuildsSupervisorWorkerSequence() {
         const collector = trace.createTraceCollector({ info() {} });
-        collector.push('Supervisor Agent', 'Received user prompt', 'Example prompt');
-        collector.push('Chart Retrieval Worker', 'Returned chart context', 'Structured facts and sources retrieved.');
-        collector.push('Evidence + Safety Worker', 'Returned validation result', 'Draft passed evidence and safety review.');
+        collector.push('Supervisor', 'Received user prompt', 'Example prompt');
+        collector.push('IntakeExtractorWorker', 'worker_completed', 'Structured attachment extraction completed.');
+        collector.push('EvidenceRetrieverWorker', 'worker_completed', 'Draft passed evidence and safety review.');
 
         assert.strictEqual(collector.trace.length, 3);
         assert.strictEqual(collector.trace[0].sequence, 1);
-        assert.strictEqual(collector.trace[2].actor, 'Evidence + Safety Worker');
+        assert.strictEqual(collector.trace[2].actor, 'EvidenceRetrieverWorker');
     },
     async function safetyHelpersBuildBlockedSectionsAndDraftOnlyReview() {
         const sections = safety.buildBlockedSections({
@@ -539,12 +746,13 @@ const tests = [
         assert.strictEqual(visibleTrace.steps.length, 4);
         assert.deepStrictEqual(
             visibleTrace.steps.map((step) => step.name),
-            ['Supervisor Agent', 'Chart Retrieval Worker', 'Evidence + Safety Worker', 'Final Draft']
+            ['Supervisor', 'IntakeExtractorWorker', 'EvidenceRetrieverWorker', 'FinalResponse']
         );
         assert.strictEqual(visibleTrace.steps[0].status, 'complete');
-        assert.strictEqual(visibleTrace.steps[1].status, 'complete');
+        assert.strictEqual(visibleTrace.steps[1].status, 'skipped');
         assert.strictEqual(visibleTrace.steps[2].status, 'complete');
-        assert.strictEqual(visibleTrace.steps[3].status, 'complete');
+        assert.strictEqual(visibleTrace.steps[3].status, 'ready');
+        assert.ok(/START/.test(visibleTrace.flow));
     },
     async function visibleWorkflowTraceShowsBlockedSupervisorForPromptInjection() {
         const visibleTrace = trace.buildVisibleWorkflowTrace({
@@ -569,14 +777,55 @@ const tests = [
             safetyModule: safety
         });
 
-        assert.strictEqual(visibleTrace.overallStatus, 'blocked');
+        assert.strictEqual(visibleTrace.overallStatus, 'safe_refusal');
         assert.strictEqual(visibleTrace.steps[0].status, 'blocked');
-        assert.strictEqual(visibleTrace.steps[1].status, 'pending');
-        assert.strictEqual(visibleTrace.steps[2].status, 'pending');
-        assert.strictEqual(visibleTrace.steps[3].status, 'complete');
-        assert.ok(/blocked/i.test(visibleTrace.steps[0].description));
+        assert.strictEqual(visibleTrace.steps[1].status, 'skipped');
+        assert.strictEqual(visibleTrace.steps[2].status, 'skipped');
+        assert.strictEqual(visibleTrace.steps[3].status, 'safe_refusal');
+        assert.ok(/safe refusal|outside role|grounding rules/i.test(visibleTrace.steps[0].description));
     },
     async function workflowObservabilityEmitsExpectedEvents() {
+        const supervisorDecisions = [
+            {
+                decision_id: 'decision_001',
+                request_id: 'request_trace_001',
+                decision: 'route_to_evidence_retriever',
+                reason: 'The request needs source-grounded evidence retrieval from role-allowed chart, guideline, or uploaded-document context.',
+                inputs_checked: ['patient_id', 'role', 'mode', 'prompt', 'attached_file', 'doc_type'],
+                next_worker: 'EvidenceRetrieverWorker',
+                timestamp: '2026-05-07T09:00:00.000Z',
+                safe_log: true
+            },
+            {
+                decision_id: 'decision_002',
+                request_id: 'request_trace_001',
+                decision: 'final_answer_ready',
+                reason: 'Required worker calls completed and the response is ready with draft-only review language.',
+                inputs_checked: ['patient_id', 'role', 'mode', 'prompt', 'attached_file', 'doc_type'],
+                next_worker: 'FinalResponse',
+                timestamp: '2026-05-07T09:00:01.000Z',
+                safe_log: true
+            }
+        ];
+        const workerHandoffs = [
+            {
+                handoff_id: 'handoff_001',
+                request_id: 'request_trace_001',
+                from: 'Supervisor',
+                to: 'EvidenceRetrieverWorker',
+                reason: 'Source-grounded retrieval is required before final drafting.',
+                payload_summary: {
+                    patient_id_present: true,
+                    role: 'doctor',
+                    doc_type: 'unknown',
+                    has_attached_file: false,
+                    needs_extraction: false,
+                    needs_evidence_retrieval: true
+                },
+                timestamp: '2026-05-07T09:00:00.100Z',
+                safe_log: true
+            }
+        ];
         const visibleTrace = trace.buildVisibleWorkflowTrace({
             role: 'doctor',
             mode: 'treatment_plan',
@@ -587,9 +836,11 @@ const tests = [
             meta: {
                 engine: 'fallback',
                 provider: 'local_fallback',
+                supervisor_decisions: supervisorDecisions,
+                worker_handoffs: workerHandoffs,
                 agent_trace: [
-                    { actor: 'Chart Retrieval Worker', label: 'Calling retrieve_chart_context', extra: { requestedDomains: ['medications', 'labs'] } },
-                    { actor: 'Evidence + Safety Worker', label: 'Returned validation result', extra: {} }
+                    { actor: 'EvidenceRetrieverWorker', label: 'Calling retrieve_chart_context', extra: { requestedDomains: ['medications', 'labs'], toolName: 'retrieve_chart_context' } },
+                    { actor: 'EvidenceRetrieverWorker', label: 'worker_completed', extra: { toolName: 'validate_citations' } }
                 ]
             },
             guardrails: { allowed: true }
@@ -608,19 +859,19 @@ const tests = [
             responseId: 'response_trace_001',
             role: 'doctor',
             mode: 'treatment_plan',
-            selectedPatientKey: 'DEMO-PCP-1001'
+            selectedPatientKey: 'DEMO-PCP-1001',
+            supervisorDecisions,
+            workerHandoffs
         });
 
         assert.deepStrictEqual(
             events.map((event) => event.eventName),
             [
-                'copilot_agent_supervisor_started',
-                'copilot_worker_chart_retrieval_started',
-                'copilot_worker_chart_retrieval_completed',
-                'copilot_worker_safety_validation_started',
-                'copilot_worker_safety_validation_completed',
-                'copilot_agent_supervisor_completed',
-                'copilot_agent_final_response_ready'
+                'supervisor_decision_logged',
+                'supervisor_decision_logged',
+                'worker_handoff_logged',
+                'worker_completed',
+                'final_answer_ready'
             ]
         );
     }

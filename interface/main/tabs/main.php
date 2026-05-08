@@ -446,15 +446,266 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
             . ',' . json_encode($session->get('authProvider')); ?>));
     </script>
     <style>
+      :root {
+        --openemr-shell-height: 100dvh;
+      }
+
       html,
       body {
-        width: max-content;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
         min-height: 100% !important;
         height: 100% !important;
+        overflow: hidden;
       }
+
+      body {
+        margin: 0;
+      }
+
+      #mainBox {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        height: var(--openemr-shell-height, 100dvh);
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      #mainBox > nav,
+      #mainBox > div {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+      }
+
+      .navbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        flex-shrink: 0;
+      }
+
+      .navbar-brand,
+      .navbar-toggler {
+        flex-shrink: 0;
+      }
+
+      #mainMenu {
+        flex: 1 1 auto;
+        min-width: 0;
+        max-width: 100%;
+      }
+
+      #mainMenu > .appMenu {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        min-width: 0;
+        max-width: 100%;
+        row-gap: 0.25rem;
+      }
+
+      #mainMenu > .appMenu > div,
+      #mainMenu > .appMenu > span,
+      #mainMenu .menuSection {
+        min-width: 0;
+      }
+
+      form[name="frm_search_globals"] {
+        flex: 0 1 20rem;
+        min-width: 0;
+        max-width: 100%;
+        margin-inline-start: 0.5rem;
+      }
+
+      .frm_search_globals,
+      form[name="frm_search_globals"] .input-group,
+      #anySearchBox {
+        min-width: 0;
+        max-width: 100%;
+        width: 100%;
+      }
+
+      #userData {
+        float: none;
+        position: relative;
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        max-width: 100%;
+        margin-inline-start: auto;
+      }
+
+      #userData > .appMenu {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        max-width: 100%;
+      }
+
       #userdropdown.dropdown-menu {
-        white-space: nowrap;        /* prevents multi-line wrapping */
-        min-width: max-content;     /* expands to fit the widest item */
+        white-space: nowrap;
+        min-width: max-content;
+        max-width: calc(100vw - 1rem);
+        overflow-x: auto;
+      }
+
+      #attendantData {
+        flex-shrink: 0;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        overflow: visible;
+      }
+
+      #attendantData > .d-lg-inline-flex {
+        min-width: 0;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+
+      #attendantData .flex-fill,
+      #attendantData .flex-column {
+        min-width: 0;
+      }
+
+      #tabs_div {
+        flex-shrink: 0;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        overflow: hidden;
+      }
+
+      .tabControls {
+        display: flex;
+        align-items: center;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        overflow-x: auto;
+        overflow-y: hidden;
+        white-space: nowrap;
+      }
+
+      .tabControls .tabSpan {
+        flex: 0 0 auto;
+      }
+
+      .tabControls .tabsNoHover.w-100 {
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+
+      #mainFrames_div,
+      .mainFrames {
+        display: flex;
+        flex: 1 1 auto;
+        flex-direction: column;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      #framesDisplay {
+        display: flex;
+        flex: 1 1 auto;
+        flex-direction: row;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        min-height: 0;
+        height: 100%;
+        overflow: hidden;
+      }
+
+      #framesDisplay > div,
+      .frameDisplay {
+        position: relative;
+        display: flex;
+        flex: 1 1 auto;
+        flex-direction: column;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        min-height: 0;
+        height: 100%;
+        overflow: hidden;
+      }
+
+      #framesDisplay iframe,
+      .frameDisplay iframe {
+        display: block;
+        flex: 1 1 auto;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        height: 100%;
+        min-height: 0;
+        border: 0;
+      }
+
+      @media (max-width: 1199.98px) {
+        .navbar {
+          align-items: stretch;
+        }
+
+        #mainMenu {
+          order: 3;
+          flex: 1 1 100%;
+          width: 100%;
+        }
+
+        #mainMenu > .appMenu {
+          width: 100%;
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        #mainMenu .menuLabel {
+          width: 100%;
+          padding-top: 0.5rem;
+          padding-bottom: 0.5rem;
+        }
+
+        form[name="frm_search_globals"] {
+          order: 4;
+          flex: 1 1 100%;
+          width: 100%;
+          margin-top: 0.5rem;
+          margin-inline-start: 0;
+        }
+
+        #userData {
+          order: 2;
+          width: 100%;
+          margin-top: 0.5rem;
+          margin-inline-start: 0;
+          justify-content: flex-start;
+        }
+      }
+
+      @media (max-width: 767.98px) {
+        body {
+          overflow: hidden;
+        }
+
+        #mainBox {
+          height: var(--openemr-shell-height, 100dvh);
+        }
+
+        #tabs_div {
+          padding-top: 0.25rem;
+        }
       }
     </style>
 </head>
@@ -535,14 +786,34 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
         <?php echo $softwareVersion; ?>
     </div>
     <script>
+        function syncOpenEmrShellViewportHeight() {
+            document.documentElement.style.setProperty('--openemr-shell-height', `${window.innerHeight}px`);
+        }
+
+        let openEmrShellResizeTimer = null;
+
+        function scheduleOpenEmrShellLayoutSync() {
+            if (openEmrShellResizeTimer) {
+                clearTimeout(openEmrShellResizeTimer);
+            }
+            openEmrShellResizeTimer = window.setTimeout(function () {
+                syncOpenEmrShellViewportHeight();
+            }, 50);
+        }
+
         ko.applyBindings(app_view_model);
 
         $(function () {
+            syncOpenEmrShellViewportHeight();
+            $(window).on('resize orientationchange', scheduleOpenEmrShellLayoutSync);
             $('.dropdown-toggle').dropdown();
             $('#patient_caret').click(function () {
-                $('#attendantData').slideToggle();
+                $('#attendantData').slideToggle(150, function () {
+                    scheduleOpenEmrShellLayoutSync();
+                });
                 $('#patient_caret').toggleClass('fa-caret-down').toggleClass('fa-caret-up');
             });
+            $('#mainMenu').on('shown.bs.collapse hidden.bs.collapse', scheduleOpenEmrShellLayoutSync);
             if ($('body').css('direction') == "rtl") {
                 $('.dropdown-menu-right').each(function () {
                     $(this).removeClass('dropdown-menu-right');

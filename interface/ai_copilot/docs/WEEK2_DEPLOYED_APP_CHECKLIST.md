@@ -1,0 +1,62 @@
+# Week 2 Deployed App Checklist
+
+- Deployed URL: `https://ineloquent-unsaliently-alida.ngrok-free.dev`
+- Date tested: `2026-05-07` America/New_York
+- Browser tested: authenticated HTTP smoke with `curl` against the deployed tunnel and local OpenEMR container
+- Login / test account used: `admin-openemr`
+- Patient selected: `Marcus Johnson` (synthetic demo patient)
+- Role selected: `Doctor`
+- Public access status: verified outside localhost through the active ngrok tunnel
+- Login page loads publicly: yes
+- Co-pilot page loads after authentication: yes
+- Static assets load: yes
+  - `interface/ai_copilot/copilot.css`
+  - `interface/ai_copilot/copilot_widget.js`
+- Upload endpoint works: yes
+  - Local lab PDF upload test: `200 OK`
+  - Public ngrok lab PDF upload test: `200 OK`
+- API response works: yes
+  - `copilot_api.php` returned grounded Week 2 JSON with `reviewQueue`, `claims`, `sources_used`, and `meta.observability`
+- Lab PDF upload tested: yes
+  - Synthetic file used: `marcus_johnson_synthetic_lab_results.pdf`
+  - Result: extracted lab facts, pending clinician review facts, source citations, source preview payload, observability metadata
+- Intake form upload tested: yes
+  - Synthetic file used: `marcus_johnson_intake_form.pdf`
+  - Result: extracted intake-field summary, missing-data handling, RAG snippet citations, draft-only banner
+  - Public tunnel intake upload test: `200 OK`
+- Extraction results visible: yes
+  - UI surface: `Extraction Results` panel in `interface/ai_copilot/index.php`
+- Clinician review banner visible: yes
+  - Banner text: `Clinician review required: extracted document facts are draft-only and are not written to the chart automatically.`
+- Evidence retrieval visible: yes
+  - Retrieval sources and evidence snippets are rendered for grounded responses
+- Citations visible: yes
+- Click-to-source works: yes
+  - Local authenticated citation preview test: `api/citation_source.php` returned `preview_mode: pdf`
+  - Public tunnel citation preview test: `api/citation_source.php` returned `preview_mode: pdf`
+  - Local intake citation preview test: `api/citation_source.php` returned `preview_mode: text`
+  - Public intake citation preview test: `api/citation_source.php` returned `preview_mode: text`
+- Observability panel visible: yes
+  - Tool sequence
+  - Supervisor decision / handoffs
+  - Latency
+  - Retrieval hits
+  - Extraction confidence / schema fallback status
+  - Token usage / cost when available
+  - PHI redaction status
+- Safe refusal tested: yes
+  - Billing role request for treatment-plan / medication changes returned a role-scoped refusal
+  - Response text stayed billing-safe and did not expose extra clinical detail
+  - Public tunnel refusal test: `200 OK`
+- Missing-data behavior tested: yes
+  - Lab PDF: missing ordering provider / collection time surfaced for review
+  - Intake form: missing current concerns / medication-adherence detail surfaced for review
+- Eval gate status: passing
+  - `node interface/ai_copilot/evals/run-clinical-copilot-evals.js`
+  - `node interface/ai_copilot/evals/check-eval-gate.js`
+- Known live issues:
+  - The synthetic intake-form fallback currently shows extracted intake fields and grounded RAG snippets, but it does not yet return persisted per-field clinician review actions the same way the lab PDF path does.
+  - Verification in this environment was done through authenticated HTTP smoke rather than a headed browser session.
+- Screenshots / evidence notes:
+  - No PHI screenshots were stored.
+  - Proof was recorded as redacted HTTP status checks, JSON payload inspection, and safe source-preview metadata only.

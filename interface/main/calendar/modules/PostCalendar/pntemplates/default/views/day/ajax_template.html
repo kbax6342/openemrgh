@@ -156,10 +156,10 @@ if ( $pc_facility ) {
 $chevron_icon_left = $language_direction == 'ltr' ? 'fa-chevron-circle-left' : 'fa-chevron-circle-right';
 $chevron_icon_right = $language_direction == 'ltr' ? 'fa-chevron-circle-right' : 'fa-chevron-circle-left';
 [-/php-]
-<div id="wrapper">
+<div id="wrapper" class="modern-calendar-layout">
     <form name='theform' id='theform' action='index.php?module=PostCalendar&func=view&tplview=default&pc_category=&pc_topic=' method='post' onsubmit='return top.restoreSession()'>
-      <div class="container-fluid sticky-top">
-        <div id="topToolbarRight" class="bgcolor2">
+      <div class="container-fluid sticky-top modern-calendar-toolbar-wrap">
+        <div id="topToolbarRight" class="bgcolor2 modern-calendar-toolbar">
             <div id="functions">
                 <a id="menu-toggle" href="#" class="btn btn-outline-dark"><i class="fas fa-bars"></i></a>
                 <input type="hidden" name="jumpdate" id="jumpdate" value="" />
@@ -197,9 +197,9 @@ echo "   <a href='#' type='button' id='monthview' title='" . xla('Month View') .
 </div>
 </div> <!-- end topToolbarRight -->
 </div>
-<div class="sticky-top">
-<div id="bottomLeft" class="sidebar-wrapper">
-<div id="datePicker">
+<div class="sticky-top modern-calendar-sidebar-wrap">
+<div id="bottomLeft" class="sidebar-wrapper modern-calendar-sidebar">
+<div id="datePicker" class="modern-calendar-panel">
 [-php-]
 $atmp = array_keys($A_EVENTS);
 $caldate = strtotime($atmp[0]);
@@ -314,11 +314,11 @@ while ($currdate <= $enddate) {
 </div>
 </div>
 
-<div id="bigCalHeader">
+<div id="bigCalHeader" class="modern-calendar-header-band">
 </div>
 
-<div id="providerPicker">
-[-xlt t='Providers'-]
+<div id="providerPicker" class="modern-calendar-panel">
+<div class="modern-calendar-panel-title">[-xlt t='Providers'-]</div>
 <div>
 [-php-]
 // ==============================
@@ -385,9 +385,9 @@ foreach ($facilities as $f){
 </div>
 </div><!-- end bottomLeft -->
 </div>
-<div class="page-content-wrapper">
-<div class="container-fluid calsearch_body">
-<div id="bigCal">
+<div class="page-content-wrapper modern-calendar-content">
+<div class="container-fluid calsearch_body modern-calendar-grid">
+<div id="bigCal" class="modern-calendar-stage">
 [-php-]
 /* used in debugging
     foreach ($A_EVENTS as $date => $events) {

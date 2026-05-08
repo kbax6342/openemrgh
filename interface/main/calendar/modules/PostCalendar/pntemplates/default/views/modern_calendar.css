@@ -1,0 +1,649 @@
+.openemr-modern-calendar {
+    --calendar-bg: #eef3f9;
+    --calendar-surface: #ffffff;
+    --calendar-surface-alt: #f7faff;
+    --calendar-ink: #16324f;
+    --calendar-muted: #5c708a;
+    --calendar-border: #dbe4f0;
+    --calendar-primary: #246bdb;
+    --calendar-primary-strong: #1c57b5;
+    --calendar-sidebar-bg: #f3f7fc;
+    --calendar-shadow: 0 20px 48px rgba(20, 37, 63, 0.12);
+    --calendar-gap: 0.8rem;
+    --calendar-sidebar-width: 15.75rem;
+    --calendar-toolbar-block: 4.9rem;
+    --calendar-content-top: 5.75rem;
+    --calendar-stage-height: calc(100dvh - var(--calendar-content-top) - var(--calendar-gap));
+    --calendar-content-z: 2;
+    --calendar-toolbar-z: 8;
+}
+
+html,
+body.openemr-modern-calendar {
+    height: 100%;
+    min-height: 100%;
+    overflow: hidden;
+}
+
+.openemr-modern-calendar {
+    background: var(--calendar-bg);
+    color: var(--calendar-ink);
+    width: 100% !important;
+    max-width: 100vw;
+    overflow: hidden;
+}
+
+.openemr-modern-calendar *,
+.openemr-modern-calendar *::before,
+.openemr-modern-calendar *::after {
+    box-sizing: border-box;
+}
+
+.openemr-modern-calendar #wrapper {
+    width: 100%;
+    height: 100dvh;
+    min-height: 100dvh;
+    overflow: hidden;
+}
+
+.openemr-modern-calendar #wrapper > form {
+    display: grid;
+    grid-template-columns: minmax(15rem, var(--calendar-sidebar-width)) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas:
+        "toolbar toolbar"
+        "sidebar content";
+    column-gap: var(--calendar-gap);
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.openemr-modern-calendar .modern-calendar-toolbar-wrap,
+.openemr-modern-calendar .modern-calendar-grid {
+    padding-left: var(--calendar-gap);
+    padding-right: var(--calendar-gap);
+}
+
+.openemr-modern-calendar .modern-calendar-toolbar-wrap {
+    grid-area: toolbar;
+    position: sticky;
+    top: 0;
+    z-index: var(--calendar-toolbar-z);
+    padding-top: 0.2rem;
+    padding-bottom: 0.15rem;
+    background: var(--calendar-bg);
+}
+
+.openemr-modern-calendar .modern-calendar-sidebar-wrap,
+.openemr-modern-calendar .page-content-wrapper {
+    position: relative;
+    z-index: var(--calendar-content-z);
+}
+
+.openemr-modern-calendar #topToolbarRight {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.7rem;
+    margin: 0.65rem 0 0.55rem;
+    padding: 0.7rem 0.85rem;
+    border: 0;
+    border-radius: 1.2rem;
+    background: var(--calendar-surface);
+    box-shadow: var(--calendar-shadow);
+}
+
+.openemr-modern-calendar #functions,
+.openemr-modern-calendar #dateNAV,
+.openemr-modern-calendar #viewPicker {
+    position: relative;
+    z-index: var(--calendar-toolbar-z);
+    float: none;
+    display: flex;
+    align-items: center;
+    gap: 0.42rem;
+    min-height: 2.55rem;
+    min-width: 0;
+}
+
+.openemr-modern-calendar #functions {
+    flex-wrap: nowrap;
+    text-align: left;
+}
+
+.openemr-modern-calendar #dateNAV {
+    justify-content: center;
+    padding: 0.45rem 0.7rem;
+    border-radius: 1rem;
+    background: linear-gradient(180deg, #f8fbff 0%, #eff5ff 100%);
+    color: var(--calendar-ink);
+    font-size: 0.94rem;
+    font-weight: 700;
+    text-align: center;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.openemr-modern-calendar #dateNAV a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 999px;
+    background: var(--calendar-surface);
+    color: var(--calendar-primary-strong);
+    box-shadow: 0 8px 18px rgba(36, 107, 219, 0.14);
+    text-decoration: none;
+}
+
+.openemr-modern-calendar #viewPicker {
+    justify-content: flex-end;
+    flex-wrap: nowrap;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.openemr-modern-calendar #menu-toggle,
+.openemr-modern-calendar #topToolbarRight .btn {
+    min-height: 2.15rem;
+    padding: 0.4rem 0.7rem;
+    border-radius: 0.8rem;
+    border: 1px solid #d5e2f5;
+    box-shadow: none;
+    font-size: 0.82rem;
+    font-weight: 700;
+    transition: transform 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease, color 0.18s ease;
+}
+
+.openemr-modern-calendar #menu-toggle {
+    display: none !important;
+}
+
+.openemr-modern-calendar #functions .btn.btn-primary {
+    border-color: transparent;
+    background: linear-gradient(135deg, var(--calendar-primary) 0%, #3f86f3 100%);
+    color: #ffffff;
+}
+
+.openemr-modern-calendar #viewPicker .btn.btn-primary,
+.openemr-modern-calendar #menu-toggle {
+    background: var(--calendar-surface);
+    color: var(--calendar-primary-strong);
+}
+
+.openemr-modern-calendar #topToolbarRight .btn:hover,
+.openemr-modern-calendar #topToolbarRight .btn:focus,
+.openemr-modern-calendar #menu-toggle:hover,
+.openemr-modern-calendar #menu-toggle:focus,
+.openemr-modern-calendar #dateNAV a:hover,
+.openemr-modern-calendar #dateNAV a:focus {
+    transform: translateY(-1px);
+    box-shadow: 0 10px 22px rgba(23, 58, 111, 0.14);
+}
+
+.openemr-modern-calendar .currentview,
+.openemr-modern-calendar #viewPicker .btn.currentview {
+    border-color: transparent;
+    background: linear-gradient(135deg, var(--calendar-primary) 0%, #3f86f3 100%);
+    color: #ffffff;
+}
+
+.openemr-modern-calendar .modern-calendar-sidebar-wrap {
+    height: 100%;
+    grid-area: sidebar;
+    min-height: 0;
+    width: 100%;
+    align-self: stretch;
+    padding-left: var(--calendar-gap);
+}
+
+.openemr-modern-calendar .sidebar-wrapper {
+    position: relative;
+    top: auto;
+    left: auto;
+    right: auto;
+    width: 100%;
+    min-width: 0;
+    height: 100%;
+    min-height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    border-radius: 0;
+    background: var(--calendar-sidebar-bg);
+    box-shadow: none;
+    color: var(--calendar-ink);
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: none;
+    z-index: var(--calendar-content-z);
+}
+
+.openemr-modern-calendar #wrapper.toggled .sidebar-wrapper {
+    margin-left: 0 !important;
+}
+
+.openemr-modern-calendar #wrapper.toggled .page-content-wrapper {
+    margin-left: 0 !important;
+}
+
+.openemr-modern-calendar #datePicker,
+.openemr-modern-calendar #providerPicker {
+    width: 100%;
+    margin-bottom: 0.8rem;
+    padding: 0.8rem;
+    border-radius: 1.2rem;
+    border: 1px solid var(--calendar-border);
+    background: var(--calendar-surface);
+    box-shadow: 0 14px 30px rgba(20, 37, 63, 0.08);
+    backdrop-filter: none;
+}
+
+.openemr-modern-calendar .modern-calendar-panel-title {
+    margin-bottom: 0.7rem;
+    color: var(--calendar-muted);
+    font-size: 0.78rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.openemr-modern-calendar #providerPicker,
+.openemr-modern-calendar #providerPicker select,
+.openemr-modern-calendar #datePicker,
+.openemr-modern-calendar #datePicker td,
+.openemr-modern-calendar #datePicker .tdMonthName-small,
+.openemr-modern-calendar #datePicker .tdDOW-small {
+    color: var(--calendar-ink);
+}
+
+.openemr-modern-calendar #pc_facility,
+.openemr-modern-calendar #pc_username {
+    border: 1px solid var(--calendar-border);
+    border-radius: 0.95rem;
+    background: var(--calendar-surface);
+    color: var(--calendar-ink);
+    box-shadow: none;
+}
+
+.openemr-modern-calendar #pc_facility option,
+.openemr-modern-calendar #pc_username option {
+    background: #ffffff;
+    color: var(--calendar-ink);
+}
+
+.openemr-modern-calendar #pc_username {
+    min-height: 7rem;
+    max-height: 9.5rem;
+}
+
+.openemr-modern-calendar #facilityColor {
+    width: 100%;
+    max-height: none;
+    margin-top: 0;
+    border: 1px solid var(--calendar-border);
+    border-radius: 1rem;
+    overflow: hidden;
+    background: var(--calendar-surface);
+}
+
+.openemr-modern-calendar #facilityColor .list-group-item {
+    padding: 0.65rem 0.8rem;
+    border-color: var(--calendar-border);
+    background: #ffffff;
+    color: var(--calendar-ink);
+}
+
+.openemr-modern-calendar #datePicker .tdMonthName-small,
+.openemr-modern-calendar #datePicker .tdDOW-small {
+    background: transparent;
+}
+
+.openemr-modern-calendar #datePicker .tdMonthName-small {
+    font-size: 0.95rem;
+    font-weight: 700;
+}
+
+.openemr-modern-calendar #datePicker .tdMonthDay-small,
+.openemr-modern-calendar #datePicker .tdOtherMonthDay-small,
+.openemr-modern-calendar #datePicker .tdWeekend-small,
+.openemr-modern-calendar #datePicker .tdHoliday-small {
+    border-radius: 999px;
+    transition: background-color 0.18s ease, color 0.18s ease;
+}
+
+.openemr-modern-calendar #datePicker .currentDate {
+    background: linear-gradient(135deg, var(--calendar-primary) 0%, #4d8ef1 100%);
+    color: #ffffff;
+}
+
+.openemr-modern-calendar #datePicker .currentWeek {
+    background: rgba(36, 107, 219, 0.08);
+}
+
+.openemr-modern-calendar #datePicker .tdDatePickerHighlightCurrent,
+.openemr-modern-calendar #datePicker .tdDatePickerHighlight {
+    background: rgba(36, 107, 219, 0.16);
+    color: var(--calendar-primary-strong);
+}
+
+.openemr-modern-calendar .page-content-wrapper {
+    grid-area: content;
+    min-height: 0;
+    height: 100%;
+    max-height: none;
+    width: 100%;
+    max-width: 100%;
+    margin-left: 0 !important;
+    margin-top: 0;
+    padding: 0;
+    position: relative;
+    overflow: hidden;
+}
+
+.openemr-modern-calendar .modern-calendar-grid {
+    height: 100%;
+    min-height: 100%;
+}
+
+.openemr-modern-calendar .modern-calendar-grid.container-fluid {
+    flex: 1 1 auto;
+    height: 100%;
+    width: 100%;
+    max-width: 100%;
+}
+
+.openemr-modern-calendar #bottomLeft,
+.openemr-modern-calendar #bigCal {
+    height: 100%;
+    min-height: 100%;
+    max-height: none;
+}
+
+.openemr-modern-calendar #bigCal {
+    flex: 1 1 auto;
+    overflow: auto;
+    width: 95%;
+    border-left: 0;
+    border-radius: 1.35rem;
+    background: var(--calendar-surface);
+    box-shadow: var(--calendar-shadow);
+    padding: 0.8rem;
+    margin-left: 5%;
+    overscroll-behavior: contain;
+}
+
+.openemr-modern-calendar #bigCal > .table-responsive,
+.openemr-modern-calendar #bigCal .table-responsive {
+    border-radius: 1.2rem;
+}
+
+.openemr-modern-calendar #bigCal table {
+    background: transparent;
+}
+
+.openemr-modern-calendar #bigCal td {
+    padding: 0;
+}
+
+.openemr-modern-calendar #bigCal .table-responsive > table,
+.openemr-modern-calendar #bigCal > table {
+    border-radius: 1.2rem;
+    overflow: hidden;
+}
+
+.openemr-modern-calendar #times {
+    width: 4.9rem;
+    min-width: 4.9rem;
+    padding: 0 !important;
+    border-right: 1px solid var(--calendar-border);
+    background: linear-gradient(180deg, #fbfdff 0%, #f2f7ff 100%);
+}
+
+.openemr-modern-calendar #times table {
+    background: transparent;
+}
+
+.openemr-modern-calendar .timeslot {
+    height: 20px;
+    border-bottom: 1px solid #ebf0f7;
+    color: var(--calendar-muted);
+    font-size: 0.74rem;
+    font-weight: 700;
+}
+
+.openemr-modern-calendar .timeslot a {
+    display: block;
+    padding: 0 0.35rem;
+    color: var(--calendar-primary-strong) !important;
+    text-decoration: none;
+}
+
+.openemr-modern-calendar .schedule {
+    border: 1px solid var(--calendar-border);
+    background: var(--calendar-surface-alt);
+    width: auto;
+}
+
+.openemr-modern-calendar .providerheader {
+    border: 0;
+    border-bottom: 1px solid var(--calendar-border);
+    background: linear-gradient(180deg, #ffffff 0%, #f4f8fd 100%);
+    color: var(--calendar-ink);
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    padding: 0.65rem 0.8rem;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+}
+
+.openemr-modern-calendar .providerday {
+    border: 0;
+}
+
+.openemr-modern-calendar .week_dateheader,
+.openemr-modern-calendar .month_dateheader {
+    position: sticky;
+    top: 0;
+    z-index: 4;
+}
+
+.openemr-modern-calendar .providerXbtn {
+    color: var(--calendar-muted);
+}
+
+.openemr-modern-calendar .providerXbtn.userClose::before {
+    content: "\00d7";
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.45rem;
+    height: 1.45rem;
+    border-radius: 999px;
+    background: rgba(36, 107, 219, 0.1);
+    color: var(--calendar-primary-strong);
+    font-size: 0.95rem;
+    font-weight: 700;
+}
+
+.openemr-modern-calendar .calendar_day {
+    background-image: repeating-linear-gradient(
+        to bottom,
+        rgba(255, 255, 255, 0.96) 0,
+        rgba(255, 255, 255, 0.96) 19px,
+        rgba(222, 230, 241, 0.95) 19px,
+        rgba(222, 230, 241, 0.95) 20px
+    );
+}
+
+.openemr-modern-calendar .week_dateheader,
+.openemr-modern-calendar .month_dateheader {
+    padding: 0.8rem 0.5rem !important;
+    background: #f5f8fc;
+    border-bottom: 1px solid var(--calendar-border);
+    color: var(--calendar-ink);
+    font-size: 0.82rem;
+    font-weight: 800;
+}
+
+.openemr-modern-calendar .week_dateheader a,
+.openemr-modern-calendar .month_daylink a {
+    color: var(--calendar-primary-strong);
+    text-decoration: none;
+    font-weight: 700;
+}
+
+.openemr-modern-calendar .week_currday,
+.openemr-modern-calendar .month_daylink {
+    background: rgba(36, 107, 219, 0.08);
+}
+
+.openemr-modern-calendar .month_daylink {
+    padding: 0.45rem 0.55rem;
+    border-bottom: 1px solid var(--calendar-border);
+}
+
+.openemr-modern-calendar .event_appointment,
+.openemr-modern-calendar .event_in,
+.openemr-modern-calendar .event_out,
+.openemr-modern-calendar .event_reserved,
+.openemr-modern-calendar .event_noshow,
+.openemr-modern-calendar .event_holiday,
+.openemr-modern-calendar .month_event {
+    border-radius: 0.9rem;
+    box-shadow: 0 10px 18px rgba(19, 45, 78, 0.12);
+    border: 1px solid rgba(20, 48, 90, 0.08);
+}
+
+.openemr-modern-calendar .event_highlight {
+    box-shadow: 0 14px 24px rgba(19, 45, 78, 0.18);
+}
+
+.openemr-modern-calendar .link_title,
+.openemr-modern-calendar .month_event a,
+.openemr-modern-calendar .event_time {
+    color: inherit;
+}
+
+.openemr-modern-calendar #popup {
+    z-index: 30;
+}
+
+@media (max-width: 1199px) {
+    .openemr-modern-calendar {
+        --calendar-sidebar-width: 14rem;
+    }
+
+    .openemr-modern-calendar #topToolbarRight {
+        grid-template-columns: minmax(0, auto) minmax(0, 1fr) minmax(0, auto);
+        padding: 0.65rem 0.75rem;
+    }
+}
+
+@media (max-width: 991px) {
+    html,
+    body.openemr-modern-calendar,
+    .openemr-modern-calendar #wrapper,
+    .openemr-modern-calendar #wrapper > form {
+        overflow: auto;
+    }
+
+    .openemr-modern-calendar #wrapper > form {
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+    }
+
+    .openemr-modern-calendar .modern-calendar-toolbar-wrap,
+    .openemr-modern-calendar .modern-calendar-grid {
+        padding-left: 0.85rem;
+        padding-right: 0.85rem;
+    }
+
+    .openemr-modern-calendar .modern-calendar-toolbar-wrap {
+        position: relative;
+        top: auto;
+    }
+
+    .openemr-modern-calendar #topToolbarRight {
+        grid-template-columns: 1fr;
+    }
+
+    .openemr-modern-calendar #functions,
+    .openemr-modern-calendar #dateNAV,
+    .openemr-modern-calendar #viewPicker {
+        justify-content: flex-start;
+        flex-wrap: wrap;
+        white-space: normal;
+    }
+
+    .openemr-modern-calendar .modern-calendar-grid {
+        height: auto;
+        min-height: 0;
+    }
+
+    .openemr-modern-calendar .sidebar-wrapper {
+        position: static;
+        width: 100%;
+        height: auto;
+        max-height: none;
+        margin-bottom: 0.85rem;
+        z-index: auto;
+    }
+
+    .openemr-modern-calendar .modern-calendar-sidebar-wrap {
+        height: auto;
+        padding-left: 0.85rem;
+        padding-right: 0.85rem;
+    }
+
+    .openemr-modern-calendar .page-content-wrapper {
+        height: auto;
+        max-height: none;
+        width: 100%;
+        max-width: 100%;
+        margin-left: 0 !important;
+        overflow: visible;
+    }
+
+    .openemr-modern-calendar #bigCal {
+        min-height: 0;
+        padding: 0.7rem;
+        border-radius: 1.2rem;
+        overflow: auto;
+    }
+
+    .openemr-modern-calendar #bottomLeft,
+    .openemr-modern-calendar #bigCal {
+        height: auto;
+        min-height: 0;
+        max-height: none;
+    }
+}
+
+@media print {
+    .openemr-modern-calendar .sidebar-wrapper,
+    .openemr-modern-calendar #menu-toggle {
+        display: none !important;
+    }
+
+    .openemr-modern-calendar #topToolbarRight,
+    .openemr-modern-calendar #bigCal {
+        box-shadow: none;
+        border-radius: 0;
+    }
+
+    .openemr-modern-calendar #viewPicker .btn,
+    .openemr-modern-calendar #functions .btn {
+        border-color: #c8d4e4;
+        background: #ffffff;
+        color: #1f2937;
+    }
+}

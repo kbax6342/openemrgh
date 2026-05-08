@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+cd "${ROOT_DIR}"
+
+echo "[clinical-copilot-hooks] Running agent tests..."
+node interface/ai_copilot/agents/copilot_agents.test.js
+
+echo "[clinical-copilot-hooks] Running eval suite..."
+node interface/ai_copilot/evals/run-clinical-copilot-evals.js
+
+echo "[clinical-copilot-hooks] Running eval hard gate..."
+node interface/ai_copilot/evals/check-eval-gate.js

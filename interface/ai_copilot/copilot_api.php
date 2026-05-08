@@ -11,6 +11,18 @@
 require_once("../globals.php");
 require_once(__DIR__ . '/lab_pdf_vector_store.php');
 require_once(__DIR__ . '/lab_pdf_ingestion.php');
+require_once(__DIR__ . '/api/attach_and_extract.php');
+require_once(__DIR__ . '/citations/CitationContract.php');
+require_once(__DIR__ . '/citations/ClaimCitationMapper.php');
+require_once(__DIR__ . '/citations/CitationSourceResolver.php');
+require_once(__DIR__ . '/agents/CitationValidationWorker.php');
+require_once(__DIR__ . '/agents/AgentTrace.php');
+require_once(__DIR__ . '/agents/GuidelineCorpusWorker.php');
+require_once(__DIR__ . '/agents/SparseRetrievalWorker.php');
+require_once(__DIR__ . '/agents/DenseRetrievalWorker.php');
+require_once(__DIR__ . '/agents/HybridRetrievalWorker.php');
+require_once(__DIR__ . '/agents/RerankWorker.php');
+require_once(__DIR__ . '/agents/GroundedAnswerWorker.php');
 
 use OpenEMR\Common\Csrf\CsrfUtils;
 use OpenEMR\Common\Session\SessionWrapperFactory;
@@ -202,15 +214,27 @@ if ($action === 'attach_and_extract_lab_pdf') {
             ],
             $requestStartedAt
         );
+        $meta = aiCopilotAugmentMetaWithDocumentIngestion($meta, $context);
+        $permissionResponsePayload = [
+            'answer' => $permissionResponse['answer'],
+            'sections' => $permissionResponse['sections'],
+            'tags' => $permissionResponse['tags'],
+        ];
+        $citationContract = aiCopilotBuildCitationContractPayload($permissionResponsePayload, $context, $role, $mode, $message, $requestId);
+        $meta = aiCopilotAugmentMetaWithCitationContract($meta, $citationContract);
         aiCopilotJsonResponse(200, [
             'ok' => true,
             'mode' => $mode,
             'role' => $role,
             'patient' => !empty($context['patient']['name']) ? $context['patient']['name'] : null,
-            'answer' => $permissionResponse['answer'],
-            'sections' => $permissionResponse['sections'],
-            'tags' => $permissionResponse['tags'],
+            'answer' => $citationContract['response']['answer'],
+            'sections' => $citationContract['response']['sections'],
+            'tags' => $citationContract['response']['tags'],
             'sources' => $sources,
+            'claims' => $citationContract['claims'],
+            'sources_used' => $citationContract['sources_used'],
+            'uncited_claims_blocked' => $citationContract['uncited_claims_blocked'],
+            'safety_status' => $citationContract['safety_status'],
             'safety_note' => aiCopilotRoleSafetyNote($role),
             'engine' => 'guardrail',
             'provider' => 'guardrail',
@@ -221,6 +245,8 @@ if ($action === 'attach_and_extract_lab_pdf') {
     }
 
     $draft = aiCopilotGenerateDraft($requestId, $role, $mode, $message, $chatHistory, $context, $validModes[$mode]);
+    $citationContract = aiCopilotBuildCitationContractPayload($draft, $context, $role, $mode, $message, $requestId);
+    $draft = $citationContract['response'];
     $meta = aiCopilotBuildResponseMeta(
         $requestId,
         $role,
@@ -243,6 +269,8 @@ if ($action === 'attach_and_extract_lab_pdf') {
         ],
         $requestStartedAt
     );
+    $meta = aiCopilotAugmentMetaWithDocumentIngestion($meta, $context);
+    $meta = aiCopilotAugmentMetaWithCitationContract($meta, $citationContract);
 
     aiCopilotJsonResponse(200, [
         'ok' => true,
@@ -253,6 +281,10 @@ if ($action === 'attach_and_extract_lab_pdf') {
         'sections' => $draft['sections'],
         'tags' => $draft['tags'],
         'sources' => $sources,
+        'claims' => $citationContract['claims'],
+        'sources_used' => $citationContract['sources_used'],
+        'uncited_claims_blocked' => $citationContract['uncited_claims_blocked'],
+        'safety_status' => $citationContract['safety_status'],
         'safety_note' => aiCopilotRoleSafetyNote($role),
         'engine' => $draft['engine'],
         'provider' => $draft['provider'],
@@ -331,19 +363,31 @@ if ($permissionResponse !== []) {
             'rag_grounded' => aiCopilotShouldMarkRagGroundedForRequest($mode, $message, $context),
         ],
         $requestStartedAt
-    );
-    aiCopilotJsonResponse(200, [
-        'ok' => true,
-        'mode' => $mode,
-        'role' => $role,
-        'patient' => !empty($context['patient']['name']) ? $context['patient']['name'] : null,
-        'answer' => $permissionResponse['answer'],
-        'sections' => $permissionResponse['sections'],
-        'tags' => $permissionResponse['tags'],
-        'sources' => $sources,
-        'safety_note' => aiCopilotRoleSafetyNote($role),
-        'engine' => 'guardrail',
-        'provider' => 'guardrail',
+);
+$meta = aiCopilotAugmentMetaWithDocumentIngestion($meta, $context);
+$permissionResponsePayload = [
+    'answer' => $permissionResponse['answer'],
+    'sections' => $permissionResponse['sections'],
+    'tags' => $permissionResponse['tags'],
+];
+$citationContract = aiCopilotBuildCitationContractPayload($permissionResponsePayload, $context, $role, $mode, $message, $requestId);
+$meta = aiCopilotAugmentMetaWithCitationContract($meta, $citationContract);
+aiCopilotJsonResponse(200, [
+    'ok' => true,
+    'mode' => $mode,
+    'role' => $role,
+    'patient' => !empty($context['patient']['name']) ? $context['patient']['name'] : null,
+    'answer' => $citationContract['response']['answer'],
+    'sections' => $citationContract['response']['sections'],
+    'tags' => $citationContract['response']['tags'],
+    'sources' => $sources,
+    'claims' => $citationContract['claims'],
+    'sources_used' => $citationContract['sources_used'],
+    'uncited_claims_blocked' => $citationContract['uncited_claims_blocked'],
+    'safety_status' => $citationContract['safety_status'],
+    'safety_note' => aiCopilotRoleSafetyNote($role),
+    'engine' => 'guardrail',
+    'provider' => 'guardrail',
         'tool_output' => $clientLabPdfToolOutput !== [] ? $clientLabPdfToolOutput : null,
         'meta' => $meta,
     ]);
@@ -351,6 +395,8 @@ if ($permissionResponse !== []) {
 }
 
 $draft = aiCopilotGenerateDraft($requestId, $role, $mode, $message, $chatHistory, $context, $validModes[$mode]);
+$citationContract = aiCopilotBuildCitationContractPayload($draft, $context, $role, $mode, $message, $requestId);
+$draft = $citationContract['response'];
 $meta = aiCopilotBuildResponseMeta(
     $requestId,
     $role,
@@ -373,6 +419,8 @@ $meta = aiCopilotBuildResponseMeta(
     ],
     $requestStartedAt
 );
+$meta = aiCopilotAugmentMetaWithDocumentIngestion($meta, $context);
+$meta = aiCopilotAugmentMetaWithCitationContract($meta, $citationContract);
 
 aiCopilotJsonResponse(200, [
     'ok' => true,
@@ -383,6 +431,10 @@ aiCopilotJsonResponse(200, [
     'sections' => $draft['sections'],
     'tags' => $draft['tags'],
     'sources' => $sources,
+    'claims' => $citationContract['claims'],
+    'sources_used' => $citationContract['sources_used'],
+    'uncited_claims_blocked' => $citationContract['uncited_claims_blocked'],
+    'safety_status' => $citationContract['safety_status'],
     'safety_note' => aiCopilotRoleSafetyNote($role),
     'engine' => $draft['engine'],
     'provider' => $draft['provider'] ?? (($draft['engine'] ?? '') === 'openai' ? 'openai' : 'local_fallback'),
@@ -520,6 +572,154 @@ function aiCopilotBuildResponseMeta(
         'response_length' => aiCopilotResponseTextLength($response),
         'rag_grounded' => $ragGrounded,
     ];
+}
+
+function aiCopilotAugmentMetaWithDocumentIngestion(array $meta, array $context): array
+{
+    $documentIngestionResult = is_array($context['document_ingestion_result'] ?? null) ? $context['document_ingestion_result'] : [];
+    if ($documentIngestionResult === []) {
+        return $meta;
+    }
+
+    $workflowTrace = array_values(array_filter($documentIngestionResult['workflow_trace'] ?? [], 'is_array'));
+    if ($workflowTrace !== []) {
+        $meta['agent_trace'] = $workflowTrace;
+        $meta['agent_architecture'] = 'php_supervisor_worker';
+    }
+
+    $sourceDocument = is_array($documentIngestionResult['source_document'] ?? null) ? $documentIngestionResult['source_document'] : [];
+    if ($sourceDocument !== []) {
+        $meta['review_status'] = aiCopilotCleanText((string) ($sourceDocument['review_status'] ?? 'pending_clinician_review'));
+        $meta['source_document_id'] = isset($sourceDocument['source_document_id']) && is_numeric($sourceDocument['source_document_id'])
+            ? (int) $sourceDocument['source_document_id']
+            : null;
+    }
+
+    return $meta;
+}
+
+function aiCopilotAppendResponseSectionItem(array $sections, string $title, string $item, string $tone = 'yellow'): array
+{
+    $item = aiCopilotCleanText($item);
+    if ($item === '') {
+        return $sections;
+    }
+
+    foreach ($sections as $index => $section) {
+        if (!is_array($section)) {
+            continue;
+        }
+        if (strtolower(trim((string) ($section['title'] ?? ''))) !== strtolower(trim($title))) {
+            continue;
+        }
+        $items = is_array($section['items'] ?? null) ? $section['items'] : [];
+        $items[] = $item;
+        $sections[$index]['items'] = array_values(array_unique(array_filter(array_map('aiCopilotCleanText', $items), static fn($value) => $value !== '')));
+        return $sections;
+    }
+
+    $sections[] = aiCopilotBuildSection($title, [$item], $tone);
+    return $sections;
+}
+
+function aiCopilotBuildCitationContractPayload(
+    array $response,
+    array $context,
+    string $role,
+    string $mode,
+    string $prompt,
+    string $requestId
+): array {
+    $toolOutput = is_array($context['attached_lab_pdf_tool_output'] ?? null) ? $context['attached_lab_pdf_tool_output'] : [];
+    if ($toolOutput === []) {
+        return [
+            'claims' => [],
+            'sources_used' => [],
+            'uncited_claims_blocked' => [],
+            'safety_status' => 'not_applicable',
+            'validation' => [
+                'claim_count' => 0,
+                'cited_claim_count' => 0,
+                'uncited_claim_count' => 0,
+                'invalid_citation_count' => 0,
+                'blocked_claim_count' => 0,
+                'source_count' => 0,
+                'citation_contract_status' => 'not_applicable',
+            ],
+            'response' => $response,
+        ];
+    }
+
+    $claims = aiCopilotBuildClaimsFromToolOutput($toolOutput);
+    $trace = new AgentTrace($requestId);
+    $worker = new CitationValidationWorker();
+    $validation = $worker->validateClaims($claims, [
+        'request_id' => $requestId,
+        'patient_id' => $context['patient']['pid'] ?? ($toolOutput['document_metadata']['patient_id'] ?? null),
+        'role' => $role,
+        'doc_type' => $toolOutput['document_metadata']['document_type'] ?? '',
+        'source_document_id' => $toolOutput['document_metadata']['source_document_id'] ?? null,
+    ], $trace);
+    $sourcesUsed = aiCopilotBuildSourcesUsedFromClaims($validation['claims'] ?? [], $toolOutput);
+
+    $safetyStatus = match ($validation['citation_contract_status'] ?? 'passed') {
+        'blocked' => 'blocked_missing_citations',
+        'review_required' => 'passed_with_clinician_review_required',
+        default => 'passed_with_clinician_review_required',
+    };
+
+    $responseWithCitations = $response;
+    if (($validation['blocked_claim_count'] ?? 0) > 0) {
+        $responseWithCitations['sections'] = aiCopilotAppendResponseSectionItem(
+            is_array($response['sections'] ?? null) ? $response['sections'] : [],
+            'Missing or Ambiguous Data',
+            'Some clinical claims were hidden because they were not linked to source evidence.',
+            'yellow'
+        );
+        if (($validation['cited_claim_count'] ?? 0) <= 0) {
+            $responseWithCitations['answer'] = 'I do not have enough source-grounded information to answer that safely.';
+        }
+    }
+    if (($validation['cited_claim_count'] ?? 0) <= 0 && aiCopilotShouldMarkRagGroundedForRequest($mode, $prompt, $context)) {
+        $responseWithCitations['sections'] = aiCopilotAppendResponseSectionItem(
+            is_array($responseWithCitations['sections'] ?? null) ? $responseWithCitations['sections'] : [],
+            'Missing or Ambiguous Data',
+            'This response includes clinical information that could not be fully linked to source evidence. Clinician review is required before use.',
+            'yellow'
+        );
+    }
+
+    return [
+        'claims' => array_values(array_filter($validation['claims'] ?? [], 'is_array')),
+        'sources_used' => $sourcesUsed,
+        'uncited_claims_blocked' => array_values(array_filter($validation['uncited_claims_blocked'] ?? [], 'is_array')),
+        'safety_status' => $safetyStatus,
+        'validation' => [
+            'claim_count' => (int) ($validation['claim_count'] ?? 0),
+            'cited_claim_count' => (int) ($validation['cited_claim_count'] ?? 0),
+            'uncited_claim_count' => (int) ($validation['uncited_claim_count'] ?? 0),
+            'invalid_citation_count' => (int) ($validation['invalid_citation_count'] ?? 0),
+            'blocked_claim_count' => (int) ($validation['blocked_claim_count'] ?? 0),
+            'source_count' => count($sourcesUsed),
+            'citation_contract_status' => (string) ($validation['citation_contract_status'] ?? 'passed'),
+            'user_message' => (string) ($validation['user_message'] ?? ''),
+        ],
+        'response' => $responseWithCitations,
+    ];
+}
+
+function aiCopilotAugmentMetaWithCitationContract(array $meta, array $citationContract): array
+{
+    $validation = is_array($citationContract['validation'] ?? null) ? $citationContract['validation'] : [];
+    $meta['citation_contract_status'] = aiCopilotCleanText((string) ($validation['citation_contract_status'] ?? ''));
+    $meta['claim_count'] = isset($validation['claim_count']) && is_numeric($validation['claim_count']) ? (int) $validation['claim_count'] : 0;
+    $meta['cited_claim_count'] = isset($validation['cited_claim_count']) && is_numeric($validation['cited_claim_count']) ? (int) $validation['cited_claim_count'] : 0;
+    $meta['uncited_claim_count'] = isset($validation['uncited_claim_count']) && is_numeric($validation['uncited_claim_count']) ? (int) $validation['uncited_claim_count'] : 0;
+    $meta['invalid_citation_count'] = isset($validation['invalid_citation_count']) && is_numeric($validation['invalid_citation_count']) ? (int) $validation['invalid_citation_count'] : 0;
+    $meta['blocked_claim_count'] = isset($validation['blocked_claim_count']) && is_numeric($validation['blocked_claim_count']) ? (int) $validation['blocked_claim_count'] : 0;
+    $meta['source_count'] = isset($validation['source_count']) && is_numeric($validation['source_count']) ? (int) $validation['source_count'] : 0;
+    $meta['citation_contract_user_message'] = aiCopilotCleanText((string) ($validation['user_message'] ?? ''));
+    return $meta;
 }
 
 function aiCopilotNormalizeTokenUsage(mixed $usage): ?array
@@ -4706,22 +4906,74 @@ function aiCopilotAttachUploadedLabPdfContext(
         return $context;
     }
 
+    $patientId = isset($context['patient']['pid']) && is_numeric($context['patient']['pid']) ? (int) $context['patient']['pid'] : 0;
     $patientKey = aiCopilotCleanText((string) ($context['patient']['pubpid'] ?? ''));
     $patientName = aiCopilotCleanText((string) ($context['patient']['name'] ?? ''));
-    $toolOutput = attach_and_vectorize_lab_pdf([
-        'request_id' => $requestId,
-        'role' => $role,
-        'mode' => $mode,
-        'prompt' => $message,
-        'patient_key' => $patientKey,
-        'patient_name' => $patientName,
-        'file' => $uploadedLabPdf,
-        'use_seeded_demo' => $useSeededLabPdf,
-        'attachment_purpose' => aiCopilotCleanText((string) ($payload['attachment_purpose'] ?? 'lab_pdf_ingestion')),
-    ]);
+    $requestedDocType = aiCopilotCleanText((string) ($payload['doc_type'] ?? ''));
+    $resolvedDocType = aiCopilotDocumentIngestionNormalizeDocType($requestedDocType);
+    if ($resolvedDocType === 'unsupported' && $uploadedLabPdf !== null) {
+        $resolvedDocType = aiCopilotDocumentIngestionNormalizeDocType(
+            aiCopilotAttachmentClassifyDocumentType(
+                (string) ($uploadedLabPdf['name'] ?? 'attached-document.pdf'),
+                '',
+                aiCopilotCleanText((string) ($payload['attachment_purpose'] ?? 'lab_pdf_ingestion'))
+            )
+        );
+    }
+    if ($resolvedDocType === 'unsupported' && $useSeededLabPdf) {
+        $resolvedDocType = 'lab_pdf';
+    }
 
-    if ($toolOutput !== []) {
+    $attachmentResult = attach_and_extract(
+        $patientId,
+        is_array($uploadedLabPdf) ? (string) ($uploadedLabPdf['tmp_name'] ?? '') : '',
+        $resolvedDocType,
+        [
+            'request_id' => $requestId,
+            'role' => $role,
+            'mode' => $mode,
+            'prompt' => $message,
+            'patient_key' => $patientKey,
+            'patient_name' => $patientName,
+            'file' => $uploadedLabPdf,
+            'use_seeded_demo' => $useSeededLabPdf,
+            'doc_type' => $resolvedDocType,
+            'attachment_purpose' => aiCopilotCleanText((string) ($payload['attachment_purpose'] ?? 'lab_pdf_ingestion')),
+        ]
+    );
+
+    if (is_array($attachmentResult['tool_output'] ?? null) && $attachmentResult['tool_output'] !== []) {
+        $toolOutput = $attachmentResult['tool_output'];
+        $toolOutput['source_links'] = is_array($attachmentResult['strict_extraction']['source_citations'] ?? null)
+            ? $attachmentResult['strict_extraction']['source_citations']
+            : ($toolOutput['source_links'] ?? []);
+        $toolOutput['source_citations'] = is_array($attachmentResult['strict_extraction']['source_citations'] ?? null)
+            ? $attachmentResult['strict_extraction']['source_citations']
+            : ($toolOutput['source_citations'] ?? $toolOutput['source_links'] ?? []);
+        $toolOutput['pending_review_facts'] = is_array($attachmentResult['pending_review_facts'] ?? null)
+            ? $attachmentResult['pending_review_facts']
+            : ($toolOutput['pending_review_facts'] ?? []);
+        $toolOutput['review_queue'] = is_array($attachmentResult['review_payload'] ?? null)
+            ? $attachmentResult['review_payload']
+            : ($toolOutput['review_queue'] ?? []);
+        $toolOutput['strict_extraction'] = is_array($attachmentResult['strict_extraction'] ?? null)
+            ? $attachmentResult['strict_extraction']
+            : ($toolOutput['strict_extraction'] ?? []);
+        $toolOutput['schema_validation'] = is_array($attachmentResult['schema_validation'] ?? null)
+            ? $attachmentResult['schema_validation']
+            : ($toolOutput['schema_validation'] ?? []);
+        $toolOutput['workflow_trace'] = is_array($attachmentResult['workflow_trace'] ?? null)
+            ? $attachmentResult['workflow_trace']
+            : ($toolOutput['workflow_trace'] ?? []);
+        $toolOutput['review_payload'] = is_array($attachmentResult['review_payload'] ?? null)
+            ? $attachmentResult['review_payload']
+            : ($toolOutput['review_payload'] ?? []);
+        if (is_array($attachmentResult['safety'] ?? null)) {
+            $toolOutput['evidence_safety'] = $attachmentResult['safety'];
+        }
+
         $context['attached_lab_pdf_tool_output'] = $toolOutput;
+        $context['document_ingestion_result'] = $attachmentResult;
     }
 
     return $context;
@@ -4812,6 +5064,12 @@ function aiCopilotNormalizeLabPdfContext(mixed $value): array
             'value' => $valueText,
             'interpretation' => $interpretation,
             'source_label' => aiCopilotCleanText((string) ($fact['sourceLabel'] ?? $defaultSourceLabel)),
+            'source_document_id' => isset($fact['sourceDocumentId']) && is_numeric($fact['sourceDocumentId'])
+                ? (int) $fact['sourceDocumentId']
+                : (isset($fact['source_document_id']) && is_numeric($fact['source_document_id']) ? (int) $fact['source_document_id'] : null),
+            'source_link' => is_array($fact['sourceCitation'] ?? $fact['source_citation'] ?? $fact['sourceLink'] ?? $fact['source_link'] ?? null)
+                ? ($fact['sourceCitation'] ?? $fact['source_citation'] ?? $fact['sourceLink'] ?? $fact['source_link'])
+                : [],
         ];
     }
 
@@ -4931,6 +5189,9 @@ function aiCopilotNormalizeLabPdfContext(mixed $value): array
             'mime_type' => aiCopilotCleanText((string) ($documentMetadata['mimeType'] ?? $documentMetadata['mime_type'] ?? 'application/pdf')),
             'size' => isset($documentMetadata['size']) && is_numeric($documentMetadata['size']) ? (int) $documentMetadata['size'] : null,
             'document_type' => $documentType,
+            'patient_id' => isset($documentMetadata['patientId']) && is_numeric($documentMetadata['patientId'])
+                ? (int) $documentMetadata['patientId']
+                : (isset($documentMetadata['patient_id']) && is_numeric($documentMetadata['patient_id']) ? (int) $documentMetadata['patient_id'] : null),
             'seeded_demo' => !empty($documentMetadata['seededDemo']) || !empty($documentMetadata['seeded_demo']),
             'patient_key' => aiCopilotCleanText((string) ($documentMetadata['patientKey'] ?? $documentMetadata['patient_key'] ?? '')),
             'patient_name' => aiCopilotCleanText((string) ($documentMetadata['patientName'] ?? $documentMetadata['patient_name'] ?? '')),
@@ -4938,6 +5199,18 @@ function aiCopilotNormalizeLabPdfContext(mixed $value): array
             'original_file_name' => aiCopilotCleanText((string) ($documentMetadata['originalFileName'] ?? $documentMetadata['original_file_name'] ?? '')),
             'display_file_name' => aiCopilotCleanText((string) ($documentMetadata['displayFileName'] ?? $documentMetadata['display_file_name'] ?? '')),
             'source_id' => aiCopilotCleanText((string) ($documentMetadata['sourceId'] ?? $documentMetadata['source_id'] ?? '')),
+            'source_document_id' => isset($documentMetadata['sourceDocumentId']) && is_numeric($documentMetadata['sourceDocumentId'])
+                ? (int) $documentMetadata['sourceDocumentId']
+                : (isset($documentMetadata['source_document_id']) && is_numeric($documentMetadata['source_document_id']) ? (int) $documentMetadata['source_document_id'] : null),
+            'openemr_document_id' => isset($documentMetadata['openemrDocumentId']) && is_numeric($documentMetadata['openemrDocumentId'])
+                ? (int) $documentMetadata['openemrDocumentId']
+                : (isset($documentMetadata['openemr_document_id']) && is_numeric($documentMetadata['openemr_document_id']) ? (int) $documentMetadata['openemr_document_id'] : null),
+            'fhir_document_reference_id' => aiCopilotCleanText((string) ($documentMetadata['fhirDocumentReferenceId'] ?? $documentMetadata['fhir_document_reference_id'] ?? '')),
+            'fhir_binary_id' => aiCopilotCleanText((string) ($documentMetadata['fhirBinaryId'] ?? $documentMetadata['fhir_binary_id'] ?? '')),
+            'review_status' => aiCopilotCleanText((string) ($documentMetadata['reviewStatus'] ?? $documentMetadata['review_status'] ?? '')),
+            'file_hash' => aiCopilotCleanText((string) ($documentMetadata['fileHash'] ?? $documentMetadata['file_hash'] ?? '')),
+            'uploader_role' => aiCopilotCleanText((string) ($documentMetadata['uploaderRole'] ?? $documentMetadata['uploader_role'] ?? '')),
+            'uploader_user' => aiCopilotCleanText((string) ($documentMetadata['uploaderUser'] ?? $documentMetadata['uploader_user'] ?? '')),
         ],
         'source_metadata' => [
             'file_name' => aiCopilotCleanText((string) ($sourceMetadata['fileName'] ?? $sourceMetadata['file_name'] ?? '')),
@@ -4952,6 +5225,9 @@ function aiCopilotNormalizeLabPdfContext(mixed $value): array
                 : (isset($sourceMetadata['chunk_count']) && is_numeric($sourceMetadata['chunk_count']) ? (int) $sourceMetadata['chunk_count'] : 0),
             'request_id' => aiCopilotCleanText((string) ($sourceMetadata['requestId'] ?? $sourceMetadata['request_id'] ?? '')),
             'source_id' => aiCopilotCleanText((string) ($sourceMetadata['sourceId'] ?? $sourceMetadata['source_id'] ?? '')),
+            'source_document_id' => isset($sourceMetadata['sourceDocumentId']) && is_numeric($sourceMetadata['sourceDocumentId'])
+                ? (int) $sourceMetadata['sourceDocumentId']
+                : (isset($sourceMetadata['source_document_id']) && is_numeric($sourceMetadata['source_document_id']) ? (int) $sourceMetadata['source_document_id'] : null),
         ],
         'extracted_facts' => array_slice($extractedFacts, 0, 20),
         'abnormal_findings' => array_slice(array_values(array_unique($abnormalFindings)), 0, 12),
@@ -4966,6 +5242,22 @@ function aiCopilotNormalizeLabPdfContext(mixed $value): array
             'chunks' => $retrievalChunks,
         ],
         'vectorized_result' => $vectorizedResult,
+        'source_links' => array_values(array_filter(array_map(static function ($item): array {
+            return is_array($item) ? $item : [];
+        }, $toolOutput['sourceCitations'] ?? $toolOutput['source_citations'] ?? $toolOutput['sourceLinks'] ?? $toolOutput['source_links'] ?? []), static fn($item) => $item !== [])),
+        'pending_review_facts' => array_values(array_filter($toolOutput['pendingReviewFacts'] ?? $toolOutput['pending_review_facts'] ?? [], 'is_array')),
+        'review_queue' => is_array($toolOutput['reviewQueue'] ?? $toolOutput['review_queue'] ?? null)
+            ? ($toolOutput['reviewQueue'] ?? $toolOutput['review_queue'])
+            : [],
+        'strict_extraction' => is_array($toolOutput['strictExtraction'] ?? $toolOutput['strict_extraction'] ?? null)
+            ? ($toolOutput['strictExtraction'] ?? $toolOutput['strict_extraction'])
+            : [],
+        'schema_validation' => is_array($toolOutput['schemaValidation'] ?? $toolOutput['schema_validation'] ?? null)
+            ? ($toolOutput['schemaValidation'] ?? $toolOutput['schema_validation'])
+            : [],
+        'citation_validation' => is_array($toolOutput['citationValidation'] ?? $toolOutput['citation_validation'] ?? null)
+            ? ($toolOutput['citationValidation'] ?? $toolOutput['citation_validation'])
+            : [],
         'safety' => [
             'draft_only' => !empty($toolOutput['safety']['draftOnly']),
             'review_required' => !empty($toolOutput['safety']['reviewRequired']),
@@ -5036,7 +5328,104 @@ function aiCopilotLabPdfToolOutputForClient(array $toolOutput): array
             'value' => aiCopilotCleanText((string) ($fact['value'] ?? '')),
             'interpretation' => aiCopilotCleanText((string) ($fact['interpretation'] ?? '')),
             'sourceLabel' => aiCopilotCleanText((string) ($fact['source_label'] ?? $defaultSourceLabel)),
+            'sourceDocumentId' => isset($fact['source_document_id']) && is_numeric($fact['source_document_id'])
+                ? (int) $fact['source_document_id']
+                : null,
+            'sourceLink' => is_array($fact['source_link'] ?? null) ? $fact['source_link'] : [],
         ];
+    }
+
+    $sourceDocumentId = isset($toolOutput['document_metadata']['source_document_id']) && is_numeric($toolOutput['document_metadata']['source_document_id'])
+        ? (int) $toolOutput['document_metadata']['source_document_id']
+        : (isset($toolOutput['source_metadata']['source_document_id']) && is_numeric($toolOutput['source_metadata']['source_document_id'])
+            ? (int) $toolOutput['source_metadata']['source_document_id']
+            : 0);
+    if ($sourceDocumentId <= 0) {
+        foreach (($toolOutput['retrieval']['chunks'] ?? []) as $chunk) {
+            if (is_array($chunk) && isset($chunk['source_document_id']) && is_numeric($chunk['source_document_id'])) {
+                $sourceDocumentId = (int) $chunk['source_document_id'];
+                break;
+            }
+        }
+    }
+
+    $pendingReviewFacts = array_values(array_filter($toolOutput['pending_review_facts'] ?? [], 'is_array'));
+    $reviewQueue = is_array($toolOutput['review_queue'] ?? null) ? $toolOutput['review_queue'] : [];
+    if ($pendingReviewFacts === [] && $sourceDocumentId > 0 && function_exists('aiCopilotDocumentIngestionListFactsByDocument')) {
+        $dbFacts = aiCopilotDocumentIngestionListFactsByDocument($sourceDocumentId);
+        foreach ($dbFacts as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $fact = is_array($row['fact'] ?? null) ? $row['fact'] : [];
+            $source = is_array($row['source'] ?? null) ? $row['source'] : [];
+            $label = aiCopilotCleanText((string) (
+                $fact['field_name']
+                ?? $fact['test_name']
+                ?? $fact['medication_name']
+                ?? $fact['allergen']
+                ?? $fact['relation']
+                ?? 'Pending fact'
+            ));
+            $value = aiCopilotCleanText((string) (
+                $fact['value']
+                ?? $fact['normalized_value']
+                ?? ''
+            ));
+            if ($value === '' && isset($fact['dose'], $fact['frequency'])) {
+                $value = aiCopilotCleanText(trim((string) $fact['dose'] . ' ' . (string) $fact['frequency']));
+            }
+            if ($value === '' && isset($fact['condition'])) {
+                $value = aiCopilotCleanText((string) $fact['condition']);
+            }
+            $pendingReviewFacts[] = [
+                'id' => isset($row['id']) && is_numeric($row['id']) ? (int) $row['id'] : 0,
+                'label' => $label,
+                'value' => $value,
+                'reviewStatus' => aiCopilotCleanText((string) ($row['review_status'] ?? 'pending_clinician_review')),
+                'proposedTarget' => aiCopilotCleanText((string) ($row['proposed_target'] ?? '')),
+                'confidence' => isset($row['confidence']) ? (float) $row['confidence'] : 0.0,
+                'citation' => $source,
+            ];
+        }
+
+        if ($reviewQueue === [] && $pendingReviewFacts !== []) {
+            $summary = function_exists('aiCopilotDocumentIngestionBuildReviewSummary')
+                ? aiCopilotDocumentIngestionBuildReviewSummary($sourceDocumentId)
+                : [
+                    'pending_count' => count(array_filter($pendingReviewFacts, static fn($fact) => ($fact['reviewStatus'] ?? '') === 'pending_clinician_review')),
+                    'approved_count' => count(array_filter($pendingReviewFacts, static fn($fact) => ($fact['reviewStatus'] ?? '') === 'clinician_approved')),
+                    'rejected_count' => count(array_filter($pendingReviewFacts, static fn($fact) => ($fact['reviewStatus'] ?? '') === 'clinician_rejected')),
+                ];
+            $reviewStatus = ($summary['pending_count'] ?? 0) > 0
+                ? 'pending_clinician_review'
+                : ((($summary['approved_count'] ?? 0) > 0 && ($summary['rejected_count'] ?? 0) === 0)
+                    ? 'clinician_approved'
+                    : ((($summary['rejected_count'] ?? 0) > 0 && ($summary['approved_count'] ?? 0) === 0)
+                        ? 'clinician_rejected'
+                        : 'pending_clinician_review'));
+            $reviewQueue = [
+                'banner' => 'Clinician Review Required',
+                'helperText' => 'Approved for demo review — not written to chart automatically.',
+                'status' => $reviewStatus,
+                'summary' => [
+                    'pendingCount' => (int) ($summary['pending_count'] ?? 0),
+                    'approvedCount' => (int) ($summary['approved_count'] ?? 0),
+                    'rejectedCount' => (int) ($summary['rejected_count'] ?? 0),
+                    'reviewStatus' => $reviewStatus,
+                ],
+                'facts' => $pendingReviewFacts,
+            ];
+        }
+    }
+
+    $sourceCitations = array_values(array_filter(array_map(static function ($item): array {
+        return is_array($item) ? $item : [];
+    }, $toolOutput['source_citations'] ?? $toolOutput['source_links'] ?? []), static fn($item) => $item !== []));
+    if ($sourceCitations === [] && $pendingReviewFacts !== []) {
+        $sourceCitations = array_values(array_filter(array_map(static function ($fact): array {
+            return is_array($fact['citation'] ?? null) ? $fact['citation'] : [];
+        }, $pendingReviewFacts), static fn($item) => $item !== []));
     }
 
     return [
@@ -5058,6 +5447,9 @@ function aiCopilotLabPdfToolOutputForClient(array $toolOutput): array
             'mimeType' => aiCopilotCleanText((string) ($toolOutput['document_metadata']['mime_type'] ?? 'application/pdf')),
             'size' => $toolOutput['document_metadata']['size'] ?? null,
             'documentType' => $documentType,
+            'patientId' => isset($toolOutput['document_metadata']['patient_id']) && is_numeric($toolOutput['document_metadata']['patient_id'])
+                ? (int) $toolOutput['document_metadata']['patient_id']
+                : null,
             'seededDemo' => !empty($toolOutput['document_metadata']['seeded_demo']),
             'patientKey' => aiCopilotCleanText((string) ($toolOutput['document_metadata']['patient_key'] ?? '')),
             'patientName' => aiCopilotCleanText((string) ($toolOutput['document_metadata']['patient_name'] ?? '')),
@@ -5065,6 +5457,16 @@ function aiCopilotLabPdfToolOutputForClient(array $toolOutput): array
             'originalFileName' => aiCopilotCleanText((string) ($toolOutput['document_metadata']['original_file_name'] ?? '')),
             'displayFileName' => aiCopilotCleanText((string) ($toolOutput['document_metadata']['display_file_name'] ?? '')),
             'sourceId' => aiCopilotCleanText((string) ($toolOutput['document_metadata']['source_id'] ?? '')),
+            'sourceDocumentId' => $sourceDocumentId > 0 ? $sourceDocumentId : null,
+            'openemrDocumentId' => isset($toolOutput['document_metadata']['openemr_document_id']) && is_numeric($toolOutput['document_metadata']['openemr_document_id'])
+                ? (int) $toolOutput['document_metadata']['openemr_document_id']
+                : null,
+            'fhirDocumentReferenceId' => aiCopilotCleanText((string) ($toolOutput['document_metadata']['fhir_document_reference_id'] ?? '')),
+            'fhirBinaryId' => aiCopilotCleanText((string) ($toolOutput['document_metadata']['fhir_binary_id'] ?? '')),
+            'reviewStatus' => aiCopilotCleanText((string) ($toolOutput['document_metadata']['review_status'] ?? '')),
+            'fileHash' => aiCopilotCleanText((string) ($toolOutput['document_metadata']['file_hash'] ?? '')),
+            'uploaderRole' => aiCopilotCleanText((string) ($toolOutput['document_metadata']['uploader_role'] ?? '')),
+            'uploaderUser' => aiCopilotCleanText((string) ($toolOutput['document_metadata']['uploader_user'] ?? '')),
         ],
         'sourceMetadata' => [
             'fileName' => aiCopilotCleanText((string) ($toolOutput['source_metadata']['file_name'] ?? '')),
@@ -5077,6 +5479,7 @@ function aiCopilotLabPdfToolOutputForClient(array $toolOutput): array
             'chunkCount' => $toolOutput['source_metadata']['chunk_count'] ?? 0,
             'requestId' => aiCopilotCleanText((string) ($toolOutput['source_metadata']['request_id'] ?? '')),
             'sourceId' => aiCopilotCleanText((string) ($toolOutput['source_metadata']['source_id'] ?? '')),
+            'sourceDocumentId' => $sourceDocumentId > 0 ? $sourceDocumentId : null,
         ],
         'extractedFacts' => $extractedFacts,
         'abnormalFindings' => array_values(array_unique(array_filter(array_map('aiCopilotCleanText', $toolOutput['abnormal_findings'] ?? []), static fn($item) => $item !== ''))),
@@ -5102,6 +5505,9 @@ function aiCopilotLabPdfToolOutputForClient(array $toolOutput): array
                     'extractionMethod' => aiCopilotCleanText((string) ($chunk['extraction_method'] ?? '')),
                     'chunkIndex' => $chunk['chunk_index'] ?? null,
                     'ingestionOrigin' => aiCopilotCleanText((string) ($chunk['ingestion_origin'] ?? '')),
+                    'sourceDocumentId' => isset($chunk['source_document_id']) && is_numeric($chunk['source_document_id'])
+                        ? (int) $chunk['source_document_id']
+                        : null,
                     'seededDemo' => !empty($chunk['seeded_demo']),
                     'embedding' => array_values(array_map(static fn($value) => (float) $value, is_array($chunk['embedding'] ?? null) ? $chunk['embedding'] : [])),
                 ];
@@ -5114,6 +5520,9 @@ function aiCopilotLabPdfToolOutputForClient(array $toolOutput): array
                 'displayFileName' => aiCopilotCleanText((string) ($item['display_file_name'] ?? $item['file_name'] ?? '')),
                 'documentType' => aiCopilotCleanText((string) ($item['document_type'] ?? '')),
                 'sourceId' => aiCopilotCleanText((string) ($item['source_id'] ?? '')),
+                'sourceDocumentId' => isset($item['source_document_id']) && is_numeric($item['source_document_id'])
+                    ? (int) $item['source_document_id']
+                    : null,
                 'chunkIndex' => $item['chunk_index'] ?? null,
                 'sourcePage' => $item['source_page'] ?? null,
                 'textPreview' => aiCopilotCleanText((string) ($item['text_preview'] ?? '')),
@@ -5121,6 +5530,58 @@ function aiCopilotLabPdfToolOutputForClient(array $toolOutput): array
                 'score' => $item['score'] ?? null,
             ];
         }, array_values(array_filter($toolOutput['vectorized_result'] ?? [], 'is_array'))),
+        'sourceLinks' => $sourceCitations,
+        'sourceCitations' => $sourceCitations,
+        'pendingReviewFacts' => $pendingReviewFacts,
+        'reviewQueue' => $reviewQueue,
+        'strictExtraction' => is_array($toolOutput['strict_extraction'] ?? null) ? $toolOutput['strict_extraction'] : [],
+        'schemaValidation' => [
+            'schemaName' => aiCopilotCleanText((string) ($toolOutput['schema_validation']['schema_name'] ?? '')),
+            'schemaFile' => aiCopilotCleanText((string) ($toolOutput['schema_validation']['schema_file'] ?? '')),
+            'schemaValid' => !empty($toolOutput['schema_validation']['schema_valid']),
+            'valid' => !empty($toolOutput['schema_validation']['schema_valid']) || !empty($toolOutput['schema_validation']['valid']),
+            'reviewSafe' => !empty($toolOutput['schema_validation']['review_safe']),
+            'trustedPersistenceAllowed' => !empty($toolOutput['schema_validation']['trusted_persistence_allowed']),
+            'trustedRagIndexAllowed' => !empty($toolOutput['schema_validation']['trusted_rag_index_allowed']),
+            'statusLabel' => aiCopilotCleanText((string) ($toolOutput['schema_validation']['status_label'] ?? '')),
+            'userMessage' => aiCopilotCleanText((string) ($toolOutput['schema_validation']['user_message'] ?? '')),
+            'validationErrors' => array_values(array_filter(array_map(static function ($item): array {
+                return is_array($item) ? $item : [];
+            }, $toolOutput['schema_validation']['validation_errors'] ?? []), static fn($item) => $item !== [])),
+            'validationErrorCount' => isset($toolOutput['schema_validation']['validation_errors']) && is_array($toolOutput['schema_validation']['validation_errors'])
+                ? count($toolOutput['schema_validation']['validation_errors'])
+                : (isset($toolOutput['schema_validation']['validation_error_count']) && is_numeric($toolOutput['schema_validation']['validation_error_count']) ? (int) $toolOutput['schema_validation']['validation_error_count'] : 0),
+            'missingRequiredFieldCount' => isset($toolOutput['schema_validation']['missing_required_field_count']) && is_numeric($toolOutput['schema_validation']['missing_required_field_count'])
+                ? (int) $toolOutput['schema_validation']['missing_required_field_count']
+                : 0,
+            'citationCount' => isset($toolOutput['schema_validation']['citation_count']) && is_numeric($toolOutput['schema_validation']['citation_count'])
+                ? (int) $toolOutput['schema_validation']['citation_count']
+                : 0,
+            'extractionStatus' => aiCopilotCleanText((string) ($toolOutput['schema_validation']['extraction_status'] ?? '')),
+            'reviewStatus' => aiCopilotCleanText((string) ($toolOutput['schema_validation']['review_status'] ?? 'pending_clinician_review')),
+            'errors' => array_values(array_filter(array_map('aiCopilotCleanText', $toolOutput['schema_validation']['errors'] ?? []), static fn($item) => $item !== '')),
+        ],
+        'citationValidation' => [
+            'schemaName' => aiCopilotCleanText((string) ($toolOutput['citation_validation']['schema_name'] ?? 'citation_contract_v1')),
+            'valid' => !empty($toolOutput['citation_validation']['valid']),
+            'blocked' => !empty($toolOutput['citation_validation']['blocked']),
+            'reviewRequired' => !empty($toolOutput['citation_validation']['review_required']),
+            'citationContractStatus' => aiCopilotCleanText((string) ($toolOutput['citation_validation']['citation_contract_status'] ?? '')),
+            'invalidCitationCount' => isset($toolOutput['citation_validation']['invalid_citation_count']) && is_numeric($toolOutput['citation_validation']['invalid_citation_count'])
+                ? (int) $toolOutput['citation_validation']['invalid_citation_count']
+                : 0,
+            'blockedClaimCount' => isset($toolOutput['citation_validation']['blocked_claim_count']) && is_numeric($toolOutput['citation_validation']['blocked_claim_count'])
+                ? (int) $toolOutput['citation_validation']['blocked_claim_count']
+                : 0,
+            'citationCount' => isset($toolOutput['citation_validation']['citation_count']) && is_numeric($toolOutput['citation_validation']['citation_count'])
+                ? (int) $toolOutput['citation_validation']['citation_count']
+                : 0,
+            'validationErrors' => array_values(array_filter(array_map(static function ($item): array {
+                return is_array($item) ? $item : [];
+            }, $toolOutput['citation_validation']['validation_errors'] ?? []), static fn($item) => $item !== [])),
+            'userMessage' => aiCopilotCleanText((string) ($toolOutput['citation_validation']['user_message'] ?? '')),
+        ],
+        'workflowTrace' => array_values(array_filter($toolOutput['workflow_trace'] ?? [], 'is_array')),
         'safety' => [
             'draftOnly' => !empty($toolOutput['safety']['draft_only']),
             'reviewRequired' => !empty($toolOutput['safety']['review_required']),
@@ -5157,6 +5618,8 @@ function aiCopilotLabPdfToolOutputForClient(array $toolOutput): array
         ],
         'sourceCoverage' => is_array($toolOutput['source_coverage'] ?? null) ? $toolOutput['source_coverage'] : [],
         'documentSummaries' => is_array($toolOutput['document_summaries'] ?? null) ? $toolOutput['document_summaries'] : [],
+        'reviewPayload' => is_array($toolOutput['review_payload'] ?? null) ? $toolOutput['review_payload'] : [],
+        'evidenceSafety' => is_array($toolOutput['evidence_safety'] ?? null) ? $toolOutput['evidence_safety'] : [],
     ];
 }
 
@@ -5192,14 +5655,17 @@ function aiCopilotAgentToolCatalog(): array
         ],
         'attach_and_extract' => [
             'name' => 'attach_and_extract',
-            'description' => 'Validate an attached demo lab PDF payload and return structured extraction facts for clinician review.',
+            'description' => 'Store an uploaded lab PDF or intake form as an OpenEMR source document, extract draft structured facts, persist pending review facts, and return source-grounded JSON only.',
             'worker' => 'chart_retrieval_worker',
             'input_schema' => [
                 'type' => 'object',
-                'required' => ['role'],
+                'required' => ['role', 'patient_id', 'doc_type'],
                 'properties' => [
                     'role' => ['type' => 'string'],
+                    'patient_id' => ['type' => 'integer'],
                     'patient_key' => ['type' => 'string'],
+                    'file_path' => ['type' => 'string'],
+                    'doc_type' => ['type' => 'string', 'enum' => ['lab_pdf', 'intake_form']],
                     'use_demo_seed' => ['type' => 'boolean'],
                     'tool_output' => ['type' => 'object'],
                 ],
@@ -5208,6 +5674,8 @@ function aiCopilotAgentToolCatalog(): array
                 'type' => 'object',
                 'properties' => [
                     'tool_output' => ['type' => 'object'],
+                    'strict_extraction' => ['type' => 'object'],
+                    'review_payload' => ['type' => 'object'],
                     'sources' => ['type' => 'array'],
                     'missing_data' => ['type' => 'array'],
                 ],
@@ -5724,72 +6192,118 @@ function aiCopilotAgentAttachAndExtractTool(array $toolInput, string $role, stri
 
 function aiCopilotAgentRetrieveGuidelineEvidenceTool(array $toolInput, string $role, string $mode, string $prompt, array $context): array
 {
-    $sources = [
-        aiCopilotAgentToolSource('policy_draft_only', 'OpenEMR AI Copilot Draft-Only Policy', 'policy'),
-        aiCopilotAgentToolSource('policy_role_scope', 'OpenEMR AI Copilot Role Policy', 'policy'),
-    ];
-    $evidence = [
-        [
-            'statement' => 'Responses remain draft-only and require human review before any clinical, billing, or administrative action.',
-            'source_label' => 'OpenEMR AI Copilot Draft-Only Policy',
-        ],
-        [
-            'statement' => 'No direct chart writes occur without clinician approval in this demo workflow.',
-            'source_label' => 'OpenEMR AI Copilot Draft-Only Policy',
-        ],
-    ];
+    $requestId = aiCopilotCleanText((string) ($toolInput['request_id'] ?? ''));
+    $trace = new AgentTrace($requestId !== '' ? $requestId : 'guideline_retrieval');
     $policyFlags = ['draft_only', 'no_direct_chart_write'];
 
     if ($role === 'front_desk') {
-        $evidence[] = [
-            'statement' => 'Front Desk responses must use minimum necessary PHI and avoid diagnoses, medications, labs, and treatment details.',
-            'source_label' => 'OpenEMR AI Copilot Role Policy',
-        ];
         $policyFlags[] = 'minimum_necessary_phi';
     } elseif ($role === 'billing') {
-        $evidence[] = [
-            'statement' => 'Billing role responses may cover insurance, payment, and claim-review workflow but not clinical treatment details.',
-            'source_label' => 'OpenEMR AI Copilot Role Policy',
-        ];
         $policyFlags[] = 'billing_scope_only';
     } elseif ($role === 'nurse') {
-        $evidence[] = [
-            'statement' => 'Nurse role responses may support education and follow-up, but medication changes and prescribing remain restricted.',
-            'source_label' => 'OpenEMR AI Copilot Role Policy',
-        ];
         $policyFlags[] = 'nurse_scope_only';
     } else {
-        $evidence[] = [
-            'statement' => 'Doctor role responses may summarize chart context and draft treatment considerations, but never finalize diagnosis or autonomous treatment decisions.',
-            'source_label' => 'OpenEMR AI Copilot Role Policy',
-        ];
         $policyFlags[] = 'doctor_draft_only';
     }
 
-    if (in_array($mode, ['rag_chart_context', 'latest_ambient_summary'], true)) {
-        $sources[] = aiCopilotAgentToolSource('workflow_retrieval_first', 'OpenEMR Retrieval-First Workflow', 'workflow');
-        $evidence[] = [
-            'statement' => 'Chart-context responses should retrieve role-appropriate sources before drafting and should not answer from uncited memory.',
-            'source_label' => 'OpenEMR Retrieval-First Workflow',
-        ];
+    if (in_array($mode, ['rag_chart_context', 'latest_ambient_summary', 'clinical_notes', 'treatment_plan', 'follow_up'], true)) {
         $policyFlags[] = 'retrieval_first';
     }
-
     if ($mode === 'lab_pdf_ingestion') {
-        $sources[] = aiCopilotAgentToolSource('workflow_attachment_review', 'OpenEMR Attachment Review Workflow', 'workflow');
-        $evidence[] = [
-            'statement' => 'Attached lab PDF extraction remains draft-only and may still require OCR or manual verification against the source document.',
-            'source_label' => 'OpenEMR Attachment Review Workflow',
-        ];
         $policyFlags[] = 'attachment_review_required';
+    }
+
+    $corpusWorker = new GuidelineCorpusWorker();
+    $guidelineChunks = $corpusWorker->loadChunks($requestId, $role, $mode, $trace);
+    $requestedDocumentTypes = aiCopilotRagDetectRequestedDocumentTypes($prompt, $mode);
+    $uploadedChunks = aiCopilotRagLoadUploadedDocumentChunks([
+        'role' => $role,
+        'patient_key' => aiCopilotCleanText((string) ($context['patient']['pubpid'] ?? '')),
+        'requested_document_types' => $requestedDocumentTypes,
+    ]);
+    $allChunks = array_merge($guidelineChunks, $uploadedChunks);
+
+    $sparseWorker = new SparseRetrievalWorker();
+    $sparseResults = $sparseWorker->retrieve($allChunks, $prompt, $requestId, $role, $mode, $trace);
+    $denseWorker = new DenseRetrievalWorker();
+    $denseResults = $denseWorker->retrieve($allChunks, $prompt, $requestId, $role, $mode, $trace);
+
+    $hybridWorker = new HybridRetrievalWorker();
+    $hybrid = $hybridWorker->retrieve($prompt, [
+        'request_id' => $requestId,
+        'role' => $role,
+        'mode' => $mode,
+        'patient_key' => aiCopilotCleanText((string) ($context['patient']['pubpid'] ?? '')),
+    ], $trace);
+
+    $rerankWorker = new RerankWorker();
+    $reranked = $rerankWorker->rerank($hybrid['candidates'] ?? [], $prompt, [
+        'request_id' => $requestId,
+        'role' => $role,
+        'mode' => $mode,
+    ], $trace);
+
+    $retrievalMode = aiCopilotCleanText((string) ($hybrid['retrieval_mode'] ?? 'no_grounded_evidence'));
+    $rerankProvider = aiCopilotCleanText((string) ($reranked['provider'] ?? 'fallback_score_sort'));
+    $evidenceSnippets = [];
+    foreach (($reranked['results'] ?? []) as $chunk) {
+        if (!is_array($chunk)) {
+            continue;
+        }
+        $relevanceScore = isset($chunk['relevance_score']) && is_numeric($chunk['relevance_score'])
+            ? (float) $chunk['relevance_score']
+            : (float) ($chunk['hybrid_score'] ?? 0.0);
+        $evidenceSnippets[] = aiCopilotRagBuildEvidenceSnippet($chunk, $relevanceScore, $retrievalMode, $rerankProvider);
+    }
+
+    $evidence = [];
+    $sources = [];
+    $sourcesUsed = [];
+    foreach ($evidenceSnippets as $snippet) {
+        if (!is_array($snippet)) {
+            continue;
+        }
+        $evidence[] = [
+            'statement' => aiCopilotCleanText((string) ($snippet['text'] ?? '')),
+            'source_label' => aiCopilotCleanText((string) ($snippet['source_title'] ?? 'Retrieved Evidence')),
+        ];
+
+        $citation = is_array($snippet['citation'] ?? null) ? $snippet['citation'] : [];
+        if ($citation !== []) {
+            $sourcesUsed[] = aiCopilotBuildSourceUsedEntry($citation, [
+                'label' => aiCopilotCleanText((string) ($snippet['source_title'] ?? aiCopilotCitationSourceLabel($citation))),
+            ]);
+            $sources[] = [
+                'id' => aiCopilotCleanText((string) ($citation['source_id'] ?? '')),
+                'title' => aiCopilotCleanText((string) ($snippet['source_title'] ?? aiCopilotCitationSourceLabel($citation))),
+                'label' => aiCopilotCleanText((string) ($snippet['source_title'] ?? aiCopilotCitationSourceLabel($citation))),
+                'category' => aiCopilotCleanText((string) ($citation['document_type'] ?? $citation['source_type'] ?? 'source')),
+            ];
+        }
+    }
+
+    $missingData = [];
+    if ($evidenceSnippets === []) {
+        $missingData[] = 'No grounded guideline or uploaded-document evidence snippets were retrieved for this request.';
     }
 
     return [
         'tool' => 'retrieve_guideline_evidence',
-        'worker' => 'chart_retrieval_worker',
+        'worker' => 'hybrid_retrieval_worker',
         'evidence' => $evidence,
+        'evidence_snippets' => $evidenceSnippets,
         'sources' => aiCopilotAgentNormalizeSources($sources),
+        'sources_used' => $sourcesUsed,
         'policy_flags' => array_values(array_unique($policyFlags)),
+        'retrieval_mode' => $retrievalMode !== '' ? $retrievalMode : 'no_grounded_evidence',
+        'rerank_provider' => $rerankProvider !== '' ? $rerankProvider : 'fallback_score_sort',
+        'guideline_chunk_count' => count($guidelineChunks),
+        'uploaded_chunk_count' => count($uploadedChunks),
+        'sparse_result_count' => count($sparseResults),
+        'dense_result_count' => count($denseResults),
+        'hybrid_candidate_count' => count($hybrid['candidates'] ?? []),
+        'reranked_result_count' => count($evidenceSnippets),
+        'missing_data' => $missingData,
     ];
 }
 
@@ -6387,58 +6901,69 @@ function aiCopilotAgentDraftGroundedAnswerTool(
     $chartContextResult = is_array($toolInput['chart_context_result'] ?? null) ? $toolInput['chart_context_result'] : [];
     $guidelineEvidenceResult = is_array($toolInput['guideline_evidence_result'] ?? null) ? $toolInput['guideline_evidence_result'] : [];
     $attachmentResult = is_array($toolInput['attachment_result'] ?? null) ? $toolInput['attachment_result'] : [];
-    $attachmentToolOutput = is_array($attachmentResult['tool_output'] ?? null) ? $attachmentResult['tool_output'] : [];
-
-    $draft = aiCopilotGenerateDraft($requestId, $role, $mode, $prompt, $chatHistory, $context, $validModes[$mode]);
+    $groundedWorker = new GroundedAnswerWorker();
+    $workerTrace = new AgentTrace($requestId);
+    $groundedDraft = $groundedWorker->draft([
+        'request_id' => $requestId,
+        'role' => $role,
+        'mode' => $mode,
+        'prompt' => $prompt,
+        'context' => $context,
+        'chart_context_result' => $chartContextResult,
+        'guideline_evidence_result' => $guidelineEvidenceResult,
+        'attachment_result' => $attachmentResult,
+    ], $workerTrace);
 
     $meta = aiCopilotBuildResponseMeta(
         $requestId,
         $role,
         $mode,
         $context,
-        $draft,
+        [
+            'answer' => $groundedDraft['answer'] ?? '',
+            'sections' => $groundedDraft['sections'] ?? [],
+            'tags' => $groundedDraft['tags'] ?? [],
+        ],
         [
             'restricted_by_role' => false,
-            'fallback_used' => ($draft['engine'] ?? 'fallback') === 'fallback',
-            'fallback_reason' => $draft['fallback_reason'] ?? null,
-            'engine' => $draft['engine'] ?? 'fallback',
-            'provider' => $draft['provider'] ?? (($draft['engine'] ?? '') === 'openai' ? 'openai' : 'local_fallback'),
-            'model' => $draft['model'] ?? null,
-            'openai_configured' => (bool) ($draft['openai_configured'] ?? $openAiConfigured),
-            'error_category' => $draft['error_category'] ?? null,
-            'openai_error_category' => $draft['openai_error_category'] ?? null,
-            'openai_http_status' => $draft['openai_http_status'] ?? null,
-            'openai_error_message_safe' => $draft['openai_error_message_safe'] ?? null,
-            'rag_grounded' => aiCopilotShouldMarkRagGroundedForRequest($mode, $prompt, $context) || aiCopilotAttachmentRetrievedChunkCount($attachmentToolOutput) > 0,
+            'fallback_used' => true,
+            'fallback_reason' => 'grounded_rag',
+            'engine' => 'fallback',
+            'provider' => 'local_fallback',
+            'model' => null,
+            'openai_configured' => $openAiConfigured,
+            'rag_grounded' => !empty($groundedDraft['meta']['rag_grounded']),
         ],
         $requestStartedAt
     );
-
-    $structuredDraft = aiCopilotAgentBuildStructuredDraft(
-        $draft,
-        $role,
-        $mode,
-        $prompt,
-        $context,
-        $chartContextResult,
-        $guidelineEvidenceResult,
-        $attachmentResult,
-        $meta
-    );
+    $meta['retrieval_mode'] = aiCopilotCleanText((string) ($groundedDraft['meta']['retrieval_mode'] ?? $guidelineEvidenceResult['retrieval_mode'] ?? ''));
+    $meta['rerank_provider'] = aiCopilotCleanText((string) ($groundedDraft['meta']['rerank_provider'] ?? $guidelineEvidenceResult['rerank_provider'] ?? ''));
+    $meta['sparse_result_count'] = isset($groundedDraft['meta']['sparse_result_count']) && is_numeric($groundedDraft['meta']['sparse_result_count']) ? (int) $groundedDraft['meta']['sparse_result_count'] : (int) ($guidelineEvidenceResult['sparse_result_count'] ?? 0);
+    $meta['dense_result_count'] = isset($groundedDraft['meta']['dense_result_count']) && is_numeric($groundedDraft['meta']['dense_result_count']) ? (int) $groundedDraft['meta']['dense_result_count'] : (int) ($guidelineEvidenceResult['dense_result_count'] ?? 0);
+    $meta['hybrid_candidate_count'] = isset($groundedDraft['meta']['hybrid_candidate_count']) && is_numeric($groundedDraft['meta']['hybrid_candidate_count']) ? (int) $groundedDraft['meta']['hybrid_candidate_count'] : (int) ($guidelineEvidenceResult['hybrid_candidate_count'] ?? 0);
+    $meta['reranked_result_count'] = isset($groundedDraft['meta']['reranked_result_count']) && is_numeric($groundedDraft['meta']['reranked_result_count']) ? (int) $groundedDraft['meta']['reranked_result_count'] : (int) ($guidelineEvidenceResult['reranked_result_count'] ?? 0);
+    $meta['guideline_chunk_count'] = isset($groundedDraft['meta']['guideline_chunk_count']) && is_numeric($groundedDraft['meta']['guideline_chunk_count']) ? (int) $groundedDraft['meta']['guideline_chunk_count'] : (int) ($guidelineEvidenceResult['guideline_chunk_count'] ?? 0);
+    $meta['uploaded_chunk_count'] = isset($groundedDraft['meta']['uploaded_chunk_count']) && is_numeric($groundedDraft['meta']['uploaded_chunk_count']) ? (int) $groundedDraft['meta']['uploaded_chunk_count'] : (int) ($guidelineEvidenceResult['uploaded_chunk_count'] ?? 0);
+    $meta['claim_count'] = count($groundedDraft['claims'] ?? []);
+    $meta['source_count'] = count($groundedDraft['sources_used'] ?? []);
 
     return [
         'tool' => 'draft_grounded_answer',
         'worker' => 'clinical_workflow_supervisor',
         'draft' => [
-            'answer' => $structuredDraft['answer'],
-            'sections' => $structuredDraft['sections'],
-            'tags' => $structuredDraft['tags'],
-            'sources' => $structuredDraft['sources'],
-            'safety_note' => $structuredDraft['safety_note'],
-            'missing_data' => $structuredDraft['missing_data'],
+            'answer' => $groundedDraft['answer'],
+            'sections' => $groundedDraft['sections'],
+            'tags' => $groundedDraft['tags'],
+            'sources' => $groundedDraft['sources'],
+            'safety_note' => $groundedDraft['safety_note'] ?? aiCopilotGroundedAnswerSafetyNote($role),
+            'missing_data' => $groundedDraft['missing_data'],
         ],
-        'meta' => $structuredDraft['meta'],
-        'tool_output' => $structuredDraft['tool_output'],
+        'meta' => $meta,
+        'tool_output' => $attachmentResult['tool_output'] ?? null,
+        'claims' => $groundedDraft['claims'] ?? [],
+        'sources_used' => $groundedDraft['sources_used'] ?? [],
+        'evidence_snippets' => $groundedDraft['evidence_snippets'] ?? [],
+        'uncited_claims_blocked' => [],
     ];
 }
 
@@ -6470,6 +6995,7 @@ function aiCopilotAgentValidateCitationsTool(array $toolInput, string $role, str
     $chartContextResult = is_array($toolInput['chart_context_result'] ?? null) ? $toolInput['chart_context_result'] : [];
     $guidelineEvidenceResult = is_array($toolInput['guideline_evidence_result'] ?? null) ? $toolInput['guideline_evidence_result'] : [];
     $attachmentResult = is_array($toolInput['attachment_result'] ?? null) ? $toolInput['attachment_result'] : [];
+    $requestId = aiCopilotCleanText((string) ($toolInput['request_id'] ?? ''));
     $sources = aiCopilotAgentNormalizeSources(array_merge(
         is_array($draft['sources'] ?? null) ? $draft['sources'] : [],
         is_array($chartContextResult['sources'] ?? null) ? $chartContextResult['sources'] : [],
@@ -6507,6 +7033,59 @@ function aiCopilotAgentValidateCitationsTool(array $toolInput, string $role, str
         $missingData[] = 'No lab PDF extraction payload was available for evidence review.';
     }
 
+    $claims = [];
+    if (is_array($toolInput['claims'] ?? null)) {
+        $claims = array_values(array_filter($toolInput['claims'], 'is_array'));
+    } elseif (is_array($draft['claims'] ?? null)) {
+        $claims = array_values(array_filter($draft['claims'], 'is_array'));
+    }
+
+    $citationTrace = new AgentTrace($requestId !== '' ? $requestId : 'claim_citation_validation');
+    $citationValidationWorker = new CitationValidationWorker();
+    $claimValidation = $citationValidationWorker->validateClaims($claims, [
+        'request_id' => $requestId,
+        'patient_id' => isset($context['patient']['pid']) && is_numeric($context['patient']['pid']) ? (int) $context['patient']['pid'] : null,
+        'role' => $role,
+        'minimum_confidence' => 0.65,
+        'doc_type' => aiCopilotCleanText((string) ($attachmentResult['tool_output']['document_metadata']['document_type'] ?? '')),
+        'source_document_id' => aiCopilotCleanText((string) ($attachmentResult['tool_output']['source_document_id'] ?? $attachmentResult['tool_output']['document_metadata']['source_document_id'] ?? '')),
+    ], $citationTrace);
+
+    $validatedClaims = array_values(array_filter($claimValidation['claims'] ?? [], 'is_array'));
+    $validatedSourcesUsed = [];
+    $validatedSources = [];
+    $seenSourceKeys = [];
+    foreach ($validatedClaims as $claim) {
+        foreach (($claim['citations'] ?? []) as $citation) {
+            if (!is_array($citation)) {
+                continue;
+            }
+            $sourceEntry = aiCopilotBuildSourceUsedEntry($citation, [
+                'label' => aiCopilotCitationSourceLabel($citation),
+            ]);
+            $sourceKey = aiCopilotCleanText((string) ($sourceEntry['source_id'] ?? '')) . '|' . aiCopilotCleanText((string) ($sourceEntry['label'] ?? ''));
+            if ($sourceKey === '|' || isset($seenSourceKeys[$sourceKey])) {
+                continue;
+            }
+            $seenSourceKeys[$sourceKey] = true;
+            $validatedSourcesUsed[] = $sourceEntry;
+            $validatedSources[] = [
+                'id' => aiCopilotCleanText((string) ($sourceEntry['source_id'] ?? '')),
+                'title' => aiCopilotCleanText((string) ($sourceEntry['label'] ?? '')),
+                'category' => aiCopilotCleanText((string) ($sourceEntry['document_type'] ?? $sourceEntry['source_type'] ?? 'source')),
+            ];
+        }
+    }
+
+    if (!empty($claimValidation['user_message'])) {
+        $missingData[] = aiCopilotCleanText((string) $claimValidation['user_message']);
+    }
+
+    if ($claimValidation['claim_count'] > 0 && $validatedClaims === [] && $blockedReason === '') {
+        $blockedReason = 'uncited_claim_blocked';
+        $safeRefusal = aiCopilotCleanText((string) ($claimValidation['user_message'] ?? 'This response includes clinical information that could not be fully linked to source evidence. Clinician review is required before use.'));
+    }
+
     return [
         'tool' => 'validate_citations',
         'worker' => 'evidence_safety_worker',
@@ -6516,12 +7095,21 @@ function aiCopilotAgentValidateCitationsTool(array $toolInput, string $role, str
         'citation_gaps' => $citationGaps,
         'missing_data' => $missingData,
         'unsupported_claims' => [],
-        'validated_sources' => $sources,
+        'validated_sources' => $validatedSources !== [] ? $validatedSources : $sources,
+        'validated_claims' => $validatedClaims,
+        'sources_used' => $validatedSourcesUsed,
+        'uncited_claims_blocked' => $claimValidation['uncited_claims_blocked'] ?? [],
         'draft_only_note' => aiCopilotAgentDraftOnlyNote($role),
         'policy_flags' => array_values(array_unique(array_filter(array_merge(
             is_array($guidelineEvidenceResult['policy_flags'] ?? null) ? $guidelineEvidenceResult['policy_flags'] : [],
             [$blockedReason !== '' ? 'blocked' : 'validated']
         )))),
+        'claim_count' => (int) ($claimValidation['claim_count'] ?? 0),
+        'cited_claim_count' => (int) ($claimValidation['cited_claim_count'] ?? 0),
+        'uncited_claim_count' => (int) ($claimValidation['uncited_claim_count'] ?? 0),
+        'invalid_citation_count' => (int) ($claimValidation['invalid_citation_count'] ?? 0),
+        'blocked_claim_count' => (int) ($claimValidation['blocked_claim_count'] ?? 0),
+        'citation_contract_status' => aiCopilotCleanText((string) ($claimValidation['citation_contract_status'] ?? 'passed')),
     ];
 }
 

@@ -924,6 +924,7 @@
             return false;
         }
         return normalizedFileName.includes('marcus_johnson_synthetic_lab_results')
+            || normalizedFileName === SEEDED_FILE_NAME.toLowerCase().replace(/[^a-z0-9]+/g, '_')
             || normalizedFileName === MVP_SYNTHETIC_LAB_RESULTS_FILE_NAME.toLowerCase().replace(/[^a-z0-9]+/g, '_');
     }
 
@@ -1562,6 +1563,21 @@
     }
 
     function buildLabPdfDemoTracePayload(responseOrToolOutput, overrides = {}) {
+        function hashIdentifier(value) {
+            const input = String(value || '').trim();
+            if (!input) {
+                return null;
+            }
+
+            let hash = 2166136261;
+            for (let index = 0; index < input.length; index += 1) {
+                hash ^= input.charCodeAt(index);
+                hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+            }
+
+            return `h_${(hash >>> 0).toString(16).padStart(8, '0')}`;
+        }
+
         const toolOutput = resolveLabPdfToolOutput(responseOrToolOutput);
         const responseMeta = responseOrToolOutput && typeof responseOrToolOutput === 'object' && responseOrToolOutput.meta && typeof responseOrToolOutput.meta === 'object'
             ? responseOrToolOutput.meta
@@ -1622,8 +1638,10 @@
                 requestId: overrides.requestId || responseMeta.request_id || '',
                 role: overrides.role || responseOrToolOutput.role || '',
                 mode: overrides.mode || responseOrToolOutput.mode || 'lab_pdf_ingestion',
-                selectedPatientKey: overrides.selectedPatientKey || metadata.patient_key || metadata.patientKey || '',
-                documentTitle: metadata.title || overrides.documentTitle || '',
+                patientContextPresent: Boolean(overrides.selectedPatientKey || metadata.patient_key || metadata.patientKey || ''),
+                patientContextHash: hashIdentifier(overrides.selectedPatientKey || metadata.patient_key || metadata.patientKey || ''),
+                documentTitlePresent: Boolean(metadata.title || overrides.documentTitle || ''),
+                documentTitleHash: hashIdentifier(metadata.title || overrides.documentTitle || ''),
                 documentType: metadata.document_type || metadata.documentType || sourceMetadata.source_type || sourceMetadata.sourceType || 'lab_pdf',
                 extractionMethod: toolOutput.extraction_method || toolOutput.extractionMethod || '',
                 ingestionStatus: toolOutput.ingestion_status || toolOutput.ingestionStatus || toolOutput.status || '',
@@ -1693,11 +1711,23 @@
             console.table(data.summaryRows);
         }
         console.info('Pipeline summary', data.pipelineSummary || {});
-        console.info('Vector summary', data.vectorSummary || []);
+        console.info('Vector summary', Array.isArray(data.vectorSummary) ? data.vectorSummary.map(function (record) {
+            return {
+                id: record.id || '',
+                chunkIndex: record.chunkIndex ?? null,
+                sourcePage: record.sourcePage ?? null,
+                embeddingDimensions: record.embeddingDimensions ?? 0
+            };
+        }) : []);
         console.info('Retrieval summary', data.retrievalSummary || {});
         console.info('Safety summary', data.safetySummary || {});
         if (Array.isArray(data.syntheticFactsSummary) && data.syntheticFactsSummary.length > 0) {
-            console.info('Synthetic demo facts only — not real PHI', data.syntheticFactsSummary);
+            console.info('Synthetic demo facts only — not real PHI', {
+                factCount: data.syntheticFactsSummary.length,
+                factTypes: data.syntheticFactsSummary.map(function (fact) {
+                    return fact.name || '';
+                }).filter(Boolean)
+            });
         }
         console.groupEnd();
     }
@@ -1744,13 +1774,17 @@
     }
 
     function buildAttachmentDescriptor(fileLike, options = {}) {
+        const explicitDocumentType = String(options.documentType || '').trim().toLowerCase();
+        const resolvedDocumentType = explicitDocumentType === 'intake_form' || explicitDocumentType === 'lab_pdf'
+            ? explicitDocumentType
+            : null;
         if (options.useSeededDemo) {
             return {
                 kind: 'seeded_demo',
                 fileName: SEEDED_FILE_NAME,
                 displayLabel: `Attached: ${SEEDED_FILE_NAME}`,
                 mimeType: 'application/pdf',
-                documentType: 'lab_pdf'
+                documentType: resolvedDocumentType || 'lab_pdf'
             };
         }
 
@@ -1761,7 +1795,7 @@
             fileName: fileName,
             displayLabel: `Attached: ${fileName}`,
             mimeType: String(fileLike && (fileLike.type || fileLike.mimeType) ? (fileLike.type || fileLike.mimeType) : 'application/pdf'),
-            documentType: detectDocumentType(fileName)
+            documentType: resolvedDocumentType || detectDocumentType(fileName)
         };
     }
 

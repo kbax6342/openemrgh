@@ -1,7 +1,8 @@
 .copilot-widget-root {
     position: fixed;
-    inset: 0;
+    inset: auto 1rem 1rem auto;
     z-index: 2147483000;
+    max-width: calc(100vw - 2rem);
     pointer-events: none;
 }
 
@@ -65,14 +66,13 @@
 
 .copilot-widget-drawer {
     position: fixed;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: min(500px, calc(100vw - 32px));
-    height: 100vh;
-    height: 100dvh;
-    max-height: 100vh;
-    max-height: 100dvh;
+    top: 1rem;
+    right: 1rem;
+    bottom: 1rem;
+    width: min(520px, calc(100vw - 2rem));
+    max-width: calc(100vw - 2rem);
+    height: auto;
+    max-height: calc(100dvh - 2rem);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -144,6 +144,7 @@
     display: flex;
     flex-direction: column;
     background: #ffffff;
+    overflow: hidden;
 }
 
 .copilot-widget-status-panel {
@@ -227,12 +228,18 @@
     flex: 1 1 auto;
     width: 100%;
     height: 100%;
+    min-height: 0;
     border: 0;
     display: block;
     background: #ffffff;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 640px) {
+    .copilot-widget-root {
+        inset: auto 0.75rem 0.75rem auto;
+        max-width: calc(100vw - 1.5rem);
+    }
+
     .copilot-widget-launcher {
         right: 16px;
         bottom: 16px;
@@ -241,14 +248,10 @@
     }
 
     .copilot-widget-drawer {
-        left: 0;
-        right: 0;
-        top: 0;
-        bottom: 0;
-        width: auto;
-        height: 100vh;
+        inset: 0;
+        width: 100vw;
+        max-width: 100vw;
         height: 100dvh;
-        max-height: 100vh;
         max-height: 100dvh;
         border-radius: 0;
         transform-origin: bottom center;

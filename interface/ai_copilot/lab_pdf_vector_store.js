@@ -78,8 +78,10 @@
         const sourceId = String(options.sourceId || `source_${options.requestId || 'request'}`);
         return {
             id: options.id || `labpdf_${options.requestId || 'request'}_${options.chunkIndex || 0}`,
+            patientId: Number.isFinite(options.patientId) ? options.patientId : null,
             patientKey: String(options.patientKey || ''),
             patientDisplayName: String(options.patientDisplayName || ''),
+            sourceDocumentId: Number.isFinite(options.sourceDocumentId) ? options.sourceDocumentId : null,
             fileName: originalFileName,
             displayFileName: displayFileName,
             chunkText: String(options.chunkText || ''),
@@ -91,6 +93,7 @@
                 originalFileName: originalFileName,
                 displayFileName: displayFileName,
                 sourceId: sourceId,
+                sourceDocumentId: Number.isFinite(options.sourceDocumentId) ? options.sourceDocumentId : null,
                 chunkIndex: Number.isFinite(options.chunkIndex) ? options.chunkIndex : 0,
                 uploadedAt: String(options.uploadedAt || new Date().toISOString()),
                 sourcePage: options.sourcePage ?? null,
@@ -98,7 +101,8 @@
                 extractionMethod: String(options.extractionMethod || 'pdf_text'),
                 requestId: String(options.requestId || ''),
                 seededDemo: Boolean(options.seededDemo),
-                ingestionOrigin: String(options.ingestionOrigin || 'uploaded_file')
+                ingestionOrigin: String(options.ingestionOrigin || 'uploaded_file'),
+                reviewStatus: String(options.reviewStatus || 'pending_clinician_review')
             }
         };
     }
@@ -111,6 +115,7 @@
                 requestId: options.requestId,
                 patientKey: options.patientKey,
                 patientDisplayName: options.patientDisplayName,
+                patientId: options.patientId,
                 fileName: options.fileName,
                 originalFileName: options.originalFileName || options.fileName,
                 displayFileName: options.displayFileName || options.fileName,
@@ -124,8 +129,10 @@
                 sourceLabel: options.sourceLabel,
                 documentType: options.documentType,
                 sourceId: options.sourceId,
+                sourceDocumentId: options.sourceDocumentId,
                 seededDemo: options.seededDemo,
-                ingestionOrigin: options.ingestionOrigin
+                ingestionOrigin: options.ingestionOrigin,
+                reviewStatus: options.reviewStatus
             });
         });
     }
@@ -268,13 +275,20 @@
             clearWhere(options = {}) {
                 const patientKey = String(options.patientKey || '');
                 const sourceType = String(options.sourceType || '').toLowerCase();
+                const sourceDocumentId = Number.isFinite(options.sourceDocumentId) ? Number(options.sourceDocumentId) : null;
+                const sourceId = String(options.sourceId || '');
+                const requestId = String(options.requestId || '');
                 const removed = [];
                 const kept = [];
 
                 records.forEach(function (record) {
-                    const matchesPatient = patientKey && String(record.patientKey || '') === patientKey;
-                    const matchesSourceType = sourceType && String(record.metadata && record.metadata.sourceType ? record.metadata.sourceType : '').toLowerCase() === sourceType;
-                    if (matchesPatient && matchesSourceType) {
+                    const metadata = record && record.metadata ? record.metadata : {};
+                    const matchesPatient = !patientKey || String(record.patientKey || '') === patientKey;
+                    const matchesSourceType = !sourceType || String(metadata.sourceType || '').toLowerCase() === sourceType;
+                    const matchesSourceDocument = sourceDocumentId === null || Number(record.sourceDocumentId ?? metadata.sourceDocumentId ?? NaN) === sourceDocumentId;
+                    const matchesSourceId = !sourceId || String(metadata.sourceId || '') === sourceId;
+                    const matchesRequestId = !requestId || String(metadata.requestId || '') === requestId;
+                    if (matchesPatient && matchesSourceType && matchesSourceDocument && matchesSourceId && matchesRequestId) {
                         removed.push(record);
                         return;
                     }
