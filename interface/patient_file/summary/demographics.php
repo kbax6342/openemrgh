@@ -95,6 +95,17 @@ if (isset($_GET['set_pid'])) {
 $smartLaunchController = new SMARTLaunchController(OEGlobalsBag::getInstance()->getKernel()->getEventDispatcher());
 $smartLaunchController->registerContextEvents();
 $hiddenCards = getHiddenDashboardCards();
+$ambientEncounterCardId = 'ambient_encounter_capture_ps_expand';
+$ambientEncounterInitiallyCollapsed = (getUserSetting($ambientEncounterCardId) == 0);
+$dashboardWidgetOrderSettingKey = 'patient_dashboard_widget_order_v1';
+$dashboardWidgetOrder = [];
+$savedDashboardWidgetOrder = getUserSetting($dashboardWidgetOrderSettingKey);
+if (is_string($savedDashboardWidgetOrder) && $savedDashboardWidgetOrder !== '') {
+    $decodedDashboardWidgetOrder = json_decode($savedDashboardWidgetOrder, true);
+    if (is_array($decodedDashboardWidgetOrder)) {
+        $dashboardWidgetOrder = $decodedDashboardWidgetOrder;
+    }
+}
 
 /**
  * @var EventDispatcher
@@ -345,6 +356,20 @@ $vitals_is_registered = $tmp['count'];
 // Get patient/employer/insurance information.
 //
 $result = getPatientData($pid, "*, DATE_FORMAT(DOB,'%Y-%m-%d') as DOB_YMD");
+
+$patientNameParts = array_filter([
+    trim((string) ($result['fname'] ?? '')),
+    trim((string) ($result['mname'] ?? '')),
+    trim((string) ($result['lname'] ?? '')),
+], static fn($value): bool => $value !== '');
+$patientDisplayName = implode(' ', $patientNameParts);
+$patientDobDisplay = !empty($result['DOB_YMD']) ? oeFormatShortDate($result['DOB_YMD']) : xl('Not recorded');
+$patientSexCode = $result['sex'] ?? ($result['gender'] ?? '');
+$patientSexDisplay = !empty($patientSexCode) ? (getListItemTitle('sex', $patientSexCode) ?: $patientSexCode) : xl('Not recorded');
+$patientMrnDisplay = !empty($result['pubpid']) ? $result['pubpid'] : (!empty($result['pid']) ? $result['pid'] : xl('Unavailable'));
+$patientIsInactive = (isset($result['active']) && (string) $result['active'] === '0') || !empty($result['inactive']);
+$patientStatusLabel = !empty($deceased) ? xl('Deceased') : ($patientIsInactive ? xl('Inactive') : xl('Active'));
+$patientStatusClass = !empty($deceased) ? 'patient-identity-banner__status--deceased' : ($patientIsInactive ? 'patient-identity-banner__status--inactive' : 'patient-identity-banner__status--active');
 
 $result2 = getEmployerData($pid);
 $result3 = getInsuranceData(
@@ -606,6 +631,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                 $('[data-toggle="collapse"]').on('click', function (e) {
                     updateUserVisibilitySetting(e);
                 });
+                initializeDashboardDragAndDrop();
             });
             placeHtml("pnotes_fragment.php", 'pnotes_ps_expand').then(() => {
                 // must be delegated event!
@@ -629,6 +655,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
             // Initialize the Vitals form if it is registered and user is authorized.
             placeHtml("vitals_fragment.php", "vitals_ps_expand");
             <?php } ?>
+            placeHtml("encounter_history_fragment.php", "encounter_history_ps_expand", false, true);
 
             <?php if (OEGlobalsBag::getInstance()->getBoolean('enable_cdr') && OEGlobalsBag::getInstance()->getBoolean('enable_cdr_crw')) { ?>
             placeHtml("clinical_reminders_fragment.php", "clinical_reminders_ps_expand", true, true).then(() => {
@@ -730,6 +757,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
             });
             <?php } ?>
             tabbify();
+            initializeDashboardDragAndDrop();
 
             // modal for dialog boxes
             $(".large_modal").on('click', function (e) {
@@ -910,6 +938,247 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
             return await response.text();
         }
 
+        const dashboardWidgetOrderSettingKey = <?php echo js_escape($dashboardWidgetOrderSettingKey); ?>;
+        let dashboardWidgetOrderState = <?php echo json_encode($dashboardWidgetOrder, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?> || {};
+        let dashboardWidgetOrderCache = JSON.stringify(dashboardWidgetOrderState);
+        let dashboardDragState = {
+            draggedItem: null,
+            sourceZone: null,
+            saveTimer: null,
+            initialized: false,
+        };
+
+        function getDashboardZones() {
+            return Array.from(document.querySelectorAll('.dashboard-widget-zone[data-dashboard-zone]'));
+        }
+
+        function getDashboardZoneItems(zone) {
+            return Array.from(zone.children).filter((child) => {
+                if (child.matches('section[data-dashboard-widget-id]')) {
+                    return true;
+                }
+
+                const directWidget = Array.from(child.children).find((candidate) => candidate.matches('section[data-dashboard-widget-id]'));
+                return child.dataset.dashboardItemWrapper === 'true' && !!directWidget;
+            });
+        }
+
+        function getDashboardWidgetSection(item) {
+            if (!item) {
+                return null;
+            }
+
+            if (item.matches('section[data-dashboard-widget-id]')) {
+                return item;
+            }
+
+            return Array.from(item.children).find((candidate) => candidate.matches('section[data-dashboard-widget-id]')) || null;
+        }
+
+        function prepareDashboardWidgetItem(item) {
+            if (!item || item.dataset.dashboardItemReady === 'true') {
+                return;
+            }
+
+            const widget = getDashboardWidgetSection(item);
+            if (!widget) {
+                return;
+            }
+
+            const widgetId = widget.dataset.dashboardWidgetId || '';
+            item.dataset.dashboardItem = 'true';
+            item.dataset.dashboardItemReady = 'true';
+            item.dataset.dashboardWidgetId = widgetId;
+            item.setAttribute('draggable', 'true');
+            item.classList.add('dashboard-widget-item');
+
+            const title = widget.querySelector('.dashboard-widget-title');
+            if (title) {
+                title.classList.add('dashboard-widget-drag-handle');
+                title.setAttribute('title', <?php echo js_escape(xl('Drag to reorder this dashboard card')); ?>);
+            }
+        }
+
+        function applyDashboardWidgetOrder(savedOrder = dashboardWidgetOrderState) {
+            if (!savedOrder || typeof savedOrder !== 'object') {
+                return;
+            }
+
+            getDashboardZones().forEach((zone) => {
+                const zoneName = zone.dataset.dashboardZone || '';
+                const order = Array.isArray(savedOrder[zoneName]) ? savedOrder[zoneName] : [];
+                if (!order.length) {
+                    return;
+                }
+
+                const itemsById = new Map();
+                getDashboardZoneItems(zone).forEach((item) => {
+                    const widgetId = item.dataset.dashboardWidgetId || '';
+                    if (widgetId) {
+                        itemsById.set(widgetId, item);
+                    }
+                });
+
+                order.forEach((widgetId) => {
+                    const item = itemsById.get(widgetId);
+                    if (item) {
+                        zone.appendChild(item);
+                    }
+                });
+            });
+        }
+
+        function collectDashboardWidgetOrder() {
+            const order = {};
+            getDashboardZones().forEach((zone) => {
+                const zoneName = zone.dataset.dashboardZone || '';
+                order[zoneName] = getDashboardZoneItems(zone)
+                    .map((item) => item.dataset.dashboardWidgetId || '')
+                    .filter((widgetId) => widgetId !== '');
+            });
+
+            return order;
+        }
+
+        async function persistDashboardWidgetOrder() {
+            const order = collectDashboardWidgetOrder();
+            const serializedOrder = JSON.stringify(order);
+
+            if (serializedOrder === dashboardWidgetOrderCache) {
+                return;
+            }
+
+            dashboardWidgetOrderState = order;
+            dashboardWidgetOrderCache = serializedOrder;
+
+            const formData = new FormData();
+            formData.append('csrf_token_form', <?php echo js_escape(CsrfUtils::collectCsrfToken(session: $session)); ?>);
+            formData.append('target', dashboardWidgetOrderSettingKey);
+            formData.append('setting', serializedOrder);
+
+            top.restoreSession();
+
+            try {
+                await fetch('../../../library/ajax/user_settings.php', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    body: formData,
+                });
+            } catch (error) {
+                console.error('Unable to save dashboard order.', error);
+            }
+        }
+
+        function scheduleDashboardWidgetOrderSave() {
+            window.clearTimeout(dashboardDragState.saveTimer);
+            dashboardDragState.saveTimer = window.setTimeout(() => {
+                persistDashboardWidgetOrder();
+            }, 120);
+        }
+
+        function getDashboardDropReference(zone, event) {
+            const axis = zone.dataset.dashboardAxis || 'vertical';
+            const items = getDashboardZoneItems(zone).filter((item) => item !== dashboardDragState.draggedItem);
+            const pointer = axis === 'horizontal' ? event.clientX : event.clientY;
+            let closestItem = null;
+            let closestOffset = Number.NEGATIVE_INFINITY;
+
+            items.forEach((item) => {
+                const rect = item.getBoundingClientRect();
+                const midpoint = axis === 'horizontal' ? rect.left + (rect.width / 2) : rect.top + (rect.height / 2);
+                const offset = pointer - midpoint;
+
+                if (offset < 0 && offset > closestOffset) {
+                    closestOffset = offset;
+                    closestItem = item;
+                }
+            });
+
+            return closestItem;
+        }
+
+        function clearDashboardZoneStates() {
+            getDashboardZones().forEach((zone) => zone.classList.remove('dashboard-widget-zone-active'));
+        }
+
+        function initializeDashboardDragAndDrop() {
+            getDashboardZones().forEach((zone) => {
+                getDashboardZoneItems(zone).forEach((item) => prepareDashboardWidgetItem(item));
+
+                if (zone.dataset.dashboardZoneReady === 'true') {
+                    return;
+                }
+
+                zone.dataset.dashboardZoneReady = 'true';
+
+                zone.addEventListener('dragover', (event) => {
+                    if (!dashboardDragState.draggedItem || dashboardDragState.sourceZone !== zone) {
+                        return;
+                    }
+
+                    event.preventDefault();
+                    zone.classList.add('dashboard-widget-zone-active');
+                    const referenceItem = getDashboardDropReference(zone, event);
+
+                    if (referenceItem) {
+                        zone.insertBefore(dashboardDragState.draggedItem, referenceItem);
+                    } else {
+                        zone.appendChild(dashboardDragState.draggedItem);
+                    }
+                });
+
+                zone.addEventListener('drop', (event) => {
+                    if (!dashboardDragState.draggedItem || dashboardDragState.sourceZone !== zone) {
+                        return;
+                    }
+
+                    event.preventDefault();
+                    scheduleDashboardWidgetOrderSave();
+                    clearDashboardZoneStates();
+                });
+            });
+
+            if (dashboardDragState.initialized) {
+                applyDashboardWidgetOrder();
+                return;
+            }
+
+            document.addEventListener('dragstart', (event) => {
+                const item = event.target.closest('[data-dashboard-item="true"]');
+                const dragHandle = event.target.closest('.dashboard-widget-title');
+
+                if (!item) {
+                    return;
+                }
+
+                if (!dragHandle) {
+                    event.preventDefault();
+                    return;
+                }
+
+                dashboardDragState.draggedItem = item;
+                dashboardDragState.sourceZone = item.parentElement;
+                item.classList.add('dashboard-widget-is-dragging');
+                if (event.dataTransfer) {
+                    event.dataTransfer.effectAllowed = 'move';
+                    event.dataTransfer.setData('text/plain', item.dataset.dashboardWidgetId || 'dashboard-widget');
+                }
+            });
+
+            document.addEventListener('dragend', () => {
+                if (dashboardDragState.draggedItem) {
+                    dashboardDragState.draggedItem.classList.remove('dashboard-widget-is-dragging');
+                }
+
+                dashboardDragState.draggedItem = null;
+                dashboardDragState.sourceZone = null;
+                clearDashboardZoneStates();
+            });
+
+            dashboardDragState.initialized = true;
+            applyDashboardWidgetOrder();
+        }
+
         // JavaScript stuff to do when a new patient is set.
         //
         function setMyPatient() {
@@ -926,7 +1195,8 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                 echo js_escape(" " . xl('DOB') . ": " . oeFormatShortDate($result['DOB_YMD']) . " " . xl('Age') . ": " . getPatientAgeDisplay($result['DOB_YMD']));
             } else {
                 echo js_escape(" " . xl('DOB') . ": " . oeFormatShortDate($result['DOB_YMD']) . " " . xl('Age at death') . ": " . oeFormatAge($result['DOB_YMD'], $date_of_death));
-            } ?>);
+            }
+            echo "," . js_escape($patientSexDisplay) . "," . js_escape($patientStatusLabel); ?>);
             var EncounterDateArray = [];
             var CalendarCategoryArray = [];
             var EncounterIdArray = [];
@@ -974,6 +1244,92 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
       .card {
         box-shadow: 1px 1px 1px hsl(0 0% 0% / .2);
         border-radius: 0;
+        margin-top: 8px;
+      }
+
+      .patient-identity-banner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 0.75rem 1.25rem;
+        margin: 0 0 0.75rem;
+        padding: 0.85rem 1rem;
+        background: var(--white);
+        border: 1px solid #d7dce5;
+        border-radius: 0.5rem;
+        box-shadow: 1px 1px 1px hsl(0 0% 0% / .08);
+      }
+
+      .patient-identity-banner__primary {
+        flex: 1 1 220px;
+        min-width: 220px;
+      }
+
+      .patient-identity-banner__name {
+        margin: 0;
+        color: #0f172a;
+        font-size: 1.15rem;
+        font-weight: 700;
+        line-height: 1.25;
+      }
+
+      .patient-identity-banner__meta {
+        display: flex;
+        align-items: flex-start;
+        justify-content: flex-end;
+        flex: 2 1 420px;
+        flex-wrap: wrap;
+        gap: 0.75rem 1.25rem;
+        min-width: 0;
+      }
+
+      .patient-identity-banner__field {
+        min-width: 110px;
+      }
+
+      .patient-identity-banner__label {
+        display: block;
+        margin-bottom: 0.15rem;
+        color: #64748b;
+        font-size: 0.7rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .patient-identity-banner__value {
+        display: block;
+        color: #1f2937;
+        font-size: 0.95rem;
+        font-weight: 600;
+        line-height: 1.25;
+      }
+
+      .patient-identity-banner__status {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0.3rem 0.7rem;
+        border-radius: 999px;
+        font-size: 0.78rem;
+        font-weight: 700;
+        line-height: 1;
+      }
+
+      .patient-identity-banner__status--active {
+        background: #dcfce7;
+        color: #166534;
+      }
+
+      .patient-identity-banner__status--inactive {
+        background: #fef3c7;
+        color: #92400e;
+      }
+
+      .patient-identity-banner__status--deceased {
+        background: #fee2e2;
+        color: #991b1b;
       }
 
       /* Short term fix. This ensures the problem list, allergies, medications, and immunization cards handle long lists without interrupting
@@ -1039,8 +1395,63 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
         padding: .25em;
       }
 
+      .patient-demographic .dashboard-widget-zone {
+        min-height: 1rem;
+      }
+
+      .patient-demographic .dashboard-widget-item {
+        transition: transform 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease;
+      }
+
+      .patient-demographic .dashboard-widget-drag-handle {
+        cursor: grab;
+        user-select: none;
+      }
+
+      .patient-demographic .dashboard-widget-drag-handle:active {
+        cursor: grabbing;
+      }
+
+      .patient-demographic .dashboard-widget-is-dragging {
+        opacity: 0.65;
+      }
+
+      .patient-demographic .dashboard-widget-zone-active {
+        outline: 2px dashed #8aa6d9;
+        outline-offset: 0.2rem;
+        border-radius: 0.4rem;
+      }
+
       .section-header-dynamic {
         border-bottom: none;
+      }
+
+      @media (max-width: 768px) {
+        .patient-identity-banner {
+          padding: 0.8rem 0.9rem;
+        }
+
+        .patient-identity-banner__primary,
+        .patient-identity-banner__meta {
+          flex-basis: 100%;
+          min-width: 0;
+        }
+
+        .patient-identity-banner__meta {
+          justify-content: flex-start;
+        }
+
+        .patient-identity-banner__field {
+          min-width: calc(50% - 0.75rem);
+          flex: 1 1 calc(50% - 0.75rem);
+        }
+      }
+
+      @media (max-width: 480px) {
+        .patient-identity-banner__field {
+          min-width: 100%;
+          flex-basis: 100%;
+        }
       }
     </style>
     <title><?php echo xlt("Dashboard{{patient file}}"); ?></title>
@@ -1086,7 +1497,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
         ?>
         <div class="main mb-1">
             <!-- start main content div -->
-            <div class="row">
+            <div class="row dashboard-widget-zone dashboard-widget-zone-summary" data-dashboard-zone="summary" data-dashboard-axis="horizontal">
                 <?php
                 $t = $twig->getTwig();
 
@@ -1128,7 +1539,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                         'btnLabel' => 'Edit',
                         'btnLink' => "return load_location('" . OEGlobalsBag::getInstance()->getWebRoot() . "/interface/patient_file/summary/stats_full.php?active=all&category=allergy')"
                     ];
-                    echo "<div class=\"$col\">";
+                    echo "<div class=\"$col dashboard-widget-shell\" data-dashboard-item-wrapper=\"true\">";
                     echo $t->render('patient/card/allergies.html.twig', $viewArgs);
                     echo "</div>";
                 }
@@ -1152,7 +1563,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                         'btnLabel' => 'Edit',
                         'btnLink' => "return load_location('" . OEGlobalsBag::getInstance()->getWebRoot() . "/interface/patient_file/summary/stats_full.php?active=all&category=medical_problem')"
                     ];
-                    echo "<div class=\"$col\">";
+                    echo "<div class=\"$col dashboard-widget-shell\" data-dashboard-item-wrapper=\"true\">";
                     echo $t->render('patient/card/medical_problems.html.twig', $viewArgs);
                     echo "</div>";
                 }
@@ -1174,7 +1585,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                         'btnLabel' => 'Edit',
                         'btnLink' => "return load_location('" . OEGlobalsBag::getInstance()->getWebRoot() . "/interface/patient_file/summary/stats_full.php?active=all&category=medication')"
                     ];
-                    echo "<div class=\"$col\">";
+                    echo "<div class=\"$col dashboard-widget-shell\" data-dashboard-item-wrapper=\"true\">";
                     echo $t->render('patient/card/medication.html.twig', $viewArgs);
                     echo "</div>";
                 }
@@ -1203,7 +1614,9 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                             'rxList' => $rxArr,
                         ];
 
+                        echo "<div class='col m-0 p-0 mx-1 dashboard-widget-shell' data-dashboard-item-wrapper='true'>";
                         echo $t->render('patient/card/erx.html.twig', $viewArgs);
+                        echo "</div>";
                     }
 
                     $id = "prescriptions_ps_expand";
@@ -1238,13 +1651,15 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                     $viewArgs['content'] = ob_get_contents();
                     ob_end_clean();
 
-                    echo "<div class='col m-0 p-0 mx-1'>";
+                    echo "<div class='col m-0 p-0 mx-1 dashboard-widget-shell' data-dashboard-item-wrapper='true'>";
                     echo $t->render('patient/card/rx.html.twig', $viewArgs); // render core prescription card
                     echo "</div>";
                 endif;
                 ?>
             </div>
             <div class="row">
+                <div class="col-12 px-0">
+                    <div class="row no-gutters dashboard-widget-zone dashboard-widget-zone-priority" data-dashboard-zone="priority" data-dashboard-axis="vertical">
                 <?php
                 if (!in_array('card_care_team', $hiddenCards)) {
                     $card = new CareTeamViewCard($pid, ['dispatcher' => $ed]);
@@ -1266,7 +1681,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                     ];
                     $_auth = $card->getAcl();
                     if (!empty($_auth) && AclMain::aclCheckCore($_auth[0], $_auth[1])) {
-                        echo "<div class='col-12 m-0 p-0 px-2'>";
+                        echo "<div class='col-12 m-0 p-0 px-2 dashboard-widget-shell' data-dashboard-item-wrapper='true'>";
                         echo $t->render($card->getTemplateFile(), array_merge($viewArgs, $card->getTemplateVariables()));
                         echo "</div>";
                     }
@@ -1289,7 +1704,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                         'btnLink' => "void(0);",
                     ];
                     // Merge with ViewCard variables and render CARD template (not form!)
-                    echo "<div class='col-12 m-0 p-0 px-2'>";
+                    echo "<div class='col-12 m-0 p-0 px-2 dashboard-widget-shell' data-dashboard-item-wrapper='true'>";
                     echo $twig->getTwig()->render(
                         $card->getTemplateFile(),
                         array_merge($viewArgs, $card->getTemplateVariables())
@@ -1317,7 +1732,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                     ];
 
                     // Merge with ViewCard variables and render CARD template (not form!)
-                    echo "<div class='col-12 m-0 p-0 px-2'>";
+                    echo "<div class='col-12 m-0 p-0 px-2 dashboard-widget-shell' data-dashboard-item-wrapper='true'>";
                     echo $twig->getTwig()->render(
                         $card->getTemplateFile(),
                         array_merge($viewArgs, $card->getTemplateVariables())
@@ -1325,6 +1740,8 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                     echo "</div>";
                 }
                 ?>
+                    </div>
+                </div>
                 <div class="col-md-8 px-2">
                     <div
                         id="copilot-demo-dashboard-updates"
@@ -1338,6 +1755,9 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                             'deceasedDays' => deceasedDays($deceased),
                         ]);
                     endif;
+                    ?>
+                    <div class="dashboard-widget-zone dashboard-widget-zone-primary" data-dashboard-zone="primary" data-dashboard-axis="vertical">
+                    <?php
 
                     $sectionRenderEvents = $ed->dispatch(new SectionEvent('primary'), SectionEvent::EVENT_HANDLE);
                     $sectionRenderEvents->addCard(new DemographicsViewCard($result, $result2, ['dispatcher' => $ed]));
@@ -1532,6 +1952,23 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                         }
                     endif; // end vitals
 
+                    if (!in_array('card_encounter_history', $hiddenCards)) {
+                        $dispatchResult = $ed->dispatch(new CardRenderEvent('encounter_history'), CardRenderEvent::EVENT_HANDLE);
+                        $id = "encounter_history_ps_expand";
+                        $viewArgs = [
+                            'title' => xl('Encounter History'),
+                            'id' => $id,
+                            'initiallyCollapsed' => (getUserSetting($id) == 0) ? true : false,
+                            'auth' => false,
+                            'card_data_card' => 'encounter-history',
+                            'card_testid' => 'encounter-history-card',
+                            'card_title_icon_class' => 'fa fa-fw fa-history',
+                            'prependedInjection' => $dispatchResult->getPrependedInjection(),
+                            'appendedInjection' => $dispatchResult->getAppendedInjection(),
+                        ];
+                        echo $twig->getTwig()->render('patient/card/loader.html.twig', $viewArgs);
+                    }
+
                     // if anyone wants to render anything after the patient demographic list
                     OEGlobalsBag::getInstance()->getKernel()->getEventDispatcher()->dispatch(new RenderEvent($pid), RenderEvent::EVENT_SECTION_LIST_RENDER_AFTER);
 
@@ -1576,6 +2013,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                         echo $twig->getTwig()->render('patient/card/loader.html.twig', $viewArgs);
                     endwhile; // end while
                     ?>
+                    </div>
                 </div> <!-- end left column div -->
                 <div class="col-md-4 px-2">
                     <!-- start right column div -->
@@ -1597,6 +2035,9 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                     $sectionCards = $sectionRenderEvents->getCards();
 
                     $t = $twig->getTwig();
+                    ?>
+                    <div class="dashboard-widget-zone dashboard-widget-zone-secondary-top" data-dashboard-zone="secondary_top" data-dashboard-axis="vertical">
+                    <?php
 
                     foreach ($sectionCards as $card) {
                         $_auth = $card->getAcl();
@@ -1628,6 +2069,9 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
 
                         echo $t->render($card->getTemplateFile(), array_merge($viewArgs, $card->getTemplateVariables()));
                     }
+                    ?>
+                    </div>
+                    <?php
 
                     if (OEGlobalsBag::getInstance()->getBoolean('erx_enable')) :
                         $dispatchResult = $ed->dispatch(new CardRenderEvent('demographics'), CardRenderEvent::EVENT_HANDLE);
@@ -1636,6 +2080,9 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                             'appendedInjection' => $dispatchResult->getAppendedInjection(),
                         ]);
                     endif;
+                    ?>
+                    <div class="dashboard-widget-zone dashboard-widget-zone-secondary-main" data-dashboard-zone="secondary_main" data-dashboard-axis="vertical">
+                    <?php
 
                     // If there is an ID Card or any Photos show the widget
                     $photos = pic_array($pid, OEGlobalsBag::getInstance()->getString('patient_photo_category_name'));
@@ -2020,7 +2467,8 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                         ]);
                     }
 
-                    echo "<div id=\"stats_div\"></div>";
+                    echo "</div>";
+                    echo "<div id=\"stats_div\" class=\"dashboard-widget-zone dashboard-widget-zone-stats\" data-dashboard-zone=\"stats\" data-dashboard-axis=\"vertical\"></div>";
 
                     // TRACK ANYTHING
                     // Determine if track_anything form is in use for this site.
@@ -2091,6 +2539,9 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                 return;
             }
 
+            const ambientEncounterCardId = <?php echo json_encode($ambientEncounterCardId, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+            let ambientEncounterCollapsed = <?php echo $ambientEncounterInitiallyCollapsed ? 'true' : 'false'; ?>;
+
             function escapeHtml(value) {
                 return String(value || '')
                     .replace(/&/g, '&amp;')
@@ -2117,22 +2568,53 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                     return '<li>' + escapeHtml(note) + '</li>';
                 }).join('');
 
+                const collapseIconClass = ambientEncounterCollapsed ? 'fa-expand' : 'fa-compress';
+                const collapseClass = ambientEncounterCollapsed ? 'collapse' : 'collapse show';
+                const ariaExpanded = ambientEncounterCollapsed ? 'false' : 'true';
+                const approvedAtLabel = escapeHtml(latestRecord.approvedAtLabel || ambientDemo.formatLocalDateTime(latestRecord.approvedAt));
+                const summaryText = escapeHtml(latestRecord.summary || ('Latest approved AI-assisted visit update for ' + patientName + '.'));
+                const reviewStatus = escapeHtml(latestRecord.reviewStatus || 'Clinician Reviewed');
+                const status = escapeHtml(latestRecord.status || 'Completed');
+                const consentStatus = latestRecord.consentConfirmed ? 'Consent Confirmed' : 'Consent Review Needed';
+
                 mount.innerHTML = [
-                    '<article class="copilot-demo-card" data-copilot-demo-dashboard-visit-id="' + escapeHtml(latestRecord.id) + '">',
-                    '  <div class="copilot-demo-card-header">',
-                    '    <div>',
-                    '      <p class="copilot-demo-card-subtitle">Ambient Encounter Capture</p>',
-                    '      <h3 class="copilot-demo-card-title">AI Reviewed Visit Updates</h3>',
-                    '      <p class="copilot-demo-card-copy">Approved by clinician after consent-based visit capture.</p>',
+                    '<section class="card copilot-demo-dashboard-card dashboard-widget-card" data-card="ambient-encounter-capture" data-testid="ambient-encounter-capture-card" data-dashboard-widget-id="' + escapeHtml(ambientEncounterCardId) + '" data-copilot-demo-dashboard-visit-id="' + escapeHtml(latestRecord.id) + '">',
+                    '  <div class="card-body p-1">',
+                    '    <h6 class="card-title dashboard-widget-title mb-0 d-flex p-1 align-items-start">',
+                    '      <a class="text-left font-weight-bolder d-flex flex-grow-1" href="#" data-toggle="collapse" data-target="#' + escapeHtml(ambientEncounterCardId) + '" data-ambient-card-toggle="true" aria-expanded="' + ariaExpanded + '" aria-controls="' + escapeHtml(ambientEncounterCardId) + '">',
+                    '        <i class="fa fa-fw fa-microphone-alt copilot-demo-dashboard-icon" aria-hidden="true"></i>',
+                    '        <span>Ambient Encounter Capture <i class="ml-1 fa fa-fw ' + collapseIconClass + '" data-target="#' + escapeHtml(ambientEncounterCardId) + '"></i></span>',
+                    '      </a>',
+                    '    </h6>',
+                    '    <div id="' + escapeHtml(ambientEncounterCardId) + '" class="card-text ' + collapseClass + '">',
+                    '      <div class="clearfix pt-2">',
+                    '        <p class="copilot-demo-card-subtitle copilot-demo-dashboard-subtitle">AI Reviewed Visit Updates</p>',
+                    '        <p class="copilot-demo-card-copy">Approved by clinician after consent-based visit capture.</p>',
+                    '        <div class="copilot-demo-badge-row copilot-demo-dashboard-badges">' + badges + '</div>',
+                    '        <div class="copilot-demo-detail-grid copilot-demo-dashboard-detail-grid">',
+                    '          <div><dt>Reviewed</dt><dd>' + approvedAtLabel + '</dd></div>',
+                    '          <div><dt>Status</dt><dd>' + status + '</dd></div>',
+                    '          <div><dt>Review</dt><dd>' + reviewStatus + '</dd></div>',
+                    '          <div><dt>AI Draft</dt><dd>AI Draft Approved</dd></div>',
+                    '          <div><dt>Consent</dt><dd>' + escapeHtml(consentStatus) + '</dd></div>',
+                    '        </div>',
+                    '        <p class="copilot-demo-card-summary">' + summaryText + '</p>',
+                    '        <ul class="copilot-demo-note-list">' + notes + '</ul>',
+                    '        <p class="copilot-demo-card-note">AI drafted these updates after consent-based ambient encounter capture. A clinician reviewed and approved them before they were shown on this dashboard.</p>',
+                    '      </div>',
                     '    </div>',
-                    '    <p class="copilot-demo-card-time">' + escapeHtml(latestRecord.approvedAtLabel || ambientDemo.formatLocalDateTime(latestRecord.approvedAt)) + '</p>',
                     '  </div>',
-                    '  <div class="copilot-demo-badge-row">' + badges + '</div>',
-                    '  <p class="copilot-demo-card-summary">' + escapeHtml(latestRecord.summary || ('Latest approved AI-assisted visit update for ' + patientName + '.')) + '</p>',
-                    '  <ul class="copilot-demo-note-list">' + notes + '</ul>',
-                    '  <p class="copilot-demo-card-note">AI drafted these updates after consent-based ambient encounter capture. A clinician reviewed and approved them before they were shown on this dashboard.</p>',
-                    '</article>'
+                    '</section>'
                 ].join('');
+
+                const toggle = mount.querySelector('[data-ambient-card-toggle="true"]');
+                const collapseElement = mount.querySelector('#' + ambientEncounterCardId);
+                if (toggle && collapseElement) {
+                    toggle.addEventListener('click', function (event) {
+                        ambientEncounterCollapsed = collapseElement.classList.contains('show');
+                        updateUserVisibilitySetting(event);
+                    });
+                }
 
                 ambientDemo.logEvent('copilot_demo_dashboard_updates_rendered', {
                     requestId: latestRecord.requestId || null,

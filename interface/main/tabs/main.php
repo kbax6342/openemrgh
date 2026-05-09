@@ -11,6 +11,7 @@
  * @author    Jerry Padgett <sjpadgett@gmail.com>
  * @author    Stephen Nielson <snielson@discoverandchange.com>
  * @author    Michael A. Smith <michael@opencoreemr.com>
+ * @author    Kevin N. Baxter <kbaxter3434@gmail.com>
  * @copyright Copyright (c) 2016 Kevin Yeh <kevin.y@integralemr.com>
  * @copyright Copyright (c) 2016-2019 Brady Miller <brady.g.miller@gmail.com>
  * @copyright Copyright (c) 2019 Ranganath Pathak <pathak@scrs1.org>
@@ -461,68 +462,288 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
       }
 
       body {
+        display: flex;
+        flex-direction: column;
         margin: 0;
+        overflow: hidden;
       }
 
       #mainBox {
         display: flex;
-        flex-direction: column;
+        flex: 1 1 auto;
+        flex-direction: row;
+        align-items: stretch;
         width: 100%;
         max-width: 100%;
         min-width: 0;
-        height: var(--openemr-shell-height, 100dvh);
+        height: calc(var(--openemr-shell-height, 100dvh) - var(--patient-banner-height, 0px));
         min-height: 0;
         overflow: hidden;
+        background: #eef3fb;
       }
 
-      #mainBox > nav,
-      #mainBox > div {
-        width: 100%;
-        max-width: 100%;
-        min-width: 0;
-      }
-
-      .navbar {
+      #mainSidebarNav {
         display: flex;
-        flex-wrap: wrap;
-        align-items: flex-start;
+        flex: 0 0 17rem;
+        flex-direction: column;
+        align-items: stretch;
+        width: 17rem;
+        max-width: 17rem;
+        min-width: 17rem;
+        min-height: 0;
+        height: 100%;
+        padding: 0.9rem 0.8rem;
+        gap: 0.8rem;
+        overflow: visible;
+        background: #0f2f6d;
+        color: #ffffff;
+        border-right: 1px solid rgba(255, 255, 255, 0.16);
+        box-shadow: 14px 0 32px rgba(15, 23, 42, 0.12);
+        z-index: 6;
+        position: relative;
+        transition: width 0.18s ease, min-width 0.18s ease, max-width 0.18s ease, padding 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease, border-color 0.18s ease;
+      }
+      #patientBanner.patient-identity-banner {
+        display: block;
+        flex: 0 0 auto;
         width: 100%;
-        max-width: 100%;
-        min-width: 0;
+        box-sizing: border-box;
+        border-bottom: 1px solid #d9dee8;
+        background: #f8fafc;
+        padding: 0.4rem 0.85rem;
+        font-size: 0.875rem;
+        line-height: 1.35;
+        z-index: 20;
+      }
+
+      #patientBanner .patient-identity-banner__inner {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 0.65rem 1rem;
+        width: 100%;
+      }
+
+      #patientBanner .patient-identity-banner__name {
+        font-weight: 700;
+        color: #0f172a;
+        margin-right: 0.35rem;
+      }
+
+      #patientBanner .patient-identity-banner__item {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        color: #334155;
+        white-space: nowrap;
+      }
+
+      #patientBanner .patient-identity-banner__label {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        color: #53627a;
+        font-weight: 700;
+        letter-spacing: 0.03em;
+      }
+
+      #patientBanner .patient-identity-banner__status {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        white-space: nowrap;
+      }
+
+      #patientBanner .patient-identity-banner__status-badge {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 0.1rem 0.45rem;
+        font-size: 0.72rem;
+        font-weight: 700;
+        line-height: 1.2;
+      }
+
+      /* Optional: keep the banner readable on smaller screens */
+      @media (max-width: 767.98px) {
+        #patientBanner.patient-identity-banner {
+          padding: 0.45rem 0.65rem;
+          font-size: 0.82rem;
+        }
+
+        #patientBanner .patient-identity-banner__inner {
+          gap: 0.4rem 0.75rem;
+        }
+      }
+
+      #mainSidebarNav.navbar {
+        flex-wrap: nowrap;
+      }
+
+      #mainSidebarNav .navbar-brand,
+      #mainSidebarNav .navbar-toggler {
         flex-shrink: 0;
       }
 
-      .navbar-brand,
-      .navbar-toggler {
-        flex-shrink: 0;
+      #mainSidebarNav .openemr-top-nav-identity {
+        display: flex;
+        align-items: center;
+        position: relative;
+        width: 100%;
+        min-height: 3rem;
+      }
+
+      #mainSidebarNav .navbar-brand {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 3rem;
+        margin: 0;
+        padding: 0.55rem 0.9rem;
+        border-radius: 1rem;
+        background: rgba(255, 255, 255, 0.1);
+      }
+
+      #mainSidebarNav .openemr-top-nav-logo {
+        position: absolute;
+        left: 50%;
+        transform: translateX(-50%);
+        max-width: calc(100% - 3.55rem);
+      }
+
+      #mainSidebarNav .navbar-brand img {
+        display: block;
+        height: 1rem;
+      }
+
+      #mainSidebarNav .navbar-toggler {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 2.75rem;
+        height: 2.75rem;
+        margin: 0;
+        padding: 0;
+        border: 1px solid rgba(255, 255, 255, 0.32);
+        border-radius: 0.95rem;
+        background: rgba(255, 255, 255, 0.1);
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.16);
+      }
+
+      #mainSidebarNav .openemr-top-nav-toggle {
+        position: relative;
+        z-index: 1;
+      }
+
+      #mainSidebarNav .navbar-toggler-icon {
+        filter: brightness(0) invert(1);
       }
 
       #mainMenu {
-        flex: 1 1 auto;
+        order: 4;
+        flex: 0 0 auto;
+        width: 100%;
         min-width: 0;
-        max-width: 100%;
+        max-width: none;
+      }
+
+      #mainMenu.collapse:not(.show) {
+        display: block;
       }
 
       #mainMenu > .appMenu {
         display: flex;
-        flex-wrap: wrap;
-        align-items: center;
+        flex-direction: column;
+        align-items: stretch;
+        width: 100%;
         min-width: 0;
-        max-width: 100%;
-        row-gap: 0.25rem;
+        max-width: none;
+        gap: 0.3rem;
       }
 
       #mainMenu > .appMenu > div,
       #mainMenu > .appMenu > span,
       #mainMenu .menuSection {
         min-width: 0;
+        width: 100%;
+      }
+
+      #mainMenu > .appMenu > div,
+      #mainMenu > .appMenu > span {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        align-items: center;
+        gap: 0.55rem;
+        margin: 0;
+        min-height: 2.45rem;
+        padding: 0 0.72rem;
+        border-radius: 0.82rem;
+        background: #0f2f6d;
+        box-shadow: none;
+        transition: transform 0.12s ease, background-color 0.12s ease;
+      }
+
+      #mainMenu > .appMenu > div:hover,
+      #mainMenu > .appMenu > span:hover {
+        background: #18408f;
+        transform: translateX(2px);
+      }
+
+      #mainMenu .closeButton {
+        float: none;
+        position: static;
+        top: auto;
+        inset-inline-end: auto;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1rem;
+        min-width: 1rem;
+        margin: 0;
+        color: #ffffff;
+        font-size: 0.8rem;
+      }
+
+      #mainMenu .menuSection {
+        position: relative;
+        background: transparent;
+      }
+
+      #mainMenu .menuSection:hover {
+        background: transparent;
+      }
+
+      #mainMenu > .appMenu > div .menuLabel,
+      #mainMenu > .appMenu > span .menuLabel,
+      #mainMenu > .appMenu > div .menuSection > .menuLabel {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 0;
+        padding: 0.58rem 0;
+        border-radius: 0;
+        background: transparent;
+        color: #ffffff;
+        box-shadow: none;
+        font-weight: 700;
+        font-size: 0.9rem;
+        line-height: 1.2;
+        white-space: nowrap;
+      }
+
+      #mainMenu > .appMenu > div .menuLabel:hover,
+      #mainMenu > .appMenu > span .menuLabel:hover,
+      #mainMenu > .appMenu > div .menuSection > .menuLabel:hover {
+        background: transparent;
+        color: #ffffff;
       }
 
       form[name="frm_search_globals"] {
-        flex: 0 1 20rem;
+        order: 3;
+        flex: 0 0 auto;
+        width: 100%;
         min-width: 0;
-        max-width: 100%;
-        margin-inline-start: 0.5rem;
+        max-width: none;
+        margin: 0;
       }
 
       .frm_search_globals,
@@ -533,28 +754,182 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
         width: 100%;
       }
 
+      form[name="frm_search_globals"] .input-group {
+        display: flex;
+        flex-wrap: nowrap;
+        align-items: stretch;
+        gap: 0.4rem;
+      }
+
+      form[name="frm_search_globals"] .input-group-append {
+        margin: 0;
+      }
+
+      #anySearchBox {
+        flex: 1 1 auto;
+        min-height: 2.85rem;
+        border: 0;
+        border-radius: 0.95rem;
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+      }
+
+      #search_globals {
+        flex: 0 0 auto;
+        min-width: 2.85rem;
+        min-height: 2.85rem;
+        border: 0;
+        border-radius: 0.95rem;
+        background: #ffffff;
+        color: #0f2f6d;
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+      }
+
+      #search_globals:hover,
+      #search_globals:focus {
+        background: #e6efff;
+        color: #0c2557;
+      }
+
       #userData {
-        float: none;
+        order: 2;
         position: relative;
         display: flex;
         align-items: center;
+        justify-content: stretch;
+        width: 100%;
         min-width: 0;
-        max-width: 100%;
-        margin-inline-start: auto;
+        max-width: none;
+        margin: 0;
       }
 
       #userData > .appMenu {
         display: flex;
         align-items: center;
+        justify-content: stretch;
+        width: 100%;
         min-width: 0;
-        max-width: 100%;
+        max-width: none;
+      }
+
+      #username-container {
+        width: 100%;
+        margin: 0 !important;
+      }
+
+      #username {
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        min-height: 3.2rem;
+        margin-top: 5%;
+        padding: 0.8rem 1rem;
+        border-radius: 1rem;
+        background: rgba(255, 255, 255, 0.12);
+        color: #ffffff;
+        font-size: 0.95rem;
+        font-weight: 700;
+      }
+
+      #username .user-label-text {
+        color: #ffffff;
+        line-height: 1.2;
       }
 
       #userdropdown.dropdown-menu {
         white-space: nowrap;
-        min-width: max-content;
-        max-width: calc(100vw - 1rem);
+        min-width: 15rem;
+        max-width: min(20rem, calc(100vw - 1rem));
         overflow-x: auto;
+      }
+
+      #mainMenu .dropdown-toggle::after {
+        margin-inline-start: 0.5rem;
+      }
+
+      #username.dropdown-toggle::after {
+        display: none;
+      }
+
+      #mainMenu .menuSection > .menuEntries {
+        position: absolute;
+        top: 0;
+        inset-inline-start: calc(100% - 0.18rem);
+        min-width: 16rem;
+        padding: 0.4rem;
+        border: 1px solid rgba(15, 47, 109, 0.08);
+        border-radius: 1rem;
+        background: #ffffff;
+        box-shadow: 0 18px 38px rgba(15, 23, 42, 0.18);
+      }
+
+      #mainMenu .menuSection > .menuEntries::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        inset-inline-start: -0.85rem;
+        width: 0.85rem;
+      }
+
+      #mainMenu .menuSection > .menuEntries .menuEntries {
+        top: 0;
+        inset-inline-start: calc(100% - 0.15rem);
+      }
+
+      #mainMenu .menuEntries li .menuLabel {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.72rem 0.9rem;
+        border-radius: 0.8rem;
+        color: #0f172a;
+      }
+
+      #mainMenu .menuEntries li .menuLabel:hover {
+        background: #e6efff;
+        color: #0f2f6d;
+      }
+
+      #mainShellContent {
+        display: flex;
+        flex: 1 1 auto;
+        flex-direction: column;
+        width: 100%;
+        max-width: none;
+        min-width: 0;
+        min-height: 0;
+        height: 100%;
+        overflow: hidden;
+      }
+
+      #mainBox.site-nav-retracted #mainSidebarNav {
+        flex-basis: 0;
+        width: 0;
+        max-width: 0;
+        min-width: 0;
+        padding-inline: 0;
+        border-right: 0;
+        box-shadow: none;
+      }
+
+      #mainBox.site-nav-retracted #mainSidebarNav > :not(.openemr-top-nav-identity) {
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      #mainBox.site-nav-retracted #mainSidebarNav .openemr-top-nav-identity {
+        min-width: 2.75rem;
+      }
+
+      #mainBox.site-nav-retracted #mainSidebarNav .openemr-top-nav-logo {
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      #mainShellContent > div {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
       }
 
       #attendantData {
@@ -563,6 +938,8 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
         max-width: 100%;
         min-width: 0;
         overflow: visible;
+        background: #f8fbff;
+        border-bottom: 1px solid rgba(15, 23, 42, 0.08);
       }
 
       #attendantData > .d-lg-inline-flex {
@@ -582,6 +959,8 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
         max-width: 100%;
         min-width: 0;
         overflow: hidden;
+        background: #ffffff;
+        border-bottom: 1px solid rgba(15, 23, 42, 0.08);
       }
 
       .tabControls {
@@ -593,6 +972,7 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
         overflow-x: auto;
         overflow-y: hidden;
         white-space: nowrap;
+        background: #ffffff;
       }
 
       .tabControls .tabSpan {
@@ -655,14 +1035,67 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
       }
 
       @media (max-width: 1199.98px) {
-        .navbar {
-          align-items: stretch;
+        #mainBox {
+          flex-direction: column;
+        }
+
+        #mainSidebarNav {
+          flex: 0 0 auto;
+          width: 100%;
+          max-width: 100%;
+          min-width: 0;
+          height: auto;
+          min-height: 0;
+          padding: 0.8rem;
+          gap: 0.75rem;
+          overflow: visible;
+          background: #0f2f6d;
+        }
+
+        #mainSidebarNav .openemr-top-nav-identity {
+          min-height: 2.75rem;
+        }
+
+        #mainSidebarNav .navbar-toggler {
+          box-shadow: none;
+          margin-top: 1%;
+        }
+
+        #mainSidebarNav .openemr-top-nav-logo {
+          max-width: calc(100% - 3.2rem);
+          margin-top: 1%;
+        }
+
+        #mainBox.site-nav-retracted #mainSidebarNav {
+          flex-basis: auto;
+          width: 100%;
+          max-width: 100%;
+          min-width: 0;
+          padding: 0.8rem;
+          background: transparent;
+          border-right-color: transparent;
+          box-shadow: none;
+        }
+
+        #mainBox.site-nav-retracted #mainSidebarNav > :not(.openemr-top-nav-identity) {
+          opacity: 1;
+          pointer-events: auto;
+        }
+
+        #mainBox.site-nav-retracted #mainSidebarNav .openemr-top-nav-logo {
+          opacity: 1;
+          pointer-events: auto;
         }
 
         #mainMenu {
-          order: 3;
+          order: 4;
           flex: 1 1 100%;
           width: 100%;
+          max-width: 100%;
+        }
+
+        #mainMenu.collapse:not(.show) {
+          display: none;
         }
 
         #mainMenu > .appMenu {
@@ -671,26 +1104,29 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
           align-items: stretch;
         }
 
-        #mainMenu .menuLabel {
-          width: 100%;
-          padding-top: 0.5rem;
-          padding-bottom: 0.5rem;
-        }
-
         form[name="frm_search_globals"] {
-          order: 4;
+          order: 3;
           flex: 1 1 100%;
           width: 100%;
-          margin-top: 0.5rem;
-          margin-inline-start: 0;
+          max-width: 100%;
         }
 
         #userData {
           order: 2;
           width: 100%;
-          margin-top: 0.5rem;
-          margin-inline-start: 0;
-          justify-content: flex-start;
+          margin: 0;
+          justify-content: stretch;
+        }
+
+        #mainMenu .menuSection > .menuEntries,
+        #mainMenu .menuSection > .menuEntries .menuEntries {
+          position: static;
+          inset-inline-start: auto;
+          top: auto;
+          min-width: 0;
+          width: 100%;
+          margin-top: 0.35rem;
+          box-shadow: inset 0 0 0 1px rgba(15, 47, 109, 0.08);
         }
       }
 
@@ -705,6 +1141,13 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
 
         #tabs_div {
           padding-top: 0.25rem;
+        }
+      }
+
+      @media (min-width: 768px) and (max-width: 1199.98px) {
+        #mainSidebarNav,
+        #mainBox.site-nav-retracted #mainSidebarNav {
+          min-height: 10dvh;
         }
       }
     </style>
@@ -735,24 +1178,55 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
         }
     }
     ?>
+<div
+    id="patientBanner"
+    class="patient-identity-banner"
+    data-testid="patient-identity-banner"
+>
+    <div class="patient-identity-banner__inner">
+        <strong class="patient-identity-banner__name" data-patient-banner-field="name">No patient selected</strong>
+
+        <span class="patient-identity-banner__item">
+            <span class="patient-identity-banner__label">DOB:</span>
+            <span data-patient-banner-field="dob">—</span>
+        </span>
+
+        <span class="patient-identity-banner__item">
+            <span class="patient-identity-banner__label">Sex:</span>
+            <span data-patient-banner-field="sex">Unknown</span>
+        </span>
+
+        <span class="patient-identity-banner__item">
+            <span class="patient-identity-banner__label">MRN:</span>
+            <span data-patient-banner-field="mrn">—</span>
+        </span>
+
+        <span class="patient-identity-banner__item">
+            <span class="patient-identity-banner__label">Status:</span>
+            <span class="badge badge-secondary patient-identity-banner__status patient-identity-banner__status-badge" data-patient-banner-field="status">No patient</span>
+        </span>
+    </div>
+</div>
     <div id="mainBox" <?php echo $disp_mainBox ?>>
-        <nav class="navbar navbar-expand-xl navbar-light bg-light py-0">
-            <?php if (OEGlobalsBag::getInstance()->getBoolean('display_main_menu_logo')) {
-                $bag = OEGlobalsBag::getInstance();
-                $logoLinkDefault = 'https://www.open-emr.org/';
-                $logoTitleDefault = xl('OpenEMR Website');
-                $logoLink = trim($bag->getString('main_menu_logo_link', $logoLinkDefault));
-                $logoTitle = trim($bag->getString('main_menu_logo_title', $logoTitleDefault));
-                $logoImg = '<img src="' . attr($menuLogo) . '" class="d-inline-block align-middle" height="16" alt="' . xla('Main Menu Logo') . '">';
-                if ($logoLink !== '') {
-                    echo '<a class="navbar-brand" href="' . attr($logoLink) . '" title="' . attr($logoTitle) . '" rel="noopener" target="_blank">' . $logoImg . '</a>' . "\n";
-                } else {
-                    echo '<span class="navbar-brand">' . $logoImg . '</span>' . "\n";
-                }
-            } ?>
-            <button class="navbar-toggler mr-auto" type="button" data-toggle="collapse" data-target="#mainMenu" aria-controls="mainMenu" aria-expanded="false" aria-label="Toggle navigation">
-                <span class="navbar-toggler-icon"></span>
-            </button>
+        <nav id="mainSidebarNav" class="navbar navbar-expand-xl navbar-dark py-0">
+            <div class="openemr-top-nav-identity">
+                <button class="navbar-toggler openemr-top-nav-toggle" type="button" data-toggle="collapse" data-target="#mainMenu" aria-controls="mainMenu" aria-expanded="false" aria-label="Toggle navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <?php if (OEGlobalsBag::getInstance()->getBoolean('display_main_menu_logo')) {
+                    $bag = OEGlobalsBag::getInstance();
+                    $logoLinkDefault = 'https://www.open-emr.org/';
+                    $logoTitleDefault = xl('OpenEMR Website');
+                    $logoLink = trim($bag->getString('main_menu_logo_link', $logoLinkDefault));
+                    $logoTitle = trim($bag->getString('main_menu_logo_title', $logoTitleDefault));
+                    $logoImg = '<img src="' . attr($menuLogo) . '" class="d-inline-block align-middle" height="16" alt="' . xla('Main Menu Logo') . '">';
+                    if ($logoLink !== '') {
+                        echo '<a class="navbar-brand openemr-top-nav-logo" href="' . attr($logoLink) . '" title="' . attr($logoTitle) . '" rel="noopener" target="_blank">' . $logoImg . '</a>' . "\n";
+                    } else {
+                        echo '<span class="navbar-brand openemr-top-nav-logo">' . $logoImg . '</span>' . "\n";
+                    }
+                } ?>
+            </div>
             <div class="collapse navbar-collapse" id="mainMenu" data-bind="template: {name: 'menu-template', data: application_data}"></div>
             <?php if (OEGlobalsBag::getInstance()->get('search_any_patient') != 'none') : ?>
                 <form name="frm_search_globals" class="form-inline">
@@ -772,22 +1246,99 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
             $dispatcher->dispatch(new RenderEvent(), RenderEvent::EVENT_BODY_RENDER_NAV);
             ?>
         </nav>
-        <div id="attendantData" class="body_title acck" data-bind="template: {name: app_view_model.attendant_template_type, data: application_data}"></div>
-        <div class="body_title pt-1" id="tabs_div" data-bind="template: {name: 'tabs-controls', data: application_data}"></div>
-        <div class="mainFrames d-flex flex-row" id="mainFrames_div">
-            <div id="framesDisplay" data-bind="template: {name: 'tabs-frames', data: application_data}"></div>
+        <div id="mainShellContent">
+            <div id="attendantData" class="body_title acck" data-bind="template: {name: app_view_model.attendant_template_type, data: application_data}"></div>
+            <div class="body_title pt-1" id="tabs_div" data-bind="template: {name: 'tabs-controls', data: application_data}"></div>
+            <div class="mainFrames d-flex flex-row" id="mainFrames_div">
+                <div id="framesDisplay" data-bind="template: {name: 'tabs-frames', data: application_data}"></div>
+            </div>
+            <?php echo $twig->render("product_registration/product_registration_modal.html.twig", [
+                'webroot' => $webroot,
+                'allowEmail' => $allowEmail ?? false,
+                'allowTelemetry' => $allowTelemetry ?? false]); ?>
         </div>
-        <?php echo $twig->render("product_registration/product_registration_modal.html.twig", [
-            'webroot' => $webroot,
-            'allowEmail' => $allowEmail ?? false,
-            'allowTelemetry' => $allowTelemetry ?? false]); ?>
     </div>
     <div id="versionFooter" class="text-muted" style="position:fixed; bottom:4px; inset-inline-end:8px; font-size:11px; pointer-events:none; z-index:4;">
         <?php echo $softwareVersion; ?>
     </div>
     <script>
         function syncOpenEmrShellViewportHeight() {
+            const banner = document.getElementById('patientBanner');
+            const bannerHeight = banner ? banner.offsetHeight : 0;
             document.documentElement.style.setProperty('--openemr-shell-height', `${window.innerHeight}px`);
+            document.documentElement.style.setProperty('--patient-banner-height', `${bannerHeight}px`);
+        }
+
+        function syncPatientBanner() {
+            const banner = document.getElementById('patientBanner');
+            if (!banner || !window.app_view_model || !app_view_model.application_data) {
+                return;
+            }
+
+            const selectedPatient = app_view_model.application_data.patient
+                ? app_view_model.application_data.patient()
+                : null;
+
+            const setField = function (field, value) {
+                const node = banner.querySelector('[data-patient-banner-field="' + field + '"]');
+                if (node) {
+                    node.textContent = value;
+                }
+            };
+
+            const readValue = function (value, fallback) {
+                if (typeof value === 'function') {
+                    const result = value();
+                    return result || fallback;
+                }
+                return value || fallback;
+            };
+
+            const statusNode = banner.querySelector('[data-patient-banner-field="status"]');
+            const setStatusClass = function (status) {
+                if (!statusNode) {
+                    return;
+                }
+                statusNode.classList.remove('badge-success', 'badge-warning', 'badge-danger', 'badge-secondary');
+                switch ((status || '').toLowerCase()) {
+                    case 'deceased':
+                        statusNode.classList.add('badge-danger');
+                        break;
+                    case 'inactive':
+                        statusNode.classList.add('badge-warning');
+                        break;
+                    case 'no patient':
+                    case 'unknown':
+                        statusNode.classList.add('badge-secondary');
+                        break;
+                    default:
+                        statusNode.classList.add('badge-success');
+                        break;
+                }
+            };
+
+            if (!selectedPatient) {
+                setField('name', 'No patient selected');
+                setField('dob', '—');
+                setField('sex', 'Unknown');
+                setField('mrn', '—');
+                setField('status', 'No patient');
+                banner.classList.remove('has-selected-patient');
+                setStatusClass('No patient');
+                syncOpenEmrShellViewportHeight();
+                return;
+            }
+
+            const statusValue = readValue(selectedPatient.active_status, 'Active');
+
+            setField('name', readValue(selectedPatient.pname, 'Selected patient'));
+            setField('dob', readValue(selectedPatient.str_dob, '—'));
+            setField('sex', readValue(selectedPatient.sex, 'Unknown'));
+            setField('mrn', readValue(selectedPatient.pubpid, readValue(selectedPatient.pid, '—')));
+            setField('status', statusValue);
+            banner.classList.add('has-selected-patient');
+            setStatusClass(statusValue);
+            syncOpenEmrShellViewportHeight();
         }
 
         let openEmrShellResizeTimer = null;
@@ -797,15 +1348,30 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
                 clearTimeout(openEmrShellResizeTimer);
             }
             openEmrShellResizeTimer = window.setTimeout(function () {
+                syncPatientBanner();
                 syncOpenEmrShellViewportHeight();
             }, 50);
         }
 
+        window.syncPatientBanner = syncPatientBanner;
+        window.syncOpenEmrShellViewportHeight = syncOpenEmrShellViewportHeight;
+        window.scheduleOpenEmrShellLayoutSync = scheduleOpenEmrShellLayoutSync;
+
         ko.applyBindings(app_view_model);
+        if (app_view_model.application_data.patient && typeof app_view_model.application_data.patient.subscribe === 'function') {
+            app_view_model.application_data.patient.subscribe(syncPatientBanner);
+        }
 
         $(function () {
+            syncPatientBanner();
             syncOpenEmrShellViewportHeight();
             $(window).on('resize orientationchange', scheduleOpenEmrShellLayoutSync);
+            $(window).on('resize orientationchange', function () {
+                if (window.innerWidth < 1200) {
+                    $('#mainBox').removeClass('site-nav-retracted');
+                    $('#mainSidebarNav .navbar-toggler').attr('aria-expanded', $('#mainMenu').hasClass('show') ? 'true' : 'false');
+                }
+            });
             $('.dropdown-toggle').dropdown();
             $('#patient_caret').click(function () {
                 $('#attendantData').slideToggle(150, function () {
@@ -814,6 +1380,17 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
                 $('#patient_caret').toggleClass('fa-caret-down').toggleClass('fa-caret-up');
             });
             $('#mainMenu').on('shown.bs.collapse hidden.bs.collapse', scheduleOpenEmrShellLayoutSync);
+            $('#mainMenu, #tabs_div').on('click', 'a, button', scheduleOpenEmrShellLayoutSync);
+            $('#mainSidebarNav .navbar-toggler').on('click', function (event) {
+                if (window.innerWidth >= 1200) {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    $('#mainBox').toggleClass('site-nav-retracted');
+                    const isExpanded = !$('#mainBox').hasClass('site-nav-retracted');
+                    $(this).attr('aria-expanded', isExpanded ? 'true' : 'false');
+                    scheduleOpenEmrShellLayoutSync();
+                }
+            });
             if ($('body').css('direction') == "rtl") {
                 $('.dropdown-menu-right').each(function () {
                     $(this).removeClass('dropdown-menu-right');

@@ -503,7 +503,7 @@ $constraints = LBF_Validation::generate_validate_constraints("DEM");
         <?php }?>
 
         <?php if ($set_pid) { ?>
-        parent.left_nav.setPatient(<?php echo js_escape($result['fname'] . " " . $result['lname']) . "," . js_escape($pid) . "," . js_escape($result['pubpid']) . ",''," . js_escape(" " . xl('DOB') . ": " . oeFormatShortDate($result['DOB_YMD']) . " " . xl('Age') . ": " . getPatientAgeDisplay($result['DOB_YMD'])); ?>);
+        parent.left_nav.setPatient(<?php echo js_escape($result['fname'] . " " . $result['lname']) . "," . js_escape($pid) . "," . js_escape($result['pubpid']) . ",''," . js_escape(" " . xl('DOB') . ": " . oeFormatShortDate($result['DOB_YMD']) . " " . xl('Age') . ": " . getPatientAgeDisplay($result['DOB_YMD'])) . "," . js_escape((!empty($result['sex']) ? (getListItemTitle('sex', $result['sex']) ?: $result['sex']) : xl('Unknown'))) . "," . js_escape((!empty(is_patient_deceased($pid)) ? xl('Deceased') : (((isset($result['active']) && (string) $result['active'] === '0') || !empty($result['inactive'])) ? xl('Inactive') : xl('Active')))); ?>);
         <?php } ?>
 
         <?php echo $date_init; ?>

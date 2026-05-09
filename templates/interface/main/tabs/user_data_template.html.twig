@@ -21,17 +21,9 @@
              data-toggle="dropdown"
              aria-haspopup="true"
              aria-expanded="false">
-            <span class="fa-stack">
-                <i class="far text-muted fa-circle fa-2x fa-stack-2x"></i>
-                <i class="fa text-muted fa-user fa-lg fa-stack-1x" aria-hidden="true" id="user_icon"></i>
-            </span>
+            <span class="user-label-text" data-bind="text: primary_name"></span>
         </div>
         <ul id="userdropdown" class="userfunctions menuEntries dropdown-menu dropdown-menu-right menu-shadow-ovr rounded-0 border-0">
-            <li class="menuLabel">
-                <span class="font-weight-bold">
-                    <span data-bind="text:fname"></span> <span data-bind="text:lname"></span>
-                </span>
-            </li>
             <li><a class="dropdown-item" data-bind="click: editSettings">
                 <i class="fa fa-fw pr-2 text-muted fa-cog"></i>&nbsp;{{ "Settings"|xlt }}
             </a></li>

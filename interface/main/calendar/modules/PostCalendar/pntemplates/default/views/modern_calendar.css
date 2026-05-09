@@ -69,7 +69,7 @@ body.openemr-modern-calendar {
 
 .openemr-modern-calendar #topToolbarRight.modern-calendar-toolbar {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: 0.55rem;
     min-height: 3.2rem;
@@ -95,13 +95,17 @@ body.openemr-modern-calendar {
 }
 
 .openemr-modern-calendar #functions {
+    justify-self: start;
     justify-content: flex-start;
     text-align: left;
     flex-wrap: nowrap;
+    width: max-content;
+    max-width: 100%;
 }
 
 .openemr-modern-calendar #dateNAV {
     display: inline-flex;
+    justify-self: center;
     justify-content: center;
     gap: 0.45rem;
     padding: 0.2rem 0.55rem;
@@ -131,9 +135,13 @@ body.openemr-modern-calendar {
 }
 
 .openemr-modern-calendar #viewPicker {
+    justify-self: end;
     justify-content: flex-end;
     flex-wrap: nowrap;
     text-align: right;
+    width: max-content;
+    max-width: 100%;
+    margin-left: auto;
 }
 
 .openemr-modern-calendar #topToolbarRight .btn {

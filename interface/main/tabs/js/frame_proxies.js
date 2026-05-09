@@ -24,18 +24,30 @@ var left_nav = {
 
 };
 
-left_nav.setPatient = function(pname, pid, pubpid, frname, str_dob)
+left_nav.setPatient = function(pname, pid, pubpid, frname, str_dob, sex, active_status)
 {
     if((app_view_model.application_data.patient()!==null) && (pid===app_view_model.application_data.patient().pid()))
     {
         app_view_model.application_data.patient().pname(pname);
         app_view_model.application_data.patient().pubpid(pubpid);
         app_view_model.application_data.patient().str_dob(str_dob);
+        if (typeof app_view_model.application_data.patient().sex === 'function') {
+            app_view_model.application_data.patient().sex(sex || "Unknown");
+        }
+        if (typeof app_view_model.application_data.patient().active_status === 'function') {
+            app_view_model.application_data.patient().active_status(active_status || "Active");
+        }
+        if (typeof window.syncPatientBanner === 'function') {
+            window.syncPatientBanner();
+        }
 
         return;
     }
-    var new_patient=new patient_data_view_model(pname,pid,pubpid,str_dob);
+    var new_patient=new patient_data_view_model(pname,pid,pubpid,str_dob,sex,active_status);
     app_view_model.application_data.patient(new_patient);
+    if (typeof window.syncPatientBanner === 'function') {
+        window.syncPatientBanner();
+    }
     app_view_model.application_data.therapy_group(null);
 
     if (WindowTitleAddPatient)
@@ -77,6 +89,9 @@ left_nav.setTherapyGroup = function(group_id, group_name){
     tabCloseByName('pat');
     attendant_type = 'therapy_group';
     app_view_model.attendant_template_type('therapy-group-template');
+    if (typeof window.syncPatientBanner === 'function') {
+        window.syncPatientBanner();
+    }
 };
 
 left_nav.setPatientEncounter = function(EncounterIdArray,EncounterDateArray,CalendarCategoryArray)
@@ -88,11 +103,17 @@ left_nav.setPatientEncounter = function(EncounterIdArray,EncounterDateArray,Cale
         app_view_model.application_data[attendant_type]().encounterArray.push(
             new encounter_data(EncounterIdArray[encIdx], EncounterDateArray[encIdx], CalendarCategoryArray[encIdx]));
     }
+    if (typeof window.scheduleOpenEmrShellLayoutSync === 'function') {
+        window.scheduleOpenEmrShellLayoutSync();
+    }
 };
 
 left_nav.setEncounter=function(edate, eid, frname)
 {
     app_view_model.application_data[attendant_type]().selectedEncounterID(eid);
+    if (typeof window.scheduleOpenEmrShellLayoutSync === 'function') {
+        window.scheduleOpenEmrShellLayoutSync();
+    }
 };
 
 left_nav.loadFrame=function(id,name,url)

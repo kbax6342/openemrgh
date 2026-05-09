@@ -409,6 +409,9 @@ function clearPatient(openFinder = true)
 {
     top.restoreSession();
     app_view_model.application_data.patient(null);
+    if (typeof window.syncPatientBanner === 'function') {
+        window.syncPatientBanner();
+    }
     tabCloseByName('enc');
     tabCloseByName('rev');
     tabCloseByName('pop');

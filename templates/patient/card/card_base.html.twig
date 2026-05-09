@@ -1,7 +1,7 @@
-<section class="{{ card_container_class_list|default(['card'])|join(' ')}}{{ card_bg_color }} {{ card_text_color }}">
+<section class="{{ card_container_class_list|default(['card'])|join(' ')}}{{ card_bg_color }} {{ card_text_color }} dashboard-widget-card" data-dashboard-widget-id="{{ id|attr }}"{% if card_data_card is defined and card_data_card %} data-card="{{ card_data_card|attr }}"{% endif %}{% if card_testid is defined and card_testid %} data-testid="{{ card_testid|attr }}"{% endif %}>
     <div class="card-body p-1">
-        <h6 class="card-title mb-0 d-flex p-1 justify-content-between">
-            <a class="text-left font-weight-bolder" href="#" {% if forceAlwaysOpen != true %} data-toggle="collapse" data-target="#{{ id|attr }}" {% endif %} aria-expanded="true" aria-controls="{{ id|attr }}">{{ title|text }}<i class="ml-1 fa fa-fw {% if initiallyCollapsed %} fa-expand {% else %} fa-compress {% endif %}" data-target="#{{ id|attr }}"></i></a>
+        <h6 class="card-title dashboard-widget-title mb-0 d-flex p-1 justify-content-between">
+            <a class="text-left font-weight-bolder" href="#" {% if forceAlwaysOpen != true %} data-toggle="collapse" data-target="#{{ id|attr }}" {% endif %} aria-expanded="true" aria-controls="{{ id|attr }}">{% if card_title_icon_class is defined and card_title_icon_class %}<i class="{{ card_title_icon_class|attr }}"></i>&nbsp;{% endif %}{{ title|text }}<i class="ml-1 fa fa-fw {% if initiallyCollapsed %} fa-expand {% else %} fa-compress {% endif %}" data-target="#{{ id|attr }}"></i></a>
             {% if auth %}
                 <span>
                 {% if card.canAdd() or btnLabel == "Add" %}

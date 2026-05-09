@@ -55,9 +55,9 @@ body {
   align-content: space-between;
   align-items: stretch;
   display: flex;
-  flex: 1 0 auto;
+  flex: 1 1 auto;
   flex-direction: column;
-  height: var(--openemr-shell-height, 100dvh);
+  height: calc(var(--openemr-shell-height, 100dvh) - var(--patient-banner-height, 0px));
   margin: 0;
   max-width: 100%;
   min-height: 0;
@@ -430,7 +430,23 @@ div.menuLabel:hover {
 }
 
 #username {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.12);
   cursor: pointer;
+  color: var(--white);
+  display: flex;
+  font-size: 0.95rem;
+  font-weight: 700;
+  justify-content: flex-start;
+  margin-top: 5%;
+  min-height: 3.2rem;
+  padding: 0.8rem 1rem;
+  border-radius: 1rem;
+}
+
+#username .user-label-text {
+  color: var(--white);
+  line-height: 1.2;
 }
 
 .userSection {
@@ -498,6 +514,371 @@ div.menuLabel:hover {
   margin-top: -5px;
 }
 
+/*
+ * Modern left-rail shell for the main OpenEMR navigation.
+ * Mirrors the live layout overrides in interface/main/tabs/main.php.
+ */
+#mainSidebarNav {
+  align-items: stretch;
+  background: #0f2f6d;
+  border-right: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 14px 0 32px rgba(15, 23, 42, 0.12);
+  color: var(--white);
+  display: flex;
+  flex: 0 0 17rem;
+  flex-direction: column;
+  gap: 0.8rem;
+  height: 100%;
+  max-width: 17rem;
+  min-height: 0;
+  min-width: 17rem;
+  overflow-x: visible;
+  overflow-y: visible;
+  padding: 0.9rem 0.8rem;
+  position: relative;
+  transition: width 0.18s ease, min-width 0.18s ease, max-width 0.18s ease, padding 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease, border-color 0.18s ease;
+  width: 17rem;
+  z-index: 6;
+
+  &.navbar {
+    flex-wrap: nowrap;
+  }
+
+  .openemr-top-nav-identity {
+    align-items: center;
+    display: flex;
+    min-height: 3rem;
+    position: relative;
+    width: 100%;
+  }
+
+  .navbar-brand {
+    align-items: center;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 1rem;
+    display: inline-flex;
+    justify-content: center;
+    margin: 0;
+    min-height: 3rem;
+    padding: 0.55rem 0.9rem;
+
+    img {
+      display: block;
+      height: 1rem;
+    }
+  }
+
+  .openemr-top-nav-logo {
+    left: 50%;
+    max-width: calc(100% - 3.55rem);
+    position: absolute;
+    transform: translateX(-50%);
+  }
+
+  .navbar-toggler {
+    align-items: center;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.32);
+    border-radius: 0.95rem;
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.16);
+    display: inline-flex;
+    height: 2.75rem;
+    justify-content: center;
+    margin: 0;
+    padding: 0;
+    width: 2.75rem;
+  }
+
+  .openemr-top-nav-toggle {
+    position: relative;
+    z-index: 1;
+  }
+
+  .navbar-toggler-icon {
+    filter: brightness(0) invert(1);
+  }
+}
+
+#patientBanner.patient-identity-banner {
+  background: #f8fafc;
+  border-bottom: 1px solid #d9dee8;
+  display: block;
+  flex: 0 0 auto;
+  font-size: 0.875rem;
+  line-height: 1.35;
+  padding: 0.4rem 0.85rem;
+  width: 100%;
+  z-index: 20;
+}
+
+#patientBanner .patient-identity-banner__inner {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1rem;
+  width: 100%;
+}
+
+#patientBanner .patient-identity-banner__name {
+  color: #0f172a;
+  font-weight: 700;
+  margin-right: 0.35rem;
+}
+
+#patientBanner .patient-identity-banner__item {
+  align-items: center;
+  color: #334155;
+  display: inline-flex;
+  gap: 0.25rem;
+  white-space: nowrap;
+}
+
+#patientBanner .patient-identity-banner__status {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.25rem;
+  white-space: nowrap;
+}
+
+#patientBanner .patient-identity-banner__label {
+  color: #53627a;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+#patientBanner .patient-identity-banner__status-badge {
+  align-items: center;
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.2;
+  padding: 0.1rem 0.45rem;
+}
+
+#mainMenu {
+  flex: 0 0 auto;
+  max-width: none;
+  min-width: 0;
+  order: 4;
+  width: 100%;
+
+  &.collapse:not(.show) {
+    display: block;
+  }
+
+  > .appMenu {
+    align-items: stretch;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    max-width: none;
+    min-width: 0;
+    width: 100%;
+  }
+
+  > .appMenu > div,
+  > .appMenu > span {
+    align-items: center;
+    background: #0f2f6d;
+    border-radius: 0.82rem;
+    box-shadow: none;
+    display: grid;
+    gap: 0.55rem;
+    grid-template-columns: auto minmax(0, 1fr);
+    margin: 0;
+    min-height: 2.45rem;
+    padding: 0 0.72rem;
+    transition: transform 0.12s ease, background-color 0.12s ease;
+    width: 100%;
+
+    &:hover {
+      background: #18408f;
+      transform: translateX(2px);
+    }
+  }
+
+  .closeButton {
+    color: var(--white);
+    display: inline-flex;
+    float: none;
+    font-size: 0.8rem;
+    inset-inline-end: auto;
+    justify-content: center;
+    margin: 0;
+    min-width: 1rem;
+    position: static;
+    top: auto;
+    width: 1rem;
+  }
+
+  .menuSection {
+    background: transparent;
+    position: relative;
+    width: 100%;
+
+    &:hover {
+      background: transparent;
+    }
+
+    > .menuEntries {
+      #{$left}: calc(100% - 0.18rem);
+      background: var(--white);
+      border: 1px solid rgba(15, 47, 109, 0.08);
+      border-radius: 1rem;
+      box-shadow: 0 18px 38px rgba(15, 23, 42, 0.18);
+      min-width: 16rem;
+      padding: 0.4rem;
+      position: absolute;
+      top: 0;
+
+      &::before {
+        bottom: 0;
+        content: "";
+        #{$left}: -0.85rem;
+        position: absolute;
+        top: 0;
+        width: 0.85rem;
+      }
+
+      .menuEntries {
+        #{$left}: calc(100% - 0.15rem);
+        top: 0;
+      }
+    }
+  }
+
+  > .appMenu > div .menuLabel,
+  > .appMenu > span .menuLabel,
+  > .appMenu > div .menuSection > .menuLabel {
+    align-items: center;
+    background: transparent;
+    border-radius: 0;
+    box-shadow: none;
+    color: var(--white);
+    display: flex;
+    font-size: 0.9rem;
+    font-weight: 700;
+    justify-content: space-between;
+    line-height: 1.2;
+    min-height: 0;
+    padding: 0.58rem 0;
+    white-space: nowrap;
+
+    &:hover {
+      background: transparent;
+      color: var(--white);
+    }
+  }
+
+  .dropdown-toggle::after {
+    margin-#{$left}: 0.5rem;
+  }
+
+  .menuEntries li .menuLabel {
+    align-items: center;
+    border-radius: 0.8rem;
+    color: #0f172a;
+    display: flex;
+    justify-content: space-between;
+    padding: 0.72rem 0.9rem;
+
+    &:hover {
+      background: #e6efff;
+      color: #0f2f6d;
+    }
+  }
+}
+
+#username.dropdown-toggle::after {
+  display: none;
+}
+
+#userData {
+  align-items: center;
+  display: flex;
+  justify-content: stretch;
+  margin: 0;
+  max-width: none;
+  min-width: 0;
+  order: 2;
+  position: relative;
+  width: 100%;
+}
+
+form[name="frm_search_globals"] {
+  flex: 0 0 auto;
+  margin: 0;
+  max-width: none;
+  min-width: 0;
+  order: 3;
+  width: 100%;
+
+  .input-group {
+    align-items: stretch;
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 0.4rem;
+  }
+
+  .input-group-append {
+    margin: 0;
+  }
+}
+
+#anySearchBox {
+  flex: 1 1 auto;
+}
+
+#search_globals {
+  flex: 0 0 auto;
+}
+
+#mainShellContent {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  height: 100%;
+  max-width: none;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  width: 100%;
+}
+
+#mainBox.site-nav-retracted #mainSidebarNav {
+  border-right: 0;
+  box-shadow: none;
+  flex-basis: 0;
+  max-width: 0;
+  min-width: 0;
+  padding-left: 0;
+  padding-right: 0;
+  width: 0;
+}
+
+#mainBox.site-nav-retracted #mainSidebarNav > :not(.openemr-top-nav-identity) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+#mainBox.site-nav-retracted #mainSidebarNav .openemr-top-nav-identity {
+  min-width: 2.75rem;
+}
+
+#mainBox.site-nav-retracted #mainSidebarNav .openemr-top-nav-logo {
+  opacity: 0;
+  pointer-events: none;
+}
+
+#mainShellContent > div {
+  max-width: 100%;
+  min-width: 0;
+  width: 100%;
+}
+
 @media (max-width: 768px) {
   .mainFrames {
     margin: 0;
@@ -507,6 +888,99 @@ div.menuLabel:hover {
   #framesDisplay > div {
     height: 100%;
     width: 100%;
+  }
+}
+
+@media (max-width: 1199.98px) {
+  #mainSidebarNav {
+    background: #0f2f6d;
+    flex: 0 0 auto;
+    gap: 0.75rem;
+    height: auto;
+    max-width: 100%;
+    min-width: 0;
+    overflow: visible;
+    padding: 0.8rem;
+    width: 100%;
+
+    .openemr-top-nav-identity {
+      min-height: 2.75rem;
+    }
+
+    .navbar-toggler {
+      box-shadow: none;
+      margin-top: 1%;
+    }
+
+    .openemr-top-nav-logo {
+      max-width: calc(100% - 3.2rem);
+      margin-top: 1%;
+    }
+  }
+
+  #mainBox.site-nav-retracted #mainSidebarNav {
+    background: transparent;
+    border-right-color: transparent;
+    box-shadow: none;
+    flex-basis: auto;
+    max-width: 100%;
+    min-width: 0;
+    padding: 0.8rem;
+    width: 100%;
+  }
+
+  #mainBox.site-nav-retracted #mainSidebarNav > :not(.openemr-top-nav-identity) {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  #mainBox.site-nav-retracted #mainSidebarNav .openemr-top-nav-logo {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  #mainMenu {
+    flex: 1 1 100%;
+    max-width: 100%;
+    order: 4;
+    width: 100%;
+
+    &.collapse:not(.show) {
+      display: none;
+    }
+
+    .menuSection > .menuEntries,
+    .menuSection > .menuEntries .menuEntries {
+      #{$left}: auto;
+      box-shadow: inset 0 0 0 1px rgba(15, 47, 109, 0.08);
+      margin-top: 0.35rem;
+      min-width: 0;
+      position: static;
+      top: auto;
+      width: 100%;
+    }
+  }
+
+  #userData {
+    justify-content: stretch;
+    margin: 0;
+    order: 2;
+    width: 100%;
+  }
+
+  form[name="frm_search_globals"] {
+    flex: 1 1 100%;
+    max-width: 100%;
+    order: 3;
+    width: 100%;
+  }
+
+}
+
+@media (min-width: 768px) and (max-width: 1199.98px) {
+  #mainSidebarNav,
+  #mainBox.site-nav-retracted #mainSidebarNav {
+    min-height: 10dvh;
   }
 }
 

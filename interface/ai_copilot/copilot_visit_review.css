@@ -18,6 +18,37 @@
     box-shadow: 0 20px 36px -28px rgba(37, 99, 235, 0.4);
 }
 
+.copilot-demo-dashboard-card {
+    margin: 0 0 1rem;
+}
+
+.copilot-demo-dashboard-card .dashboard-widget-title > a {
+    color: #4654ba;
+    text-decoration: none;
+}
+
+.copilot-demo-dashboard-icon {
+    color: #4654ba;
+    margin-right: 0.45rem;
+    margin-top: 0.1rem;
+}
+
+.copilot-demo-dashboard-subtitle {
+    margin-top: 0.12rem;
+}
+
+.copilot-demo-dashboard-time {
+    padding-top: 0.15rem;
+}
+
+.copilot-demo-dashboard-badges {
+    margin-top: 0.55rem;
+}
+
+.copilot-demo-dashboard-detail-grid {
+    margin-top: 0.7rem;
+}
+
 .copilot-demo-card + .copilot-demo-card {
     margin-top: 0.85rem;
 }

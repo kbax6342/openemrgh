@@ -19,6 +19,24 @@ function user_data_view_model(username, fname, lname, authGrp) {
     self.username = ko.observable(username);
     self.fname = ko.observable(fname);
     self.lname = ko.observable(lname);
+    self.display_name = ko.pureComputed(function () {
+        const first = (self.fname() || "").trim();
+        const last = (self.lname() || "").trim();
+        const user = (self.username() || "").trim();
+
+        if (first && last) {
+            if (first.toLowerCase() === last.toLowerCase()) {
+                return first;
+            }
+            return `${first} ${last}`;
+        }
+
+        return first || last || user;
+    });
+    self.primary_name = ko.pureComputed(function () {
+        const first = (self.fname() || "").trim();
+        return first || self.display_name();
+    });
     self.authorization_group = ko.observable(authGrp);
     self.messages = ko.observable(false);
     self.portal = ko.observable(isPortalEnabled);

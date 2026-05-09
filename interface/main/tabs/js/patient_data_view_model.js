@@ -19,13 +19,28 @@ function encounter_data(id,date,category)
     return this;
 }
 
-function patient_data_view_model(pname,pid,pubpid,str_dob)
+function patient_data_view_model(pname,pid,pubpid,str_dob,sex,active_status)
 {
     var self=this;
     self.pname=ko.observable(pname);
     self.pid=ko.observable(pid);
     self.pubpid=ko.observable(pubpid);
     self.str_dob=ko.observable(str_dob);
+    self.sex=ko.observable(sex || "Unknown");
+    self.active_status=ko.observable(active_status || "Active");
+    self.active_status_badge=ko.computed(function(){
+        var status=(self.active_status() || "Active").toLowerCase();
+        if (status === "deceased") {
+            return "badge-danger";
+        }
+        if (status === "inactive") {
+            return "badge-warning";
+        }
+        if (status === "unknown") {
+            return "badge-secondary";
+        }
+        return "badge-success";
+    }, self);
     self.patient_picture=ko.computed(function(){
       return webroot_url + '/controller.php' +
              '?document&retrieve' +
