@@ -352,6 +352,43 @@ const tests = [
         assert.strictEqual(result.chartWriteRequested, true);
         assert.strictEqual(result.trustedUseAllowed, false);
     },
+    function evalFixtureIntakeFormValidExtractionUsesDirectPdfTextAndIntakeRouting() {
+        const fileName = '09_intake_form_valid_extraction.pdf';
+        const extracted = ingestion.extractTextOrSeedFallback({
+            fileName
+        });
+        const facts = ingestion.extractIntakeFactsFromText(extracted.text, {
+            fileName
+        }).facts.map((fact, index) => ({
+            ...fact,
+            sourceLink: {
+                source_type: 'intake_form',
+                source_id: `doc_intake_eval_${String(index + 1).padStart(3, '0')}`,
+                file_name: fileName,
+                page_or_section: 'page_1',
+                field_or_chunk_id: `intake_eval_chunk_${String(index + 1).padStart(3, '0')}`,
+                quote_or_value: `${fact.name}: ${fact.value}`
+            }
+        }));
+        const result = ingestion.labPdfEvalOrchestrator({
+            fileName,
+            text: extracted.text,
+            facts,
+            documentType: 'intake_form',
+            evalFixture: ingestion.buildLabPdfEvalFixture(fileName)
+        });
+        const intake = ingestion.extractIntakeFactsFromText(extracted.text, { fileName });
+
+        assert.strictEqual(extracted.extractionMethod, 'direct_pdf_text');
+        assert.strictEqual(result.documentType, 'intake_form');
+        assert.strictEqual(result.status, 'extracted_pending_review');
+        assert.strictEqual(intake.fields.patientName, 'Marcus Johnson');
+        assert.strictEqual(intake.fields.dateOfBirth, '04/12/1979');
+        assert.ok(/blood sugar management/i.test(intake.fields.chiefConcern));
+        assert.ok(/Metformin/i.test(intake.fields.currentMedications));
+        assert.ok(/Penicillin/i.test(intake.fields.allergies));
+        assert.ok(/Mother - type 2 diabetes/i.test(intake.fields.familyHistory));
+    },
     function labPdfTextIsChunked() {
         const text = new Array(8).fill('Hemoglobin A1c: 8.2 %, high\nLDL Cholesterol: 142 mg/dL, high').join('\n');
         const chunks = ingestion.chunkLabPdfText(text, {
@@ -579,9 +616,13 @@ const tests = [
         const intake = ingestion.extractIntakeFactsFromText(ingestion.SEEDED_INTAKE_TEXT, {
             fileName: ingestion.SEEDED_INTAKE_FILE_NAME
         });
+        assert.strictEqual(intake.fields.patientName, 'Marcus Johnson');
+        assert.strictEqual(intake.fields.dateOfBirth, '04/12/1979');
         assert.strictEqual(intake.fields.reasonForVisit, 'blood sugar management and medication questions');
+        assert.strictEqual(intake.fields.currentMedications, 'Metformin 500 mg twice daily; Lisinopril 10 mg daily; Atorvastatin 20 mg nightly');
         assert.strictEqual(intake.fields.medicationAdherence, 'sometimes misses evening Metformin');
         assert.strictEqual(intake.fields.allergies, 'no known drug allergies reported');
+        assert.strictEqual(intake.fields.familyHistory, 'Mother - type 2 diabetes; Father - hypertension');
         assert.strictEqual(intake.fields.insuranceUpdate, 'patient says coverage changed recently');
         assert.strictEqual(intake.fields.carePreferences, 'written instructions and phone reminders');
         assert.ok(intake.missing.includes('Current concerns were not clearly detected in the uploaded intake form.'));
@@ -697,6 +738,8 @@ const tests = [
         assert.ok(copilotIndexSource.includes('[Lab PDF Ingestion Debug] rag_context_retrieved'));
         assert.ok(copilotIndexSource.includes('extractedTextLength'));
         assert.ok(copilotIndexSource.includes('retrievalChunkIds'));
+        assert.ok(copilotIndexSource.includes('selectedDocumentType'));
+        assert.ok(copilotIndexSource.includes('detectedDocumentType'));
         assert.ok(copilotIndexSource.includes('copilot_vectorization_started'));
         assert.ok(copilotIndexSource.includes('copilot_vectorization_succeeded'));
         assert.ok(copilotCssSource.includes('.copilot-upload-notice'));
@@ -720,13 +763,20 @@ const tests = [
     },
     function rendererTitlesRemainSeparatedForLabAndIntakeWorkflows() {
         assert.ok(copilotApiSource.includes('Lab PDF Ingestion — Clinician Review Required'));
-        assert.ok(copilotApiSource.includes('Intake Form Ingestion — Clinician Review Required'));
+        assert.ok(copilotApiSource.includes('Intake Form Extraction — Clinician Review Required'));
+        assert.ok(copilotApiSource.includes('Intake Form Extraction — Clinician Review Required'));
         const intakeRendererSlice = copilotApiSource.slice(
             copilotApiSource.indexOf('function aiCopilotBuildIntakeFormIngestionResponse'),
             copilotApiSource.indexOf('function aiCopilotBuildLabPdfIngestionResponse')
         );
         assert.ok(!/Lab PDF Ingestion — Clinician Review Required/.test(intakeRendererSlice));
         assert.ok(!/lab rows/i.test(intakeRendererSlice));
+    },
+    function citationContractUiHandlesNoClaimsWithoutFalsePass() {
+        assert.ok(copilotIndexSource.includes('No claims extracted'));
+        assert.ok(copilotIndexSource.includes('No clinical claims expected'));
+        assert.ok(labPdfIngestionPhpSource.includes('failed_no_claims_extracted'));
+        assert.ok(labPdfIngestionPhpSource.includes('not_applicable_no_claims'));
     },
     function clearLabEvidenceHooksArePresentInUiAndApi() {
         assert.ok(copilotIndexSource.includes('Clear Lab Evidence'));
@@ -997,6 +1047,7 @@ const tests = [
                 'chartWriteStatus',
                 'chunkCount',
                 'confidence',
+                'detectedDocumentType',
                 'documentGuardDecision',
                 'documentGuardProvider',
                 'documentTitle',
@@ -1014,6 +1065,7 @@ const tests = [
                 'reviewRequired',
                 'retrievedChunkCount',
                 'role',
+                'selectedDocumentType',
                 'selectedPatientKey',
                 'seededDemo',
                 'syntheticDemoData',
@@ -1058,6 +1110,7 @@ const tests = [
                 'chartWriteStatus',
                 'chunkCount',
                 'confidence',
+                'detectedDocumentType',
                 'documentGuardDecision',
                 'documentGuardProvider',
                 'documentTitle',
@@ -1075,6 +1128,7 @@ const tests = [
                 'reviewRequired',
                 'retrievedChunkCount',
                 'role',
+                'selectedDocumentType',
                 'selectedPatientKey',
                 'seededDemo',
                 'syntheticDemoData',

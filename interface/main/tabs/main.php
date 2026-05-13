@@ -416,7 +416,28 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
     $menu_restrictions = $menuMain->getMenu();
     echo $twig->render("interface/main/tabs/menu_json.html.twig", ['menu_restrictions' => $menu_restrictions]);
     ?>
-    <?php $userQuery = sqlQuery("select * from users where username = ?", [$session->get('authUser')]); ?>
+    <?php
+    $userQuery = sqlQuery("select * from users where username = ?", [$session->get('authUser')]);
+    $authSessionActive = !empty($session->get('authUser'));
+    $authSiteContext = $sessionSiteIdString !== '' ? $sessionSiteIdString : 'default';
+    $restApiEnabled = OEGlobalsBag::getInstance()->getBoolean('rest_api');
+    $restFhirApiEnabled = OEGlobalsBag::getInstance()->getBoolean('rest_fhir_api');
+    $authSessionLabel = $authSessionActive ? xlt('Authenticated session active') : xlt('No authenticated session detected');
+    $authModeLabel = $authSessionActive ? xlt('Using OpenEMR authenticated session') : xlt('Awaiting OpenEMR authenticated session');
+    $authSupportLabel = xlt('OpenEMR OAuth2 / OIDC authorization available');
+    $authApiProtectionLabel = ($restApiEnabled || $restFhirApiEnabled)
+        ? xlt('API access protected by OpenEMR session / OAuth permissions')
+        : xlt('API access remains protected by OpenEMR session / OAuth permissions when enabled');
+    $authSmartLabel = $restFhirApiEnabled
+        ? xlt('FHIR / SMART on FHIR ready')
+        : xlt('FHIR / SMART on FHIR ready if enabled');
+    $authScopedTokenLabel = xlt('FHIR / SMART API access requires scoped tokens');
+    $authContextLabel = $authSessionActive
+        ? xlt('Current user context inherited from OpenEMR')
+        : xlt('Current user context will inherit from OpenEMR after login');
+    $authBadgeLabel = $authSessionActive ? xlt('Session Active') : xlt('No Session');
+    $authBadgeClass = $authSessionActive ? 'badge-success' : 'badge-warning';
+    ?>
 
     <script>
         <?php
@@ -572,6 +593,16 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
 
         #patientBanner .patient-identity-banner__inner {
           gap: 0.4rem 0.75rem;
+        }
+
+        #authStatusPanel .copilot-auth-summary,
+        #authStatusPanel[open] .copilot-auth-details {
+          padding-left: 0.8rem;
+          padding-right: 0.8rem;
+        }
+
+        #authStatusPanel .auth-status-panel__header {
+          flex-wrap: wrap;
         }
       }
 
@@ -814,6 +845,143 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
       #username-container {
         width: 100%;
         margin: 0 !important;
+      }
+
+      #authStatusPanel {
+        order: 2;
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+        width: 100%;
+        min-width: 0;
+        margin: 0;
+        padding: 0;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 1rem;
+        background: rgba(255, 255, 255, 0.12);
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+        color: #ffffff;
+        overflow: hidden;
+      }
+
+      #authStatusPanel .copilot-auth-summary {
+        display: block;
+        margin: 0;
+        padding: 0.85rem 0.95rem;
+        cursor: pointer;
+        list-style: none;
+        transition: background-color 0.12s ease;
+      }
+
+      #authStatusPanel .copilot-auth-summary::-webkit-details-marker {
+        display: none;
+      }
+
+      #authStatusPanel .copilot-auth-summary::marker {
+        content: "";
+      }
+
+      #authStatusPanel .copilot-auth-summary:hover,
+      #authStatusPanel .copilot-auth-summary:focus-visible {
+        background: rgba(255, 255, 255, 0.06);
+        outline: none;
+      }
+
+      #authStatusPanel .auth-status-panel__header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.75rem;
+      }
+
+      #authStatusPanel .auth-status-panel__summary-meta {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.55rem;
+        flex: 0 0 auto;
+      }
+
+      #authStatusPanel .auth-status-panel__title {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+
+      #authStatusPanel .auth-status-panel__heading {
+        color: #ffffff;
+        font-size: 0.95rem;
+        font-weight: 700;
+        line-height: 1.2;
+      }
+
+      #authStatusPanel .auth-status-panel__subheading {
+        color: rgba(255, 255, 255, 0.72);
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      #authStatusPanel .auth-status-panel__badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 1.5rem;
+        padding: 0.12rem 0.55rem;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      #authStatusPanel .copilot-auth-chevron {
+        width: 0.72rem;
+        height: 0.72rem;
+        flex: 0 0 auto;
+        border-right: 2px solid rgba(255, 255, 255, 0.92);
+        border-bottom: 2px solid rgba(255, 255, 255, 0.92);
+        transform: rotate(45deg);
+        transition: transform 0.16s ease;
+      }
+
+      #authStatusPanel[open] .copilot-auth-chevron {
+        transform: rotate(225deg);
+      }
+
+      #authStatusPanel .copilot-auth-details {
+        display: none;
+        flex-direction: column;
+        gap: 0.55rem;
+        padding: 0 0.95rem 0.85rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.16);
+      }
+
+      #authStatusPanel[open] .copilot-auth-details {
+        display: flex;
+      }
+
+      #authStatusPanel .auth-status-panel__details {
+        display: flex;
+        flex-direction: column;
+        gap: 0.32rem;
+        min-width: 0;
+      }
+
+      #authStatusPanel .auth-status-panel__line {
+        color: rgba(255, 255, 255, 0.92);
+        font-size: 0.8rem;
+        line-height: 1.35;
+      }
+
+      #authStatusPanel .auth-status-panel__line strong {
+        color: #ffffff;
+        font-weight: 700;
+      }
+
+      #authStatusPanel .auth-status-panel__helper {
+        color: rgba(255, 255, 255, 0.76);
+        font-size: 0.74rem;
+        line-height: 1.4;
       }
 
       #username {
@@ -1241,6 +1409,38 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
             <?php endif; ?>
             <!--Below is the user data section that contains the user information and the attendant data-->
             <span id="userData" data-bind="template: {name: 'user-data-template', data: application_data}"></span>
+            <details
+                id="authStatusPanel"
+                class="auth-status-panel copilot-auth-card"
+                aria-label="<?php echo attr(xla('Authentication status')); ?>"
+                data-auth-session-active="<?php echo attr($authSessionActive ? '1' : '0'); ?>"
+            >
+                <summary class="copilot-auth-summary" aria-expanded="false">
+                    <span class="auth-status-panel__header">
+                        <span class="auth-status-panel__title">
+                            <span class="auth-status-panel__heading"><?php echo text(xlt('Authentication')); ?></span>
+                            <span class="auth-status-panel__subheading"><?php echo text(xlt('OAuth2 / OpenID Connect')); ?></span>
+                        </span>
+                        <span class="auth-status-panel__summary-meta">
+                            <span class="badge auth-status-panel__badge copilot-auth-badge <?php echo attr($authBadgeClass); ?>"><?php echo text($authBadgeLabel); ?></span>
+                            <span class="copilot-auth-chevron" aria-hidden="true"></span>
+                        </span>
+                    </span>
+                </summary>
+                <div class="copilot-auth-details">
+                    <div class="auth-status-panel__details">
+                        <div class="auth-status-panel__line"><?php echo text($authSessionLabel); ?></div>
+                        <div class="auth-status-panel__line"><strong><?php echo text(xlt('Site')); ?>:</strong> <?php echo text($authSiteContext); ?></div>
+                        <div class="auth-status-panel__line"><?php echo text($authSupportLabel); ?></div>
+                        <div class="auth-status-panel__line"><?php echo text($authApiProtectionLabel); ?></div>
+                        <div class="auth-status-panel__line"><?php echo text($authSmartLabel); ?></div>
+                        <div class="auth-status-panel__line"><?php echo text($authScopedTokenLabel); ?></div>
+                        <div class="auth-status-panel__line"><strong><?php echo text(xlt('Current mode')); ?>:</strong> <?php echo text($authModeLabel); ?></div>
+                        <div class="auth-status-panel__line"><?php echo text($authContextLabel); ?></div>
+                    </div>
+                    <div class="auth-status-panel__helper"><?php echo text(xlt('Authentication is handled by OpenEMR\'s existing OAuth2/OpenID Connect and session framework. API and FHIR access remain protected by OpenEMR scopes, ACLs, and user context.')); ?></div>
+                </div>
+            </details>
             <?php
             // fire off a nav event
             $dispatcher->dispatch(new RenderEvent(), RenderEvent::EVENT_BODY_RENDER_NAV);
@@ -1379,6 +1579,18 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
                 });
                 $('#patient_caret').toggleClass('fa-caret-down').toggleClass('fa-caret-up');
             });
+            const authStatusPanel = document.getElementById('authStatusPanel');
+            if (authStatusPanel) {
+                const authSummary = authStatusPanel.querySelector('.copilot-auth-summary');
+                const syncAuthPanelState = function () {
+                    if (authSummary) {
+                        authSummary.setAttribute('aria-expanded', authStatusPanel.open ? 'true' : 'false');
+                    }
+                    scheduleOpenEmrShellLayoutSync();
+                };
+                authStatusPanel.addEventListener('toggle', syncAuthPanelState);
+                syncAuthPanelState();
+            }
             $('#mainMenu').on('shown.bs.collapse hidden.bs.collapse', scheduleOpenEmrShellLayoutSync);
             $('#mainMenu, #tabs_div').on('click', 'a, button', scheduleOpenEmrShellLayoutSync);
             $('#mainSidebarNav .navbar-toggler').on('click', function (event) {

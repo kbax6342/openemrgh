@@ -25,6 +25,7 @@ require_once(__DIR__ . '/agents/RerankWorker.php');
 require_once(__DIR__ . '/agents/GroundedAnswerWorker.php');
 
 use OpenEMR\Common\Csrf\CsrfUtils;
+use OpenEMR\Common\Database\QueryUtils;
 use OpenEMR\Common\Session\SessionWrapperFactory;
 use OpenEMR\Core\OEGlobalsBag;
 use PHPMailer\PHPMailer\PHPMailer;
@@ -319,6 +320,11 @@ if ($action === 'clear_lab_evidence') {
             ]
         ),
     ]);
+    exit;
+}
+
+if ($action === 'redteam_persist') {
+    aiCopilotRedTeamPersistAction($payload, $requestId);
     exit;
 }
 
@@ -816,7 +822,7 @@ function aiCopilotIsRagGrounded(string $mode, array $context): bool
 function aiCopilotResolveAction(mixed $value): string
 {
     $action = is_string($value) ? trim($value) : 'chat';
-    return in_array($action, ['chat', 'send_reminder_email', 'agent_tool', 'attach_and_extract_lab_pdf', 'clear_lab_evidence'], true) ? $action : 'chat';
+    return in_array($action, ['chat', 'send_reminder_email', 'agent_tool', 'attach_and_extract_lab_pdf', 'clear_lab_evidence', 'redteam_persist'], true) ? $action : 'chat';
 }
 
 function aiCopilotParseRequestPayload(): ?array
@@ -1806,7 +1812,7 @@ function aiCopilotBuildLlmRequestInstruction(string $role, string $mode, array $
     if (aiCopilotIsAttachmentReviewRequest($mode, $context, $message)) {
         $instructions[] = 'This is an attachment-review workflow. Use uploaded document evidence before any seeded chart context. If uploaded document evidence is missing, say so clearly and do not invent facts.';
         $instructions[] = 'If both uploaded lab results and intake-form evidence are available or requested, summarize both. If one requested uploaded source is missing, say exactly which uploaded source was not found.';
-        $instructions[] = 'Use the answer field as a compact title only: "Lab PDF Ingestion — Clinician Review Required", "Intake Form Ingestion — Clinician Review Required", or "Uploaded Document Ingestion — Clinician Review Required" based on the retrieved uploaded evidence.';
+        $instructions[] = 'Use the answer field as a compact title only: "Lab PDF Ingestion — Clinician Review Required", "Intake Form Extraction — Clinician Review Required", or "Uploaded Document Ingestion — Clinician Review Required" based on the retrieved uploaded evidence.';
         $instructions[] = 'Include a concise Summary section generated from the retrieved uploaded document context. Always include a Sources Used section that lists the actual uploaded file names used.';
         $instructions[] = 'Do not cite stale seeded lab values unless the user explicitly asked for general chart context instead of uploaded PDF review.';
         $instructions[] = 'Include clinician-review language that this is synthetic demo data, draft-only, and must be verified against the original uploaded documents.';
@@ -6441,7 +6447,7 @@ function aiCopilotBuildIntakeFormIngestionResponse(array $context): array
     $role = aiCopilotCleanText((string) ($context['role'] ?? 'doctor'));
     if ($toolOutput === []) {
         return aiCopilotBuildResponse(
-            'Intake Form Ingestion — Clinician Review Required',
+            'Intake Form Extraction — Clinician Review Required',
             [
                 aiCopilotBuildSection('RAG-grounded Response Notice', ['No intake-form context was available for this request. Attach an intake form through the co-pilot prompt before retrying the workflow.'], 'yellow'),
                 aiCopilotBuildSection('Missing or Ambiguous Data', ['No attachment context was available, so no intake-form facts were extracted or retrieved.'], 'yellow'),
@@ -6453,7 +6459,7 @@ function aiCopilotBuildIntakeFormIngestionResponse(array $context): array
 
     if (($toolOutput['status'] ?? '') === 'role_blocked') {
         return aiCopilotBuildResponse(
-            'Intake Form Ingestion — Clinician Review Required',
+            'Intake Form Extraction — Clinician Review Required',
             [
                 aiCopilotBuildSection('Extracted Intake Facts', [aiCopilotCleanText((string) ($toolOutput['safe_message'] ?? 'Intake-form ingestion is restricted in this workflow.'))], 'yellow'),
                 aiCopilotBuildSection('Missing or Ambiguous Data', ['The attachment workflow was blocked before any chart write, order, or diagnosis action could occur.'], 'yellow'),
@@ -6470,7 +6476,7 @@ function aiCopilotBuildIntakeFormIngestionResponse(array $context): array
             $guardFactsSection[] = 'Readable PDF text preview: ' . $guardPreview;
         }
         return aiCopilotBuildResponse(
-            'Intake Form Ingestion — Clinician Review Required',
+            'Intake Form Extraction — Clinician Review Required',
             [
                 aiCopilotBuildSection('RAG-grounded Response Notice', ['No validated intake-form evidence was ingested because the uploaded PDF did not pass the medical document validation gate for automatic ingestion.'], 'yellow'),
                 aiCopilotBuildSection('Extracted Intake Facts', $guardFactsSection, 'yellow'),
@@ -6548,12 +6554,20 @@ function aiCopilotBuildIntakeFormIngestionResponse(array $context): array
     }
 
     $fieldItems = [
+        'patientName' => [aiCopilotCleanText((string) ($intakeFields['patientName'] ?? '')) ?: aiCopilotIntakeMissingFieldMessage('patientName')],
+        'dateOfBirth' => [aiCopilotCleanText((string) ($intakeFields['dateOfBirth'] ?? '')) ?: aiCopilotIntakeMissingFieldMessage('dateOfBirth')],
+        'sex' => [aiCopilotCleanText((string) ($intakeFields['sex'] ?? '')) ?: aiCopilotIntakeMissingFieldMessage('sex')],
         'reasonForVisit' => [aiCopilotCleanText((string) ($intakeFields['reasonForVisit'] ?? '')) ?: aiCopilotIntakeMissingFieldMessage('reasonForVisit')],
+        'chiefConcern' => [aiCopilotCleanText((string) ($intakeFields['chiefConcern'] ?? '')) ?: aiCopilotIntakeMissingFieldMessage('chiefConcern')],
         'currentConcerns' => [aiCopilotCleanText((string) ($intakeFields['currentConcerns'] ?? '')) ?: aiCopilotIntakeMissingFieldMessage('currentConcerns')],
+        'currentMedications' => [aiCopilotCleanText((string) ($intakeFields['currentMedications'] ?? '')) ?: aiCopilotIntakeMissingFieldMessage('currentMedications')],
         'medicationAdherence' => [aiCopilotCleanText((string) ($intakeFields['medicationAdherence'] ?? '')) ?: aiCopilotIntakeMissingFieldMessage('medicationAdherence')],
         'allergies' => [aiCopilotCleanText((string) ($intakeFields['allergies'] ?? '')) ?: aiCopilotIntakeMissingFieldMessage('allergies')],
+        'familyHistory' => [aiCopilotCleanText((string) ($intakeFields['familyHistory'] ?? '')) ?: aiCopilotIntakeMissingFieldMessage('familyHistory')],
+        'recentSymptoms' => [aiCopilotCleanText((string) ($intakeFields['recentSymptoms'] ?? '')) ?: aiCopilotIntakeMissingFieldMessage('recentSymptoms')],
         'insuranceUpdate' => [aiCopilotCleanText((string) ($intakeFields['insuranceUpdate'] ?? '')) ?: aiCopilotIntakeMissingFieldMessage('insuranceUpdate')],
         'carePreferences' => [aiCopilotCleanText((string) ($intakeFields['carePreferences'] ?? '')) ?: aiCopilotIntakeMissingFieldMessage('carePreferences')],
+        'consentNote' => [aiCopilotCleanText((string) ($intakeFields['consentNote'] ?? '')) ?: aiCopilotIntakeMissingFieldMessage('consentNote')],
     ];
 
     $draftSummaryItems = [];
@@ -6564,8 +6578,17 @@ function aiCopilotBuildIntakeFormIngestionResponse(array $context): array
     if (aiCopilotCleanText((string) ($intakeFields['medicationAdherence'] ?? '')) !== '') {
         $draftSummaryItems[] = 'Medication / adherence note identified: ' . aiCopilotCleanText((string) ($intakeFields['medicationAdherence'] ?? ''));
     }
+    if (aiCopilotCleanText((string) ($intakeFields['currentMedications'] ?? '')) !== '') {
+        $draftSummaryItems[] = 'Current medications identified: ' . aiCopilotCleanText((string) ($intakeFields['currentMedications'] ?? ''));
+    }
+    if (aiCopilotCleanText((string) ($intakeFields['familyHistory'] ?? '')) !== '') {
+        $draftSummaryItems[] = 'Family history identified: ' . aiCopilotCleanText((string) ($intakeFields['familyHistory'] ?? ''));
+    }
     if (aiCopilotCleanText((string) ($intakeFields['insuranceUpdate'] ?? '')) !== '') {
         $draftSummaryItems[] = 'Insurance update identified: ' . aiCopilotCleanText((string) ($intakeFields['insuranceUpdate'] ?? ''));
+    }
+    if (aiCopilotCleanText((string) ($intakeFields['consentNote'] ?? '')) !== '') {
+        $draftSummaryItems[] = 'Consent note identified: ' . aiCopilotCleanText((string) ($intakeFields['consentNote'] ?? ''));
     }
     if ($missingItems !== []) {
         $draftSummaryItems[] = 'Missing or ambiguous intake details still require verification before any follow-up action.';
@@ -6593,16 +6616,24 @@ function aiCopilotBuildIntakeFormIngestionResponse(array $context): array
     }
 
     return aiCopilotBuildResponse(
-        'Intake Form Ingestion — Clinician Review Required',
+        aiCopilotCleanText((string) ($toolOutput['result_title'] ?? 'Intake Form Extraction — Clinician Review Required')),
         [
             aiCopilotBuildSection('RAG-grounded Response Notice', $ragNoticeItems),
             aiCopilotBuildSection('Extracted Intake Facts', array_slice($findingItems, 0, 10), $status === 'extraction_review_required' ? 'yellow' : 'neutral'),
+            aiCopilotBuildSection('Patient Name', $fieldItems['patientName']),
+            aiCopilotBuildSection('Date of Birth', $fieldItems['dateOfBirth']),
+            aiCopilotBuildSection('Sex', $fieldItems['sex']),
             aiCopilotBuildSection('Reason for Visit', $fieldItems['reasonForVisit']),
+            aiCopilotBuildSection('Chief Concern', $fieldItems['chiefConcern']),
             aiCopilotBuildSection('Current Concerns', $fieldItems['currentConcerns']),
+            aiCopilotBuildSection('Current Medications', $fieldItems['currentMedications']),
             aiCopilotBuildSection('Medication / Adherence Notes', $fieldItems['medicationAdherence']),
             aiCopilotBuildSection('Allergies', $fieldItems['allergies']),
+            aiCopilotBuildSection('Family History', $fieldItems['familyHistory']),
+            aiCopilotBuildSection('Recent Symptoms', $fieldItems['recentSymptoms']),
             aiCopilotBuildSection('Insurance Update', $fieldItems['insuranceUpdate']),
             aiCopilotBuildSection('Care Preferences', $fieldItems['carePreferences']),
+            aiCopilotBuildSection('Consent Note', $fieldItems['consentNote']),
             aiCopilotBuildSection('Missing or Ambiguous Data', array_slice($missingItems, 0, 8), 'yellow'),
             aiCopilotBuildSection('Draft Intake Summary', $draftSummaryItems),
             aiCopilotBuildSection('Sources Used', $sourceItems),
@@ -6751,6 +6782,7 @@ function aiCopilotBuildLabPdfIngestionResponse(array $context, string $prompt = 
             'missing_reference_range' => 'Reference Range Missing — Clinician Review Required',
             'missing_collection_date' => 'Collection Date Missing — Clinician Review Required',
             'citation_contract_failed' => 'Citation Contract Failed — Missing Source Citation',
+            'extraction_review_required' => 'Extraction Review Required — Clinician Review Required',
             'extracted_with_abnormal_flags' => 'Lab PDF Extraction — Abnormal Values Flagged',
             'unsupported_document' => 'Unsupported Medical Document',
             'ocr_required' => 'OCR or Textract Review Required',
@@ -7549,6 +7581,198 @@ function aiCopilotNormalizeClaim(array $claim): array
         'process_file' => aiCopilotCleanText($claim['process_file'] ?? ''),
         'submitted_claim' => aiCopilotCleanText($claim['submitted_claim'] ?? ''),
     ];
+}
+
+function aiCopilotRedTeamPersistAction(array $payload, string $requestId): void
+{
+    $record = is_array($payload['record'] ?? null) ? $payload['record'] : [];
+    if ($record === []) {
+        aiCopilotJsonResponse(400, [
+            'error' => 'Missing OpenEMR Team persistence record.',
+            'meta' => aiCopilotErrorMeta($requestId, 'redteam_record_missing'),
+        ]);
+        return;
+    }
+
+    $missingTables = aiCopilotRedTeamMissingTables();
+    if ($missingTables !== []) {
+        aiCopilotJsonResponse(409, [
+            'error' => 'OpenEMR Team persistence tables are not installed.',
+            'missing_tables' => $missingTables,
+            'meta' => aiCopilotErrorMeta($requestId, 'redteam_tables_missing'),
+        ]);
+        return;
+    }
+
+    try {
+        QueryUtils::startTransaction();
+
+        $attackRunId = null;
+        if (is_array($record['attack_run'] ?? null)) {
+            $attackRunId = aiCopilotRedTeamInsertAttackRun($record['attack_run']);
+        }
+
+        $regressionInfo = [
+            'id' => null,
+            'duplicate' => false,
+        ];
+        if (is_array($record['regression_case'] ?? null)) {
+            $regressionInfo = aiCopilotRedTeamSaveRegressionCase($record['regression_case'], $attackRunId);
+        }
+
+        $guardrailResultIds = [];
+        if (is_array($record['guardrail_results'] ?? null)) {
+            foreach ($record['guardrail_results'] as $guardrailResult) {
+                if (!is_array($guardrailResult)) {
+                    continue;
+                }
+                $guardrailResultIds[] = aiCopilotRedTeamInsertGuardrailResult($guardrailResult);
+            }
+        }
+
+        QueryUtils::commitTransaction();
+
+        aiCopilotJsonResponse(200, [
+            'ok' => true,
+            'attack_run_id' => $attackRunId,
+            'regression_case_id' => $regressionInfo['id'],
+            'duplicate_regression_case' => $regressionInfo['duplicate'],
+            'guardrail_result_ids' => $guardrailResultIds,
+            'meta' => aiCopilotErrorMeta($requestId, 'redteam_persisted'),
+        ]);
+    } catch (\Throwable $exception) {
+        QueryUtils::rollbackTransaction();
+        aiCopilotJsonResponse(500, [
+            'error' => 'Unable to persist OpenEMR Team run details right now.',
+            'meta' => aiCopilotErrorMeta($requestId, 'redteam_persist_failed'),
+        ]);
+    }
+}
+
+function aiCopilotRedTeamMissingTables(): array
+{
+    $requiredTables = [
+        'copilot_attack_runs',
+        'copilot_regression_cases',
+        'copilot_guardrail_results',
+    ];
+
+    return array_values(array_filter($requiredTables, static function ($tableName) {
+        return !QueryUtils::existsTable($tableName);
+    }));
+}
+
+function aiCopilotRedTeamInsertAttackRun(array $attackRun): int
+{
+    $retrievedContextIds = is_array($attackRun['retrieved_context_ids'] ?? null)
+        ? array_values(array_filter(array_map(static fn($item) => aiCopilotCleanText((string) $item), $attackRun['retrieved_context_ids']), static fn($item) => $item !== ''))
+        : [];
+    $judgeResult = is_array($attackRun['judge_result'] ?? null) ? $attackRun['judge_result'] : [];
+
+    return (int) QueryUtils::sqlInsert(
+        "INSERT INTO copilot_attack_runs
+            (attack_category, user_role, patient_id, workflow, prompt, retrieved_context_ids, model_response, judge_result, severity, violated_policy, created_at)
+         VALUES
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            aiCopilotCleanText((string) ($attackRun['attack_category'] ?? '')),
+            aiCopilotCleanText((string) ($attackRun['user_role'] ?? '')),
+            aiCopilotCleanText((string) ($attackRun['patient_id'] ?? '')),
+            aiCopilotCleanText((string) ($attackRun['workflow'] ?? '')),
+            aiCopilotCleanMultilineText((string) ($attackRun['prompt'] ?? '')),
+            json_encode($retrievedContextIds, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            aiCopilotCleanMultilineText((string) ($attackRun['model_response'] ?? '')),
+            json_encode($judgeResult, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            aiCopilotCleanText((string) ($attackRun['severity'] ?? 'none')),
+            aiCopilotCleanText((string) ($attackRun['violated_policy'] ?? '')),
+            aiCopilotRedTeamNormalizeDateTime((string) ($attackRun['created_at'] ?? '')),
+        ]
+    );
+}
+
+function aiCopilotRedTeamSaveRegressionCase(array $regressionCase, ?int $attackRunId): array
+{
+    $evalName = aiCopilotCleanText((string) ($regressionCase['eval_name'] ?? ''));
+    $prompt = aiCopilotCleanMultilineText((string) ($regressionCase['prompt'] ?? ''));
+    $role = aiCopilotCleanText((string) ($regressionCase['role'] ?? ''));
+    $workflow = aiCopilotCleanText((string) ($regressionCase['workflow'] ?? ''));
+
+    $existing = QueryUtils::querySingleRow(
+        "SELECT id
+           FROM copilot_regression_cases
+          WHERE eval_name = ?
+            AND prompt = ?
+            AND role = ?
+            AND workflow = ?
+          ORDER BY id DESC
+          LIMIT 1",
+        [$evalName, $prompt, $role, $workflow],
+        log: false
+    );
+
+    if (!empty($existing['id'])) {
+        return [
+            'id' => (int) $existing['id'],
+            'duplicate' => true,
+        ];
+    }
+
+    $id = QueryUtils::sqlInsert(
+        "INSERT INTO copilot_regression_cases
+            (source_attack_run_id, eval_name, prompt, expected_behavior, role, workflow, must_block, must_include_sources, created_at)
+         VALUES
+            (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            $attackRunId,
+            $evalName,
+            $prompt,
+            aiCopilotCleanMultilineText((string) ($regressionCase['expected_behavior'] ?? '')),
+            $role,
+            $workflow,
+            aiCopilotRequestTruthValue($regressionCase['must_block'] ?? false) ? 1 : 0,
+            aiCopilotRequestTruthValue($regressionCase['must_include_sources'] ?? false) ? 1 : 0,
+            aiCopilotRedTeamNormalizeDateTime((string) ($regressionCase['created_at'] ?? '')),
+        ]
+    );
+
+    return [
+        'id' => (int) $id,
+        'duplicate' => false,
+    ];
+}
+
+function aiCopilotRedTeamInsertGuardrailResult(array $guardrailResult): int
+{
+    $stage = aiCopilotCleanText((string) ($guardrailResult['stage'] ?? 'post_response'));
+    if (!in_array($stage, ['pre_response', 'post_response'], true)) {
+        $stage = 'post_response';
+    }
+
+    return (int) QueryUtils::sqlInsert(
+        "INSERT INTO copilot_guardrail_results
+            (request_id, stage, passed, reason, policy_code, created_at)
+         VALUES
+            (?, ?, ?, ?, ?, ?)",
+        [
+            aiCopilotCleanText((string) ($guardrailResult['request_id'] ?? '')),
+            $stage,
+            aiCopilotRequestTruthValue($guardrailResult['passed'] ?? false) ? 1 : 0,
+            aiCopilotCleanMultilineText((string) ($guardrailResult['reason'] ?? '')),
+            aiCopilotCleanText((string) ($guardrailResult['policy_code'] ?? '')),
+            aiCopilotRedTeamNormalizeDateTime((string) ($guardrailResult['created_at'] ?? '')),
+        ]
+    );
+}
+
+function aiCopilotRedTeamNormalizeDateTime(string $value): string
+{
+    $normalized = trim($value);
+    if ($normalized === '') {
+        return date('Y-m-d H:i:s');
+    }
+
+    $timestamp = strtotime($normalized);
+    return $timestamp !== false ? date('Y-m-d H:i:s', $timestamp) : date('Y-m-d H:i:s');
 }
 
 function aiCopilotReadEnv(string $key): string

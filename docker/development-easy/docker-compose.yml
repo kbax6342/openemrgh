@@ -202,7 +202,7 @@ services:
       retries: 3
   ngrok:
     image: ngrok/ngrok:latest
-    command: http openemr:80
+    command: http https://openemr:443 --tls-verify=false
     ports:
       - "4040:4040"
     depends_on:

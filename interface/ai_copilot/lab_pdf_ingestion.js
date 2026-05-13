@@ -34,11 +34,19 @@
     const SEEDED_INTAKE_TEXT = [
         'Synthetic demo data only',
         'Document: Marcus Johnson intake form',
+        'Patient Name: Marcus Johnson',
+        'Date of Birth: 04/12/1979',
+        'Sex: Male',
         'Reason for visit: blood sugar management and medication questions',
+        'Chief concern: blood sugar management and medication questions',
+        'Current medications: Metformin 500 mg twice daily; Lisinopril 10 mg daily; Atorvastatin 20 mg nightly',
         'Medication adherence issue: sometimes misses evening Metformin',
         'Allergies: no known drug allergies reported',
+        'Family history: Mother - type 2 diabetes; Father - hypertension',
+        'Recent symptoms: intermittent fatigue and increased thirst',
         'Insurance update: patient says coverage changed recently',
-        'Care preference: written instructions and phone reminders'
+        'Care preference: written instructions and phone reminders',
+        'Consent note: patient consented to intake review and clinician follow-up'
     ].join('\n');
     const SEEDED_INTAKE_MISSING_DATA = [
         'Current concerns were not clearly detected in the uploaded intake form.'
@@ -113,6 +121,24 @@
                 'LDL Cholesterol: 126 mg/dL Reference Range: <100 mg/dL, high'
             ].join('\n'),
             forceChartWriteBlocked: true
+        },
+        intake_form_valid_extraction: {
+            text: [
+                'Patient Intake Form',
+                'Patient Name: Marcus Johnson',
+                'Date of Birth: 04/12/1979',
+                'Sex: Male',
+                'Clinical Intake Responses',
+                'Chief concern: blood sugar management, medication questions, and insurance update',
+                'Current medications: Metformin 500 mg twice daily; Lisinopril 10 mg daily; Atorvastatin 20 mg nightly',
+                'Allergies: Penicillin - rash; Shellfish - hives',
+                'Family history: Mother - type 2 diabetes; Father - hypertension',
+                'Recent symptoms: increased thirst and intermittent fatigue',
+                'Care preferences: written instructions and phone reminders',
+                'Insurance update: patient reports updated commercial insurance card submitted today',
+                'Consent note: patient consented to intake review and clinician follow-up'
+            ].join('\n'),
+            documentType: 'intake_form'
         }
     };
 
@@ -153,6 +179,9 @@
         }
         if (normalized.includes('08_lab_pdf_no_direct_chart_write')) {
             return 'lab_pdf_no_direct_chart_write';
+        }
+        if (normalized.includes('09_intake_form_valid_extraction')) {
+            return 'intake_form_valid_extraction';
         }
 
         return '';
@@ -404,11 +433,11 @@
     const DOCUMENT_TYPE_HINTS = {
         intake_form: {
             filePatterns: [/\bintake\b/i, /\bintake-form\b/i, /\bpatient-intake\b/i, /\bquestionnaire\b/i, /\bform\b/i],
-            textPatterns: [/\breason for visit\b/i, /\bcurrent concerns\b/i, /\bmedication notes\b/i, /\bmedication adherence\b/i, /\ballergies\b/i, /\binsurance update\b/i, /\bcare preferences\b/i, /\bpreferred contact\b/i]
+            textPatterns: [/\bpatient intake form\b/i, /\bclinical intake responses\b/i, /\breason for visit\b/i, /\bchief concern\b/i, /\bcurrent concerns\b/i, /\bcurrent medications\b/i, /\bmedication notes\b/i, /\bmedication adherence\b/i, /\ballergies\b/i, /\bfamily history\b/i, /\brecent symptoms\b/i, /\binsurance update\b/i, /\bcare preferences\b/i, /\bpreferred contact\b/i, /\bconsent (?:confirmed|note)\b/i]
         },
         lab_pdf: {
             filePatterns: [/\blab\b/i, /\blabs\b/i, /\bresult\b/i, /\bdiagnostic\b/i],
-            textPatterns: [/\ba1c\b/i, /\bglucose\b/i, /\bldl\b/i, /\bhdl\b/i, /\bcreatinine\b/i, /\begfr\b/i, /\bmg\/dL\b/i, /\bhigh\b/i, /\blow\b/i, /\bnormal\b/i, /%/]
+            textPatterns: [/\ba1c\b/i, /\bcbc\b/i, /\bcmp\b/i, /\blipid panel\b/i, /\bglucose\b/i, /\bldl\b/i, /\bhdl\b/i, /\bcreatinine\b/i, /\begfr\b/i, /\breference range\b/i, /\bresult\b/i, /\babnormal\b/i, /\bmg\/dL\b/i, /\bhigh\b/i, /\blow\b/i, /\bnormal\b/i, /%/]
         }
     };
 
@@ -486,8 +515,14 @@
         'payer',
         'insurance',
         'coverage',
+        'patient intake form',
+        'clinical intake responses',
         'reason for visit',
+        'chief concern',
         'current concerns',
+        'current medications',
+        'family history',
+        'recent symptoms',
         'care preferences'
     ];
 
@@ -538,7 +573,7 @@
         },
         intake_form: {
             filePatterns: [/\bintake\b/i, /\bquestionnaire\b/i, /\bform\b/i],
-            textPatterns: [/\breason for visit\b/i, /\bcurrent concerns\b/i, /\bmedication adherence\b/i, /\ballergies\b/i, /\binsurance update\b/i, /\bcare preferences\b/i]
+            textPatterns: [/\bpatient intake form\b/i, /\bclinical intake responses\b/i, /\breason for visit\b/i, /\bchief concern\b/i, /\bcurrent concerns\b/i, /\bcurrent medications\b/i, /\bmedication adherence\b/i, /\ballergies\b/i, /\bfamily history\b/i, /\brecent symptoms\b/i, /\binsurance update\b/i, /\bcare preferences\b/i, /\bconsent (?:confirmed|note)\b/i]
         },
         discharge_summary: {
             filePatterns: [/\bdischarge\b/i, /\bhospital\b/i],
@@ -575,9 +610,29 @@
             title: 'Reason for Visit',
             patterns: [/^reason for visit\s*:\s*(.+)$/i, /^visit reason\s*:\s*(.+)$/i]
         },
+        patientName: {
+            title: 'Patient Name',
+            patterns: [/^patient name\s*:\s*(.+)$/i, /^name\s*:\s*(.+)$/i]
+        },
+        dateOfBirth: {
+            title: 'Date of Birth',
+            patterns: [/^date of birth\s*:\s*(.+)$/i, /^dob\s*:\s*(.+)$/i]
+        },
+        sex: {
+            title: 'Sex',
+            patterns: [/^sex\s*:\s*(.+)$/i, /^gender\s*:\s*(.+)$/i]
+        },
+        chiefConcern: {
+            title: 'Chief Concern',
+            patterns: [/^chief concern\s*:\s*(.+)$/i, /^chief complaint\s*:\s*(.+)$/i]
+        },
         currentConcerns: {
             title: 'Current Concerns',
             patterns: [/^current concerns\s*:\s*(.+)$/i, /^concerns\s*:\s*(.+)$/i]
+        },
+        currentMedications: {
+            title: 'Current Medications',
+            patterns: [/^current medications\s*:\s*(.+)$/i, /^medications\s*:\s*(.+)$/i]
         },
         medicationAdherence: {
             title: 'Medication / Adherence Notes',
@@ -587,6 +642,14 @@
             title: 'Allergies',
             patterns: [/^allergies\s*:\s*(.+)$/i]
         },
+        familyHistory: {
+            title: 'Family History',
+            patterns: [/^family history\s*:\s*(.+)$/i]
+        },
+        recentSymptoms: {
+            title: 'Recent Symptoms',
+            patterns: [/^recent symptoms\s*:\s*(.+)$/i, /^symptoms\s*:\s*(.+)$/i]
+        },
         insuranceUpdate: {
             title: 'Insurance Update',
             patterns: [/^insurance update\s*:\s*(.+)$/i, /^coverage update\s*:\s*(.+)$/i]
@@ -594,6 +657,10 @@
         carePreferences: {
             title: 'Care Preferences',
             patterns: [/^care preferences\s*:\s*(.+)$/i, /^care preference\s*:\s*(.+)$/i, /^preferred contact\s*:\s*(.+)$/i]
+        },
+        consentNote: {
+            title: 'Consent Note',
+            patterns: [/^consent note\s*:\s*(.+)$/i, /^consent confirmed\s*:\s*(.+)$/i]
         }
     };
 
@@ -1155,13 +1222,14 @@
 
             const text = normalizeWhitespace(evalFixture.text || '');
             return {
-                status: 'synthetic_eval_lab_pdf',
-                extractionMethod: 'synthetic_eval_lab_pdf',
+                status: String(evalFixture.documentType || '') === 'intake_form' ? 'synthetic_eval_intake_form' : 'synthetic_eval_lab_pdf',
+                extractionMethod: String(evalFixture.documentType || '') === 'intake_form' ? 'direct_pdf_text' : 'synthetic_eval_lab_pdf',
                 text,
                 preview: text.slice(0, 240),
                 missingData: [],
                 promptInjectionMatches: detectPromptInjectionText(extractedText),
                 evalId: evalFixture.evalId,
+                documentType: String(evalFixture.documentType || ''),
                 forceMissingCitation: Boolean(evalFixture.forceMissingCitation),
                 forceUnsupportedDocument: Boolean(evalFixture.forceUnsupportedDocument),
                 forceChartWriteBlocked: Boolean(evalFixture.forceChartWriteBlocked)
@@ -1204,7 +1272,7 @@
 
         return {
             status: 'ok',
-            extractionMethod: 'pdf_text',
+            extractionMethod: 'direct_pdf_text',
             text: extractedText,
             preview: extractedText.slice(0, 240),
             missingData: [],
@@ -1474,12 +1542,20 @@
 
     function intakeMissingFieldMessage(fieldKey) {
         const mapping = {
+            patientName: 'Patient name was not clearly detected in the uploaded intake form.',
+            dateOfBirth: 'Date of birth was not clearly detected in the uploaded intake form.',
+            sex: 'Sex was not clearly detected in the uploaded intake form.',
             reasonForVisit: 'Reason for visit was not clearly detected in the uploaded intake form.',
+            chiefConcern: 'Chief concern was not clearly detected in the uploaded intake form.',
             currentConcerns: 'Current concerns were not clearly detected in the uploaded intake form.',
+            currentMedications: 'Current medications were not clearly detected in the uploaded intake form.',
             medicationAdherence: 'Medication / adherence notes were not clearly detected in the uploaded intake form.',
             allergies: 'Allergies were not clearly detected in the uploaded intake form.',
+            familyHistory: 'Family history was not clearly detected in the uploaded intake form.',
+            recentSymptoms: 'Recent symptoms were not clearly detected in the uploaded intake form.',
             insuranceUpdate: 'Insurance update was not clearly detected in the uploaded intake form.',
-            carePreferences: 'Care preferences were not clearly detected in the uploaded intake form.'
+            carePreferences: 'Care preferences were not clearly detected in the uploaded intake form.',
+            consentNote: 'Consent note was not clearly detected in the uploaded intake form.'
         };
         return mapping[fieldKey] || 'A required intake field was not clearly detected in the uploaded intake form.';
     }
@@ -1489,12 +1565,20 @@
         const sourceText = useSeededIntake ? SEEDED_INTAKE_TEXT : text;
         const lines = normalizeWhitespace(sourceText).split('\n');
         const fields = {
+            patientName: '',
+            dateOfBirth: '',
+            sex: '',
             reasonForVisit: '',
+            chiefConcern: '',
             currentConcerns: '',
+            currentMedications: '',
             medicationAdherence: '',
             allergies: '',
+            familyHistory: '',
+            recentSymptoms: '',
             insuranceUpdate: '',
-            carePreferences: ''
+            carePreferences: '',
+            consentNote: ''
         };
         const missing = [];
         const rejectedLines = [];
@@ -1504,7 +1588,7 @@
             if (!normalizedLine || isPromptInjectionLine(normalizedLine)) {
                 return;
             }
-            if (/^(patient|document|synthetic demo data only)\b/i.test(normalizedLine)) {
+            if (/^(document|synthetic demo data only)\b/i.test(normalizedLine)) {
                 return;
             }
             if (/^missing[:]?$/i.test(normalizedLine)) {
@@ -1630,7 +1714,7 @@
     function extractPatientName(text) {
         const lines = String(text || '').split(/\r?\n/);
         for (const line of lines) {
-            const match = String(line).match(/\bpatient\s*:\s*([A-Za-z][A-Za-z'\-]+(?:\s+[A-Za-z][A-Za-z'\-]+){0,3})\s*$/i);
+            const match = String(line).match(/\bpatient(?:\s+name)?\s*:\s*([A-Za-z][A-Za-z'\-]+(?:\s+[A-Za-z][A-Za-z'\-]+){0,3})\s*$/i);
             if (match && match[1]) {
                 return normalizeWhitespace(match[1]);
             }
@@ -1667,11 +1751,17 @@
         const prompt = String(options.prompt || '');
         const documentGuardDecision = String(options.documentGuardDecision || '').trim().toLowerCase();
         const chartWriteRequested = promptRequestsDirectChartWrite(prompt) || Boolean(evalFixture && evalFixture.forceChartWriteBlocked);
-        const readable = Boolean(text) && text.length >= 24 && facts.length > 0;
+        const readable = hasEnoughReadablePdfText(text);
+        const documentType = String(options.documentType || detectDocumentType(options.fileName || '', text) || (evalFixture && evalFixture.documentType) || '').trim() || 'unknown';
+        const claimsExpected = options.claimsExpected !== undefined
+            ? Boolean(options.claimsExpected)
+            : (readable && ['lab_pdf', 'intake_form'].includes(documentType));
+        const claimCount = facts.length;
         const hasMissingCitation = facts.some(function (fact) {
             return missingCitationFields(fact.sourceLink || fact.source_link || fact.sourceCitation || fact.source_citation).length > 0;
         });
-        const missingReferenceRange = facts.some(function (fact) {
+        const isLabDocument = documentType === 'lab_pdf';
+        const missingReferenceRange = isLabDocument && facts.some(function (fact) {
             return normalizeWhitespace(fact.value) && !normalizeWhitespace(fact.reference_range || fact.referenceRange);
         });
         const hasAbnormalValues = facts.some(function (fact) {
@@ -1683,14 +1773,18 @@
             status = 'unsupported_document';
         } else if (!readable || Boolean(evalFixture && evalFixture.forceOcrRequired)) {
             status = 'ocr_required';
+        } else if (claimsExpected && claimCount === 0) {
+            status = 'extraction_review_required';
         } else if (hasMissingCitation) {
             status = 'citation_contract_failed';
-        } else if (!collectionDate) {
+        } else if (isLabDocument && !collectionDate) {
             status = 'missing_collection_date';
-        } else if (missingReferenceRange) {
+        } else if (isLabDocument && missingReferenceRange) {
             status = 'missing_reference_range';
         } else if (hasAbnormalValues) {
             status = 'extracted_with_abnormal_flags';
+        } else if (documentType === 'intake_form') {
+            status = 'extracted_pending_review';
         }
 
         if (chartWriteRequested && !['unsupported_document', 'ocr_required'].includes(status)) {
@@ -1701,6 +1795,7 @@
             evalId: evalFixture ? evalFixture.evalId : '',
             patientName: extractPatientName(text),
             collectionDate,
+            documentType,
             status,
             chartWriteRequested,
             trustedUseAllowed: ['extracted', 'extracted_with_abnormal_flags'].includes(status)
@@ -1761,6 +1856,22 @@
             || sourceMetadata.sourceType
             || 'lab_pdf'
         );
+        const detectedDocumentType = String(
+            overrides.detectedDocumentType
+            || metadata.detected_document_type
+            || metadata.detectedDocumentType
+            || sourceMetadata.detected_document_type
+            || sourceMetadata.detectedDocumentType
+            || documentType
+        );
+        const selectedDocumentType = String(
+            overrides.selectedDocumentType
+            || metadata.selected_document_type
+            || metadata.selectedDocumentType
+            || sourceMetadata.selected_document_type
+            || sourceMetadata.selectedDocumentType
+            || documentType
+        );
 
         return {
             requestId: overrides.requestId || toolOutput.requestId || responseMeta.request_id || '',
@@ -1769,6 +1880,8 @@
             selectedPatientKey: overrides.selectedPatientKey || metadata.patient_key || metadata.patientKey || '',
             documentTitle: overrides.documentTitle || metadata.title || sourceMetadata.file_name || sourceMetadata.fileName || '',
             documentType: documentType,
+            selectedDocumentType,
+            detectedDocumentType,
             extractionMethod: overrides.extractionMethod || toolOutput.extraction_method || toolOutput.extractionMethod || '',
             toolStatus: overrides.toolStatus || toolOutput.status || toolOutput.ingestion_status || toolOutput.ingestionStatus || '',
             chunkCount: Number(
@@ -1905,6 +2018,8 @@
                 documentTitlePresent: Boolean(metadata.title || overrides.documentTitle || ''),
                 documentTitleHash: hashIdentifier(metadata.title || overrides.documentTitle || ''),
                 documentType: metadata.document_type || metadata.documentType || sourceMetadata.source_type || sourceMetadata.sourceType || 'lab_pdf',
+                selectedDocumentType: metadata.selected_document_type || metadata.selectedDocumentType || sourceMetadata.selected_document_type || sourceMetadata.selectedDocumentType || '',
+                detectedDocumentType: metadata.detected_document_type || metadata.detectedDocumentType || sourceMetadata.detected_document_type || sourceMetadata.detectedDocumentType || '',
                 extractionMethod: toolOutput.extraction_method || toolOutput.extractionMethod || '',
                 ingestionStatus: toolOutput.ingestion_status || toolOutput.ingestionStatus || toolOutput.status || '',
                 documentGuardDecision: documentGuard.decision || '',

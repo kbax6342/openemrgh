@@ -54,39 +54,49 @@ class IntakeExtractionWorker
             return [];
         }
 
-        $medicationName = '';
-        if (preg_match('/\b(Metformin|Insulin|Lisinopril|Atorvastatin|Amlodipine|Losartan)\b/i', $note, $matches) === 1) {
-            $medicationName = trim((string) ($matches[1] ?? ''));
+        $segments = preg_split('/\s*[;|]\s*/', $note) ?: [$note];
+        $items = [];
+        foreach ($segments as $index => $segment) {
+            $segment = trim($segment);
+            if ($segment === '') {
+                continue;
+            }
+
+            $medicationName = '';
+            if (preg_match('/\b(Metformin|Insulin|Lisinopril|Atorvastatin|Amlodipine|Losartan)\b/i', $segment, $matches) === 1) {
+                $medicationName = trim((string) ($matches[1] ?? ''));
+            }
+            if ($medicationName === '') {
+                continue;
+            }
+
+            $dose = '';
+            if (preg_match('/\b(\d+(?:\.\d+)?\s*(?:mg|mcg|g|units|mL))\b/i', $segment, $matches) === 1) {
+                $dose = trim((string) ($matches[1] ?? ''));
+            }
+
+            $frequency = '';
+            if (preg_match('/\b(morning|evening|nightly|daily|twice daily|three times daily|weekly|as needed|bid|tid|qid)\b/i', $segment, $matches) === 1) {
+                $frequency = strtolower(trim((string) ($matches[1] ?? '')));
+            }
+
+            $route = '';
+            if (preg_match('/\b(by mouth|oral|po|subcutaneous|intravenous|iv|topical|inhaled)\b/i', $segment, $matches) === 1) {
+                $route = strtolower(trim((string) ($matches[1] ?? '')));
+            }
+
+            $items[] = [
+                'medication_name' => $medicationName,
+                'dose' => $dose,
+                'frequency' => $frequency,
+                'route' => $route,
+                'source_citation' => $this->sourceCitation($sourceDocumentId, $patientId, 'intake_medication_' . str_pad((string) ($index + 1), 3, '0', STR_PAD_LEFT), $segment, 0.78, 'MedicationRequest'),
+                'confidence' => 0.78,
+                'review_status' => 'pending_clinician_review',
+            ];
         }
 
-        if ($medicationName === '') {
-            return [];
-        }
-
-        $dose = '';
-        if (preg_match('/\b(\d+(?:\.\d+)?\s*(?:mg|mcg|g|units|mL))\b/i', $note, $matches) === 1) {
-            $dose = trim((string) ($matches[1] ?? ''));
-        }
-
-        $frequency = '';
-        if (preg_match('/\b(morning|evening|nightly|daily|twice daily|three times daily|weekly|as needed|bid|tid|qid)\b/i', $note, $matches) === 1) {
-            $frequency = strtolower(trim((string) ($matches[1] ?? '')));
-        }
-
-        $route = '';
-        if (preg_match('/\b(by mouth|oral|po|subcutaneous|intravenous|iv|topical|inhaled)\b/i', $note, $matches) === 1) {
-            $route = strtolower(trim((string) ($matches[1] ?? '')));
-        }
-
-        return [[
-            'medication_name' => $medicationName,
-            'dose' => $dose,
-            'frequency' => $frequency,
-            'route' => $route,
-            'source_citation' => $this->sourceCitation($sourceDocumentId, $patientId, 'intake_medication_001', $note, 0.78, 'MedicationRequest'),
-            'confidence' => 0.78,
-            'review_status' => 'pending_clinician_review',
-        ]];
+        return $items;
     }
 
     private function deriveAllergyItems(string $value, string $sourceDocumentId, string $patientId): array
@@ -133,30 +143,38 @@ class IntakeExtractionWorker
             return [];
         }
 
-        $relation = '';
-        $condition = '';
-        if (preg_match('/^\s*([^,;:-]+)[,;:-]\s*(.+)$/', $raw, $parts) === 1) {
-            $relation = trim((string) ($parts[1] ?? ''));
-            $condition = trim((string) ($parts[2] ?? ''));
-        }
+        $segments = preg_split('/\s*[;|]\s*/', $raw) ?: [$raw];
+        foreach ($segments as $index => $segment) {
+            $segment = trim($segment);
+            if ($segment === '') {
+                continue;
+            }
 
-        if ($relation === '' || $condition === '') {
-            return [];
-        }
+            $relation = '';
+            $condition = '';
+            if (preg_match('/^\s*([^,;:-]+)[,;:-]\s*(.+)$/', $segment, $parts) === 1) {
+                $relation = trim((string) ($parts[1] ?? ''));
+                $condition = trim((string) ($parts[2] ?? ''));
+            }
 
-        $ageOfOnset = '';
-        if (preg_match('/age of onset[:\s-]+([^\n]+)/i', $raw, $ageMatch) === 1) {
-            $ageOfOnset = trim((string) ($ageMatch[1] ?? ''));
-        }
+            if ($relation === '' || $condition === '') {
+                continue;
+            }
 
-        $items[] = [
-            'relation' => $relation,
-            'condition' => $condition,
-            'age_of_onset' => $ageOfOnset,
-            'source_citation' => $this->sourceCitation($sourceDocumentId, $patientId, 'intake_family_history_001', $raw, 0.75, 'Condition'),
-            'confidence' => 0.75,
-            'review_status' => 'pending_clinician_review',
-        ];
+            $ageOfOnset = '';
+            if (preg_match('/age of onset[:\s-]+([^\n]+)/i', $segment, $ageMatch) === 1) {
+                $ageOfOnset = trim((string) ($ageMatch[1] ?? ''));
+            }
+
+            $items[] = [
+                'relation' => $relation,
+                'condition' => $condition,
+                'age_of_onset' => $ageOfOnset,
+                'source_citation' => $this->sourceCitation($sourceDocumentId, $patientId, 'intake_family_history_' . str_pad((string) ($index + 1), 3, '0', STR_PAD_LEFT), $segment, 0.75, 'Condition'),
+                'confidence' => 0.75,
+                'review_status' => 'pending_clinician_review',
+            ];
+        }
 
         return $items;
     }
@@ -204,7 +222,7 @@ class IntakeExtractionWorker
             }
         }
 
-        $chiefConcernValue = trim((string) ($fields['reasonForVisit'] ?? $fields['currentConcerns'] ?? ''));
+        $chiefConcernValue = trim((string) ($fields['chiefConcern'] ?? $fields['reasonForVisit'] ?? $fields['currentConcerns'] ?? ''));
         $chiefConcern = [
             'value' => $chiefConcernValue,
             'duration' => '',
@@ -223,7 +241,8 @@ class IntakeExtractionWorker
             $missing[] = 'Chief concern was not clearly detected in the uploaded intake form.';
         }
 
-        $currentMedications = $this->deriveMedicationItems(trim((string) ($fields['medicationAdherence'] ?? '')), $sourceDocumentId, $patientId);
+        $currentMedicationText = trim((string) ($fields['currentMedications'] ?? $fields['medicationAdherence'] ?? ''));
+        $currentMedications = $this->deriveMedicationItems($currentMedicationText, $sourceDocumentId, $patientId);
         if ($currentMedications === []) {
             $missing[] = 'Current medications were not clearly detected in the uploaded intake form.';
         }
@@ -233,6 +252,10 @@ class IntakeExtractionWorker
             $missing[] = 'Allergies were not clearly detected in the uploaded intake form.';
         }
 
+        $familyHistorySource = trim((string) ($fields['familyHistory'] ?? ''));
+        if ($familyHistorySource !== '' && stripos($textPreview, 'family history:') === false) {
+            $textPreview .= ($textPreview !== '' ? "\n" : '') . 'Family history: ' . $familyHistorySource;
+        }
         $familyHistory = $this->deriveFamilyHistoryItems($textPreview, $sourceDocumentId, $patientId);
         if ($familyHistory === []) {
             $missing[] = 'Family history was not clearly detected in the uploaded intake form.';

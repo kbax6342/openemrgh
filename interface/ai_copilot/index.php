@@ -225,6 +225,28 @@ $agentVersion = file_exists(__DIR__ . '/agents/copilot_agents.js') ? (string) fi
 $ragDemoVersion = file_exists(__DIR__ . '/copilot_rag_demo_data.js') ? (string) filemtime(__DIR__ . '/copilot_rag_demo_data.js') : '1';
 $labPdfVersion = file_exists(__DIR__ . '/lab_pdf_ingestion.js') ? (string) filemtime(__DIR__ . '/lab_pdf_ingestion.js') : '1';
 $visitReviewVersion = file_exists(__DIR__ . '/copilot_visit_review.js') ? (string) filemtime(__DIR__ . '/copilot_visit_review.js') : '1';
+$redTeamAssetVersion = '1';
+$redTeamAssetFiles = [
+    __DIR__ . '/redteam/redTeamTypes.js',
+    __DIR__ . '/redteam/redTeamPolicies.js',
+    __DIR__ . '/redteam/redTeamSeedScenarios.js',
+    __DIR__ . '/redteam/redTeamPersistence.js',
+    __DIR__ . '/redteam/redTeamReports.js',
+    __DIR__ . '/redteam/redTeamHarness.js',
+    __DIR__ . '/redteam/redTeamPanel.js',
+    __DIR__ . '/redteam/agents/orchestratorAgent.js',
+    __DIR__ . '/redteam/agents/redTeamAgent.js',
+    __DIR__ . '/redteam/agents/mutationAgent.js',
+    __DIR__ . '/redteam/agents/runnerAgent.js',
+    __DIR__ . '/redteam/agents/judgeAgent.js',
+    __DIR__ . '/redteam/agents/regressionAgent.js',
+    __DIR__ . '/redteam/agents/reporterAgent.js',
+];
+foreach ($redTeamAssetFiles as $redTeamAssetFile) {
+    if (is_file($redTeamAssetFile)) {
+        $redTeamAssetVersion = (string) max((int) $redTeamAssetVersion, (int) filemtime($redTeamAssetFile));
+    }
+}
 $modelCostConfig = [];
 if (is_file(__DIR__ . '/observability/model_cost_config.json')) {
     $decodedModelCostConfig = json_decode((string) file_get_contents(__DIR__ . '/observability/model_cost_config.json'), true);
@@ -369,6 +391,28 @@ if (is_file(__DIR__ . '/observability/model_cost_config.json')) {
                     </section>
                 </section>
 
+                <section class="copilot-collapse-section copilot-redteam-section" id="copilot-redteam-section">
+                    <button
+                        type="button"
+                        id="copilot-redteam-toggle"
+                        class="copilot-collapse-toggle"
+                        aria-expanded="false"
+                        aria-controls="copilot-redteam-panel"
+                    >
+                        <span class="copilot-collapse-copy">
+                            <span class="copilot-collapse-title"><?php echo xlt('OpenEMR Team Agents:'); ?></span>
+                            <span id="copilot-redteam-summary" class="copilot-collapse-summary">
+                                <?php echo xlt('Local synthetic eval harness · 12 seed tests · Draft-only'); ?>
+                            </span>
+                        </span>
+                        <span class="copilot-collapse-icon" aria-hidden="true"></span>
+                    </button>
+
+                    <section id="copilot-redteam-panel" class="copilot-collapse-panel copilot-redteam-panel" aria-label="<?php echo attr(xl('OpenEMR Team Agents')); ?>" hidden>
+                        <div id="copilot-redteam-root" class="copilot-redteam-root"></div>
+                    </section>
+                </section>
+
             </section>
 
             <section id="copilot-scroll-region" class="copilot-scroll-region">
@@ -499,6 +543,10 @@ const controlsSummary = document.getElementById('copilot-controls-summary');
 const guardrailsSection = document.getElementById('copilot-guardrails-section');
 const guardrailsToggle = document.getElementById('copilot-guardrails-toggle');
 const guardrailsPanel = document.getElementById('copilot-guardrails-panel');
+const redTeamSection = document.getElementById('copilot-redteam-section');
+const redTeamToggle = document.getElementById('copilot-redteam-toggle');
+const redTeamPanel = document.getElementById('copilot-redteam-panel');
+const redTeamSummary = document.getElementById('copilot-redteam-summary');
 const labPdfInput = document.getElementById('copilot-lab-pdf-input');
 const documentTypeSelect = document.getElementById('copilot-document-type-select');
 const labPdfAttachButton = document.getElementById('copilot-lab-pdf-attach');
@@ -879,6 +927,31 @@ const CopilotTelemetry = copilotHostWindow.CopilotTelemetry;
 window.CopilotTelemetry = CopilotTelemetry;
 window.CopilotMetrics = copilotHostWindow.CopilotMetrics;
 window.printCopilotMetrics = copilotHostWindow.printCopilotMetrics;
+
+function logRedTeamAuditEvent(eventName, payload = {}) {
+    const label = `[Medical Co-Pilot OpenEMR Team Audit] ${String(eventName || 'redteam_event')}`;
+    const safePayload = {
+        ...payload,
+        timestamp: new Date().toISOString()
+    };
+
+    if (typeof console.groupCollapsed === 'function' && /^redteam_(run|judge|regression|report)/.test(String(eventName || ''))) {
+        console.groupCollapsed(label);
+        console.info(safePayload);
+        console.groupEnd();
+    } else {
+        console.info(label, safePayload);
+    }
+
+    return {
+        event: String(eventName || 'redteam_event'),
+        payload: safePayload
+    };
+}
+
+window.OpenEMRCopilotRedTeamAudit = {
+    log: logRedTeamAuditEvent
+};
 
 function selectedPatientOptionByValue(value) {
     return Array.from(patientSelect.options).find((option) => option.value === String(value)) || null;
@@ -1320,13 +1393,21 @@ function setDisclosureState(sectionName, expanded, options = {}) {
             expandedEvent: 'copilot_guardrails_expanded',
             collapsedEvent: 'copilot_guardrails_collapsed'
         }
-        : {
-            container: controlsSection,
-            toggle: controlsToggle,
-            panel: controlsPanel,
-            expandedEvent: 'copilot_controls_expanded',
-            collapsedEvent: 'copilot_controls_collapsed'
-        };
+        : (sectionName === 'redteam'
+            ? {
+                container: redTeamSection,
+                toggle: redTeamToggle,
+                panel: redTeamPanel,
+                expandedEvent: 'copilot_redteam_expanded',
+                collapsedEvent: 'copilot_redteam_collapsed'
+            }
+            : {
+                container: controlsSection,
+                toggle: controlsToggle,
+                panel: controlsPanel,
+                expandedEvent: 'copilot_controls_expanded',
+                collapsedEvent: 'copilot_controls_collapsed'
+            });
 
     if (!config.container || !config.toggle || !config.panel) {
         return;
@@ -1344,6 +1425,14 @@ function setDisclosureState(sectionName, expanded, options = {}) {
             mode: state.activeMode,
             selectedPatientKey: currentSelectedPatientKey(),
             actionType: nextExpanded ? 'expand' : 'collapse'
+        });
+    }
+
+    if (sectionName === 'redteam' && previousExpanded !== nextExpanded && nextExpanded && window.OpenEMRCopilotRedTeamAudit) {
+        window.OpenEMRCopilotRedTeamAudit.log('redteam_panel_opened', {
+            role: state.activeRole,
+            mode: state.activeMode,
+            selectedPatientKey: currentSelectedPatientKey()
         });
     }
 }
@@ -2193,6 +2282,11 @@ function logLabPdfDataToConsole(prompt, toolOutput, options = {}) {
     const extractedTextLength = Number.isFinite(toolOutput.extractedTextLength)
         ? toolOutput.extractedTextLength
         : String(extractedTextPreview || '').length;
+    const classification = toolOutput.classification && typeof toolOutput.classification === 'object'
+        ? toolOutput.classification
+        : {};
+    const selectedDocumentType = toolOutput.documentMetadata?.selectedDocumentType || classification.selected_document_type || '';
+    const detectedDocumentType = toolOutput.documentMetadata?.detectedDocumentType || classification.detected_document_type || sourceType;
     const extractedFacts = Array.isArray(toolOutput.extractedFacts) ? toolOutput.extractedFacts : [];
     const vectorChunks = Array.isArray(toolOutput.vectorizedResult)
         ? toolOutput.vectorizedResult.map((record) => ({
@@ -2207,6 +2301,8 @@ function logLabPdfDataToConsole(prompt, toolOutput, options = {}) {
         console.info('[Lab PDF Ingestion Debug] lab_pdf_text_extracted', {
             documentTitlePresent: Boolean(documentTitle),
             documentTitleHash,
+            selectedDocumentType,
+            detectedDocumentType,
             extractionMethod,
             extractedTextLength,
             extractedTextPreview: extractedTextPreview ? '[REDACTED_RAW_DOCUMENT_TEXT]' : ''
@@ -2229,6 +2325,8 @@ function logLabPdfDataToConsole(prompt, toolOutput, options = {}) {
         console.info('[Lab PDF Ingestion Debug] lab_pdf_vectorized', {
             documentTitlePresent: Boolean(documentTitle),
             documentTitleHash,
+            selectedDocumentType,
+            detectedDocumentType,
             extractionMethod,
             vectorChunkCount: vectorChunks.length,
             vectorChunks: vectorChunks.map((record) => ({
@@ -2242,6 +2340,8 @@ function logLabPdfDataToConsole(prompt, toolOutput, options = {}) {
         console.info('[Lab PDF Ingestion Debug] rag_context_retrieved', {
             documentTitlePresent: Boolean(documentTitle),
             documentTitleHash,
+            selectedDocumentType,
+            detectedDocumentType,
             extractionMethod,
             retrievalChunkIds
         });
@@ -2687,10 +2787,16 @@ function buildCitationContractPanel(message) {
         return null;
     }
 
+    const claimCount = Number(
+        message.meta?.claim_count
+        ?? citationValidation?.claimCount
+        ?? claims.length
+        ?? 0
+    );
     const citedClaimCount = Number(
         message.meta?.cited_claim_count
         ?? citationValidation?.citationCount
-        ?? claims.length
+        ?? claimCount
         ?? 0
     );
     const uncitedClaimCount = Number(
@@ -2732,7 +2838,11 @@ function buildCitationContractPanel(message) {
     badge.dataset.status = status;
     badge.textContent = status === 'passed'
         ? 'All clinical claims cited'
-        : (status === 'blocked' ? 'Uncited claims blocked' : 'Clinician review required');
+        : (status === 'not_applicable_no_claims'
+            ? 'No clinical claims expected'
+            : (status === 'failed_no_claims_extracted'
+                ? 'No claims extracted'
+                : (status === 'blocked' ? 'Uncited claims blocked' : 'Clinician review required')));
     header.appendChild(badge);
     wrapper.appendChild(header);
 
@@ -2742,13 +2852,17 @@ function buildCitationContractPanel(message) {
         || message.meta?.citation_contract_user_message
         || (status === 'blocked'
             ? 'Some clinical claims were hidden because they were not linked to source evidence.'
-            : 'Clinical claims remain draft-only and linked back to source evidence.');
+            : (status === 'failed_no_claims_extracted'
+                ? 'Readable document text was available, but no grounded clinical claims were extracted.'
+                : (status === 'not_applicable_no_claims'
+                    ? 'No clinical claims were expected from this response.'
+                    : 'Clinical claims remain draft-only and linked back to source evidence.')));
     wrapper.appendChild(summary);
 
     const meta = document.createElement('div');
     meta.className = 'copilot-citation-meta';
     [
-        `Claims: ${Number(message.meta?.claim_count ?? claims.length)}`,
+        `Claims: ${claimCount}`,
         `Cited: ${citedClaimCount}`,
         `Blocked: ${blockedClaimCount}`,
         `Sources: ${Number(message.meta?.source_count ?? sourceEntries.length)}`
@@ -2804,6 +2918,7 @@ function extractionStatusDescriptor(status, options = {}) {
         extraction_pending: { tone: 'neutral', label: 'Extraction pending' },
         ok: { tone: schemaValid ? 'success' : 'warning', label: schemaValid ? 'Extraction complete' : defaultReviewLabel },
         extracted: { tone: 'success', label: 'Extraction complete' },
+        extracted_pending_review: { tone: 'warning', label: 'Pending clinician review' },
         extracted_with_abnormal_flags: { tone: 'warning', label: 'Abnormal values flagged' },
         review_required: { tone: 'warning', label: 'Extraction review required' },
         extraction_review_required: { tone: 'warning', label: 'Extraction review required' },
@@ -3040,6 +3155,9 @@ function buildExtractionResultsPanel(message) {
         || message.meta?.citation_contract_status
         || ''
     ).trim();
+    const selectedDocumentType = String(toolOutput.documentMetadata?.selectedDocumentType || toolOutput.documentMetadata?.selected_document_type || '').trim();
+    const detectedDocumentType = String(toolOutput.documentMetadata?.detectedDocumentType || toolOutput.documentMetadata?.detected_document_type || toolOutput.sourceMetadata?.sourceType || toolOutput.sourceMetadata?.source_type || documentType).trim();
+    const mismatchWarning = String(toolOutput.documentMetadata?.documentTypeMismatchWarning || toolOutput.documentMetadata?.document_type_mismatch_warning || toolOutput.classification?.mismatch_warning || '').trim();
     const isDemoFallback = /seeded_demo|synthetic_demo|synthetic_marcus/i.test(String(toolOutput.extractionMethod || ''))
         || Boolean(toolOutput.documentMetadata?.seededDemo);
 
@@ -3083,6 +3201,8 @@ function buildExtractionResultsPanel(message) {
     meta.className = 'copilot-extraction-meta';
     [
         documentType === 'intake_form' ? 'Document type: Intake Form' : 'Document type: Lab PDF',
+        selectedDocumentType ? `Selected type: ${selectedDocumentType.replace(/_/g, ' ')}` : '',
+        detectedDocumentType ? `Detected type: ${detectedDocumentType.replace(/_/g, ' ')}` : '',
         `Review status: ${String(reviewStatus || 'pending_clinician_review').replace(/_/g, ' ')}`,
         `Schema valid: ${schemaValidation ? (Boolean(schemaValidation.schemaValid ?? schemaValidation.valid) ? 'Yes' : 'No') : 'Unknown'}`,
         `Citation contract: ${citationContractStatus ? citationContractStatus.replace(/_/g, ' ') : 'pending validation'}`,
@@ -3248,14 +3368,41 @@ function buildExtractionResultsPanel(message) {
             });
         });
 
+        [
+            ['Current Concerns', intakeFields?.currentConcerns],
+            ['Recent Symptoms', intakeFields?.recentSymptoms],
+            ['Insurance Update', intakeFields?.insuranceUpdate],
+            ['Care Preferences', intakeFields?.carePreferences],
+            ['Consent Note', intakeFields?.consentNote]
+        ].forEach(([titleText, value]) => {
+            if (!String(value || '').trim()) {
+                return;
+            }
+            factGrid.appendChild(buildExtractionFactCard({
+                message,
+                category: 'Intake field',
+                title: titleText,
+                value: String(value),
+                citations: sourceCitations.slice(0, 1)
+            }));
+        });
+
         if (factGrid.childElementCount === 0 && intakeFields) {
             [
+                ['Patient Name', intakeFields.patientName],
+                ['Date of Birth', intakeFields.dateOfBirth],
+                ['Sex', intakeFields.sex],
                 ['Reason for visit', intakeFields.reasonForVisit],
+                ['Chief Concern', intakeFields.chiefConcern],
                 ['Current concerns', intakeFields.currentConcerns],
+                ['Current medications', intakeFields.currentMedications],
                 ['Medication adherence', intakeFields.medicationAdherence],
                 ['Allergies', intakeFields.allergies],
+                ['Family history', intakeFields.familyHistory],
+                ['Recent symptoms', intakeFields.recentSymptoms],
                 ['Insurance update', intakeFields.insuranceUpdate],
-                ['Care preferences', intakeFields.carePreferences]
+                ['Care preferences', intakeFields.carePreferences],
+                ['Consent note', intakeFields.consentNote]
             ].forEach(([titleText, value]) => {
                 if (!String(value || '').trim()) {
                     return;
@@ -3296,6 +3443,11 @@ function buildExtractionResultsPanel(message) {
         });
         missingSection.appendChild(list);
         wrapper.appendChild(missingSection);
+    } else if (mismatchWarning) {
+        const warning = document.createElement('div');
+        warning.className = 'copilot-extraction-warning';
+        warning.textContent = mismatchWarning;
+        wrapper.appendChild(warning);
     }
 
     if (safetyWarnings.length > 0) {
@@ -5339,7 +5491,7 @@ async function requestAssistantResponse(prompt, options = {}) {
     const historyPayload = buildHistoryPayload();
 
     if (hasLabPdfAttachment && !resolvedPatientId) {
-        addAssistantMessage(`Select a demo patient before ingesting a ${attachmentWorkflowLabel(attachmentDocumentType)} so the extracted chunks can be grounded to the correct chart context.`, {
+        const patientRequiredMessage = addAssistantMessage(`Select a demo patient before ingesting a ${attachmentWorkflowLabel(attachmentDocumentType)} so the extracted chunks can be grounded to the correct chart context.`, {
             mode: resolvedMode,
             staffRole: resolvedRole,
             patientId: '',
@@ -5362,7 +5514,19 @@ async function requestAssistantResponse(prompt, options = {}) {
             ragGrounded: false
         });
 
-        return;
+        return {
+            requestId,
+            blocked: true,
+            assistantMessage: patientRequiredMessage,
+            responseData: null,
+            guardrailsResult: null,
+            preflightGuardrails: null,
+            postGuardrails: null,
+            role: resolvedRole,
+            mode: resolvedMode,
+            patientId: resolvedPatientId,
+            selectedPatientKey
+        };
     }
 
     const preflightGuardrails = evaluateGuardrails({
@@ -5430,7 +5594,7 @@ async function requestAssistantResponse(prompt, options = {}) {
             });
         }
 
-        addAssistantMessage(preflightGuardrails.finalResponse || copilotConfig.apiFailureMessage, {
+        const blockedAssistantMessage = addAssistantMessage(preflightGuardrails.finalResponse || copilotConfig.apiFailureMessage, {
             mode: resolvedMode,
             staffRole: resolvedRole,
             patientId: resolvedPatientId,
@@ -5457,7 +5621,19 @@ async function requestAssistantResponse(prompt, options = {}) {
                 rag_grounded: false
             }
         });
-        return;
+        return {
+            requestId,
+            blocked: true,
+            assistantMessage: blockedAssistantMessage,
+            responseData: null,
+            guardrailsResult: preflightGuardrails,
+            preflightGuardrails: preflightGuardrails,
+            postGuardrails: null,
+            role: resolvedRole,
+            mode: resolvedMode,
+            patientId: resolvedPatientId,
+            selectedPatientKey
+        };
     }
 
     const loadingMessage = createMessage('assistant', copilotConfig.loadingText, {
@@ -6461,6 +6637,20 @@ async function requestAssistantResponse(prompt, options = {}) {
                 });
             }
         }
+
+        return {
+            requestId,
+            blocked: false,
+            assistantMessage,
+            responseData: data,
+            guardrailsResult,
+            preflightGuardrails: preflightGuardrails,
+            postGuardrails: guardrailsResult,
+            role: data.role || resolvedRole,
+            mode: data.mode || resolvedMode,
+            patientId: resolvedPatientId,
+            selectedPatientKey
+        };
     } catch (error) {
         clearLoadingMessage();
         if (labPdfAttachment?.descriptor) {
@@ -6471,7 +6661,7 @@ async function requestAssistantResponse(prompt, options = {}) {
             });
             setLabPdfStatus(`Attachment kept: ${labPdfAttachment.descriptor.fileName}. Retry when ready.`, 'warning');
         }
-        addAssistantMessage(error.message || copilotConfig.apiFailureMessage, {
+        const errorAssistantMessage = addAssistantMessage(error.message || copilotConfig.apiFailureMessage, {
             staffRole: resolvedRole,
             patientId: resolvedPatientId,
             selectedPatientKey,
@@ -6539,11 +6729,284 @@ async function requestAssistantResponse(prompt, options = {}) {
                 fallbackUsed: Boolean(error.fallbackUsed)
             });
         }
+
+        return {
+            requestId,
+            blocked: false,
+            assistantMessage: errorAssistantMessage,
+            responseData: null,
+            guardrailsResult: null,
+            preflightGuardrails: preflightGuardrails,
+            postGuardrails: null,
+            error: {
+                message: error && error.message ? error.message : copilotConfig.apiFailureMessage,
+                category: error && error.errorCategory ? error.errorCategory : 'request_failed'
+            },
+            role: resolvedRole,
+            mode: resolvedMode,
+            patientId: resolvedPatientId,
+            selectedPatientKey
+        };
     } finally {
         state.loading = false;
         updateSendState();
     }
 }
+
+const redTeamWorkflowModeMap = {
+    chart_summary: 'clinical_notes',
+    treatment_plan: 'treatment_plan',
+    medication_info: 'medication_info',
+    lab_pdf_ingestion: 'lab_pdf_ingestion',
+    intake_form_ingestion: 'lab_pdf_ingestion',
+    insurance_billing: 'billing',
+    appointment_scheduling: 'appointment_info',
+    ambient_encounter_capture: 'latest_ambient_summary',
+    visit_history_rag: 'rag_chart_context'
+};
+
+function redTeamPatientOptionByIdentifier(identifier) {
+    const normalized = String(identifier || '').trim().toLowerCase();
+    if (!normalized || !patientSelect) {
+        return null;
+    }
+
+    return Array.from(patientSelect.options).find((option) => {
+        const optionValue = String(option.value || '').trim().toLowerCase();
+        const optionKey = String(option.dataset.pubpid || '').trim().toLowerCase();
+        const optionName = [option.dataset.fname || '', option.dataset.lname || ''].filter(Boolean).join(' ').trim().toLowerCase();
+        return normalized === optionValue || normalized === optionKey || normalized === optionName;
+    }) || null;
+}
+
+function buildSyntheticRedTeamPdfFile(fileName) {
+    const safeFileName = String(fileName || 'synthetic-redteam-demo.pdf').trim() || 'synthetic-redteam-demo.pdf';
+    const placeholderBody = '%PDF-1.4\n% Synthetic local OpenEMR Team demo attachment.\n';
+
+    try {
+        return new File([placeholderBody], safeFileName, {
+            type: 'application/pdf'
+        });
+    } catch (error) {
+        const fallbackBlob = new Blob([placeholderBody], {
+            type: 'application/pdf'
+        });
+        fallbackBlob.name = safeFileName;
+        return fallbackBlob;
+    }
+}
+
+function snapshotCopilotStateForRedTeam() {
+    return {
+        activeRole: state.activeRole,
+        activeMode: state.activeMode,
+        patientValue: patientSelect ? patientSelect.value : '',
+        inputValue: input ? input.value : '',
+        messages: JSON.parse(JSON.stringify(state.messages)),
+        labPdf: {
+            file: state.labPdf.file || null,
+            descriptor: state.labPdf.descriptor ? { ...state.labPdf.descriptor } : null,
+            useDemoSeed: Boolean(state.labPdf.useDemoSeed),
+            requestId: state.labPdf.requestId || null,
+            selectedDocumentType: state.labPdf.selectedDocumentType || currentSelectedDocumentType()
+        },
+        uploadNotice: {
+            hidden: uploadNotice ? uploadNotice.hidden : true,
+            text: uploadNotice ? uploadNotice.textContent : '',
+            tone: uploadNotice?.dataset?.tone || 'neutral'
+        },
+        labPdfStatus: {
+            text: labPdfStatus ? labPdfStatus.textContent : '',
+            tone: labPdfStatus?.dataset?.tone || 'neutral'
+        },
+        scrollTop: scrollRegion ? scrollRegion.scrollTop : 0
+    };
+}
+
+function restoreCopilotStateFromRedTeam(snapshot) {
+    if (!snapshot) {
+        return;
+    }
+
+    state.messages = Array.isArray(snapshot.messages) ? snapshot.messages : [];
+
+    if (patientSelect) {
+        patientSelect.value = snapshot.patientValue || '';
+    }
+
+    updateRoleSelection(snapshot.activeRole || copilotConfig.defaultRole || 'doctor');
+    updateModeSelection(snapshot.activeMode || 'general_assistant');
+    updateContextText();
+    syncDocumentTypeSelection(snapshot.labPdf?.selectedDocumentType || 'lab_pdf');
+
+    if (snapshot.labPdf && snapshot.labPdf.descriptor) {
+        applyLabPdfAttachmentDescriptor(snapshot.labPdf.descriptor, {
+            file: snapshot.labPdf.file,
+            useDemoSeed: snapshot.labPdf.useDemoSeed,
+            requestId: snapshot.labPdf.requestId
+        });
+    } else {
+        clearLabPdfAttachment({
+            emitTelemetry: false,
+            keepDocumentType: true
+        });
+    }
+
+    clearUploadNotice();
+    if (snapshot.uploadNotice && !snapshot.uploadNotice.hidden && snapshot.uploadNotice.text) {
+        setUploadNotice(snapshot.uploadNotice.text, snapshot.uploadNotice.tone || 'neutral', {
+            persist: true
+        });
+    }
+    setLabPdfStatus(snapshot.labPdfStatus?.text || 'Attach a PDF for draft-only clinician review.', snapshot.labPdfStatus?.tone || 'neutral');
+
+    if (input) {
+        input.value = snapshot.inputValue || '';
+        resizeInput();
+    }
+
+    renderMessages(false);
+    updateSendState();
+
+    if (scrollRegion && typeof snapshot.scrollTop === 'number') {
+        scrollRegion.scrollTop = snapshot.scrollTop;
+    }
+}
+
+function normalizeRedTeamResponse(assistantMessage, requestResult, context = {}) {
+    const plan = context.plan && typeof context.plan === 'object' ? context.plan : {};
+    return {
+        adapter: 'live_openemr_copilot',
+        requestId: requestResult?.requestId || assistantMessage?.requestId || '',
+        responseId: assistantMessage?.responseId || '',
+        timestamp: new Date().toISOString(),
+        role: assistantMessage?.staffRole || requestResult?.role || plan.role || state.activeRole,
+        workflow: plan.workflow || '',
+        patientId: plan.patientId || '',
+        selectedPatientKey: assistantMessage?.selectedPatientKey || requestResult?.selectedPatientKey || null,
+        selectedPatientName: plan.patientName || '',
+        sections: assistantMessage?.sections || [],
+        sources: assistantMessage?.sources || [],
+        safety: assistantMessage?.safety || '',
+        content: assistantMessage?.content || '',
+        plainText: assistantMessage ? getAssistantMessagePlainText(assistantMessage) : '',
+        blocked: Boolean(requestResult?.blocked),
+        guardrails: assistantMessage?.guardrails || requestResult?.guardrailsResult || null,
+        preGuardrails: requestResult?.preflightGuardrails || null,
+        postGuardrails: requestResult?.postGuardrails || null,
+        meta: assistantMessage?.meta || requestResult?.responseData?.meta || {}
+    };
+}
+
+function supportsRedTeamPlan(planLike = {}) {
+    if (state.loading) {
+        return false;
+    }
+
+    const patientIdentifier = planLike.patientId || planLike.patientName || '';
+    if (!patientIdentifier) {
+        return true;
+    }
+
+    return Boolean(redTeamPatientOptionByIdentifier(patientIdentifier));
+}
+
+function getRedTeamAdapterMetadata(planLike = {}) {
+    if (state.loading) {
+        return {
+            available: true,
+            label: 'Mock fallback: co-pilot busy',
+            supportsPlan: false
+        };
+    }
+
+    if (!supportsRedTeamPlan(planLike)) {
+        return {
+            available: true,
+            label: 'Mock fallback: synthetic demo patient unavailable',
+            supportsPlan: false
+        };
+    }
+
+    return {
+        available: true,
+        label: 'Live demo adapter',
+        supportsPlan: true
+    };
+}
+
+async function runPromptForRedTeam(prompt, context = {}) {
+    if (state.loading) {
+        throw new Error('The co-pilot is already processing another request. Wait for that request to finish before starting an OpenEMR Team run.');
+    }
+
+    const plan = context.plan && typeof context.plan === 'object' ? context.plan : {};
+    const snapshot = snapshotCopilotStateForRedTeam();
+    const patientOption = redTeamPatientOptionByIdentifier(plan.patientId || plan.patientName || '');
+    const resolvedPatientId = patientOption ? patientOption.value : '';
+    const resolvedRole = roleCatalog[plan.role] ? plan.role : state.activeRole;
+    const resolvedMode = redTeamWorkflowModeMap[plan.workflow] || state.activeMode || 'general_assistant';
+
+    try {
+        if (patientSelect) {
+            patientSelect.value = resolvedPatientId;
+        }
+
+        updateRoleSelection(resolvedRole);
+        updateModeSelection(resolvedMode);
+        updateContextText();
+
+        if (input) {
+            input.value = prompt;
+            resizeInput();
+            updateSendState();
+        }
+
+        if (context.attachment && context.attachment.documentType) {
+            syncDocumentTypeSelection(context.attachment.documentType);
+        }
+
+        if (context.attachment && context.attachment.fileName) {
+            setUploadedLabPdfAttachment(buildSyntheticRedTeamPdfFile(context.attachment.fileName));
+        } else {
+            clearLabPdfAttachment({
+                emitTelemetry: false,
+                keepDocumentType: true
+            });
+        }
+
+        const requestResult = await requestAssistantResponse(prompt, {
+            includeUserMessage: true,
+            roleOverride: resolvedRole,
+            modeOverride: resolvedMode,
+            patientIdOverride: resolvedPatientId,
+            extraPayload: {
+                redteam_local_eval: true,
+                redteam_safe_harness: true
+            }
+        });
+
+        return normalizeRedTeamResponse(requestResult?.assistantMessage || null, requestResult || {}, {
+            plan,
+            attachment: context.attachment || null
+        });
+    } finally {
+        restoreCopilotStateFromRedTeam(snapshot);
+    }
+}
+
+window.OpenEMRCopilotRedTeamAdapter = {
+    getAdapterMetadata: getRedTeamAdapterMetadata,
+    listSyntheticPatients: function () {
+        return Array.from(patientSelect?.options || []).slice(1).map((option) => ({
+            patientId: option.dataset.pubpid || option.value,
+            patientName: [option.dataset.fname || '', option.dataset.lname || ''].filter(Boolean).join(' ').trim(),
+            selectValue: option.value
+        }));
+    },
+    runPromptForRedTeam: runPromptForRedTeam,
+    supportsPlan: supportsRedTeamPlan
+};
 
 async function requestReminderEmail(role, patientId) {
     if (state.loading) {
@@ -7172,10 +7635,17 @@ if (guardrailsToggle) {
     });
 }
 
+if (redTeamToggle) {
+    redTeamToggle.addEventListener('click', () => {
+        setDisclosureState('redteam', redTeamToggle.getAttribute('aria-expanded') !== 'true', { emitTelemetry: true });
+    });
+}
+
 updateRoleSelection(copilotConfig.defaultRole || 'doctor');
 syncDocumentTypeSelection('lab_pdf');
 setDisclosureState('controls', false);
 setDisclosureState('guardrails', false);
+setDisclosureState('redteam', false);
 resizeInput();
 refreshLabPdfAttachmentUi();
 updateSendState();
@@ -7197,6 +7667,63 @@ if (patientSelect.options.length <= 1) {
 }
 
 renderMessages(true);
+</script>
+<script src="redteam/redTeamTypes.js?v=<?php echo attr_url($redTeamAssetVersion); ?>"></script>
+<script src="redteam/redTeamPolicies.js?v=<?php echo attr_url($redTeamAssetVersion); ?>"></script>
+<script src="redteam/redTeamSeedScenarios.js?v=<?php echo attr_url($redTeamAssetVersion); ?>"></script>
+<script src="redteam/redTeamPersistence.js?v=<?php echo attr_url($redTeamAssetVersion); ?>"></script>
+<script src="redteam/agents/orchestratorAgent.js?v=<?php echo attr_url($redTeamAssetVersion); ?>"></script>
+<script src="redteam/agents/redTeamAgent.js?v=<?php echo attr_url($redTeamAssetVersion); ?>"></script>
+<script src="redteam/agents/mutationAgent.js?v=<?php echo attr_url($redTeamAssetVersion); ?>"></script>
+<script src="redteam/agents/runnerAgent.js?v=<?php echo attr_url($redTeamAssetVersion); ?>"></script>
+<script src="redteam/agents/judgeAgent.js?v=<?php echo attr_url($redTeamAssetVersion); ?>"></script>
+<script src="redteam/agents/regressionAgent.js?v=<?php echo attr_url($redTeamAssetVersion); ?>"></script>
+<script src="redteam/agents/reporterAgent.js?v=<?php echo attr_url($redTeamAssetVersion); ?>"></script>
+<script src="redteam/redTeamReports.js?v=<?php echo attr_url($redTeamAssetVersion); ?>"></script>
+<script src="redteam/redTeamHarness.js?v=<?php echo attr_url($redTeamAssetVersion); ?>"></script>
+<script src="redteam/redTeamPanel.js?v=<?php echo attr_url($redTeamAssetVersion); ?>"></script>
+<script>
+(function mountRedTeamPanel() {
+    const redTeamRoot = document.getElementById('copilot-redteam-root');
+    if (
+        !redTeamRoot
+        || !window.OpenEMRCopilotRedTeamHarness
+        || typeof window.OpenEMRCopilotRedTeamHarness.createRedTeamHarness !== 'function'
+        || !window.OpenEMRCopilotRedTeamPanel
+        || typeof window.OpenEMRCopilotRedTeamPanel.createRedTeamPanel !== 'function'
+    ) {
+        return;
+    }
+
+    const harness = window.OpenEMRCopilotRedTeamHarness.createRedTeamHarness({
+        liveAdapter: window.OpenEMRCopilotRedTeamAdapter || null,
+        persistenceAdapter: window.OpenEMRCopilotRedTeamPersistence && typeof window.OpenEMRCopilotRedTeamPersistence.createPersistenceClient === 'function'
+            ? window.OpenEMRCopilotRedTeamPersistence.createPersistenceClient({
+                apiUrl: copilotConfig.apiUrl,
+                csrfToken: copilotConfig.csrfToken,
+                logger: window.OpenEMRCopilotRedTeamAudit || null
+            })
+            : null,
+        auditLogger: window.OpenEMRCopilotRedTeamAudit || null
+    });
+    const panel = window.OpenEMRCopilotRedTeamPanel.createRedTeamPanel({
+        root: redTeamRoot,
+        harness: harness
+    });
+
+    window.OpenEMRCopilotRedTeam = {
+        harness: harness,
+        panel: panel
+    };
+
+    const redTeamSummaryNode = document.getElementById('copilot-redteam-summary');
+    if (redTeamSummaryNode) {
+        const adapterInfo = harness.getAdapterInfo();
+        redTeamSummaryNode.textContent = adapterInfo.usingLive
+            ? 'Local synthetic eval harness · Live demo adapter ready'
+            : 'Local synthetic eval harness · Mock fallback ready';
+    }
+}());
 </script>
 <script src="copilot_visit_review.js?v=<?php echo attr_url($visitReviewVersion); ?>"></script>
 </body>

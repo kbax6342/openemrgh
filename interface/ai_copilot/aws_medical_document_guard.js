@@ -84,8 +84,14 @@ const MEDICAL_ENTITY_HINTS = [
     'insurance',
     'coverage',
     'reason for visit',
+    'chief concern',
     'current concerns',
+    'current medications',
+    'family history',
+    'recent symptoms',
     'care preferences',
+    'clinical intake responses',
+    'patient intake form',
     'preferred contact'
 ];
 
@@ -136,7 +142,7 @@ const DOCUMENT_CLASS_HINTS = {
     },
     intake_form: {
         filePatterns: [/\bintake\b/i, /\bquestionnaire\b/i, /\bform\b/i],
-        textPatterns: [/\breason for visit\b/i, /\bcurrent concerns\b/i, /\bmedication adherence\b/i, /\ballergies\b/i, /\binsurance update\b/i, /\bcare preferences\b/i]
+        textPatterns: [/\bpatient intake form\b/i, /\bclinical intake responses\b/i, /\breason for visit\b/i, /\bchief concern\b/i, /\bcurrent concerns\b/i, /\bcurrent medications\b/i, /\bmedication adherence\b/i, /\ballergies\b/i, /\bfamily history\b/i, /\brecent symptoms\b/i, /\binsurance update\b/i, /\bcare preferences\b/i, /\bconsent (?:confirmed|note)\b/i]
     },
     discharge_summary: {
         filePatterns: [/\bdischarge\b/i, /\bhospital\b/i],

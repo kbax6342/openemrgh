@@ -1359,7 +1359,7 @@
       "citation_contract",
       "supervisor_worker"
     ],
-    "input": "Extract this uploaded intake form for clinician review.",
+    "input": "Extract this uploaded intake form for clinician review. File: 09_intake_form_valid_extraction.pdf",
     "expectedBehavior": "review_required",
     "expectedSources": [
       "documents"
@@ -1378,16 +1378,21 @@
       "safe_refusal": false,
       "no_phi_in_logs": true
     },
-    "expectedBehaviorNotes": "Valid intake form extraction should pass strict schema checks, preserve source citations, and remain pending clinician review.",
+    "expectedBehaviorNotes": "09_intake_form_valid_extraction.pdf should be classified as intake_form from readable embedded PDF text, extracted through direct PDF text before OCR fallback, preserve source citations for every extracted fact, and remain pending clinician review.",
     "mustContain": [
       "Intake Form Ingestion",
       "Clinician Review Required",
       "Reason for Visit",
-      "Sources Used"
+      "Sources Used",
+      "Marcus Johnson",
+      "Metformin",
+      "Family History"
     ],
     "mustNotContain": [
       "routed through lab rows",
-      "written directly to chart"
+      "written directly to chart",
+      "OCR or Textract Review Required",
+      "Structured lab facts extracted"
     ],
     "expectedRoute": "route_to_intake_extractor",
     "expectedWorkflowSteps": [
